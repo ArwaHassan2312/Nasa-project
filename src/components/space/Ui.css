@@ -1,0 +1,232 @@
+.launch-root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #000;
+  --neon-font: 'Orbitron', 'Rajdhani', 'Segoe UI', system-ui, sans-serif;
+}
+
+/* ---------- shared fade helpers ---------- */
+.ui-fade { transition: opacity 0.9s ease, transform 0.9s ease; }
+.ui-hidden { opacity: 0; transform: translateY(8px); pointer-events: none; }
+
+/* ---------- neon typewriter text ---------- */
+.neon-block {
+  text-align: center;
+  font-family: var(--neon-font);
+  font-weight: 500;
+  font-size: clamp(0.95rem, min(3.1vh, 3.2vw), 2rem);
+  letter-spacing: 0.06em;
+  line-height: 1.45;
+  color: #eafcff;
+  text-shadow: 0 0 2px #fff, 0 0 6px #5fe3ff, 0 0 14px #22b8ff, 0 0 28px #0a7cff;
+  animation: neonBreath 3.2s ease-in-out infinite alternate, neonFlicker 8s linear infinite;
+}
+.neon-line { display: block; min-height: 1.45em; }
+.neon-rest { visibility: hidden; }
+
+.neon-cursor {
+  display: inline-block;
+  position: relative;
+  width: 0;
+  height: 1em;
+  vertical-align: -0.12em;
+}
+.neon-cursor::after {
+  content: '';
+  position: absolute;
+  left: 0.08em;
+  top: 0;
+  width: 0.09em;
+  height: 1.05em;
+  background: #eafcff;
+  box-shadow: 0 0 8px #5fe3ff, 0 0 18px #22b8ff;
+  animation: caretBlink 1s steps(1) infinite;
+}
+
+@keyframes neonBreath {
+  from { text-shadow: 0 0 2px #fff, 0 0 6px #5fe3ff, 0 0 14px #22b8ff, 0 0 28px #0a7cff; }
+  to   { text-shadow: 0 0 3px #fff, 0 0 10px #7ff0ff, 0 0 24px #2cc4ff, 0 0 52px #0a7cff, 0 0 80px rgba(10, 124, 255, 0.6); }
+}
+@keyframes neonFlicker {
+  0%, 18%, 22%, 62%, 64%, 100% { opacity: 1; }
+  20% { opacity: 0.78; }
+  21% { opacity: 0.96; }
+  63% { opacity: 0.85; }
+}
+@keyframes caretBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+/* ---------- intro overlay ---------- */
+.intro-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+.intro-title {
+  position: absolute;
+  top: 5vh;
+  left: 0;
+  right: 0;
+  padding: 0 4vw;
+}
+.intro-action {
+  position: absolute;
+  bottom: 9vh;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+}
+
+/* ---------- start button ---------- */
+.mission-btn-wrap { position: relative; pointer-events: auto; }
+.mission-btn-ring {
+  position: absolute;
+  inset: -7px;
+  border-radius: 999px;
+  border: 1px solid rgba(95, 227, 255, 0.4);
+  pointer-events: none;
+  animation: ringPulse 2.4s ease-out infinite;
+}
+@keyframes ringPulse {
+  0%   { transform: scale(0.96); opacity: 0.9; }
+  100% { transform: scale(1.18); opacity: 0; }
+}
+.mission-btn {
+  position: relative;
+  overflow: hidden;
+  padding: 1.05rem 2.8rem;
+  font-family: var(--neon-font);
+  font-weight: 600;
+  font-size: clamp(0.85rem, 1.7vh, 1.05rem);
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: #eafcff;
+  text-shadow: 0 0 8px rgba(95, 227, 255, 0.9);
+  background: linear-gradient(135deg, rgba(20, 120, 255, 0.24), rgba(0, 220, 255, 0.1));
+  border: 1px solid rgba(95, 227, 255, 0.75);
+  border-radius: 999px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 0 14px rgba(34, 184, 255, 0.45), inset 0 0 16px rgba(34, 184, 255, 0.25);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+}
+.mission-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -60%;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  transform: skewX(-20deg);
+  transition: left 0.7s ease;
+}
+.mission-btn:hover:not(:disabled) {
+  transform: translateY(-2px) scale(1.04);
+  background: linear-gradient(135deg, rgba(20, 120, 255, 0.4), rgba(0, 220, 255, 0.2));
+  box-shadow: 0 0 26px rgba(34, 184, 255, 0.75), 0 0 60px rgba(10, 124, 255, 0.4), inset 0 0 22px rgba(34, 184, 255, 0.4);
+}
+.mission-btn:hover:not(:disabled)::before { left: 130%; }
+.mission-btn:active:not(:disabled) { transform: scale(0.98); }
+.mission-btn:focus-visible { outline: 2px solid #7ff0ff; outline-offset: 5px; }
+
+/* ---------- mission select ---------- */
+.select-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(1rem, 4.5vh, 3rem);
+  padding: 4vh 4vw;
+  box-sizing: border-box;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.65));
+  opacity: 0;
+  transition: opacity 1.4s ease;
+}
+.select-screen.visible { opacity: 1; }
+
+.planet-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: clamp(1.5rem, 6vw, 6rem);
+}
+.planet-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  width: min(38vw, 38vh, 360px);
+  min-width: 150px;
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.35s ease;
+}
+.planet-card:hover,
+.planet-card:focus-visible { transform: translateY(-6px); }
+
+.planet-canvas {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  pointer-events: none;
+}
+.planet-canvas::before {
+  content: '';
+  position: absolute;
+  inset: 8%;
+  border-radius: 50%;
+  background: radial-gradient(circle, transparent 58%, rgba(70, 170, 255, 0.16) 72%, transparent 74%);
+}
+.planet-canvas::after {
+  content: '';
+  position: absolute;
+  inset: 2%;
+  border-radius: 50%;
+  border: 1px solid rgba(95, 227, 255, 0);
+  transition: border-color 0.35s ease, box-shadow 0.35s ease;
+  pointer-events: none;
+}
+.planet-card:hover .planet-canvas::after,
+.planet-card:focus-visible .planet-canvas::after,
+.planet-card.selected .planet-canvas::after {
+  border-color: rgba(95, 227, 255, 0.6);
+  box-shadow: 0 0 22px rgba(34, 184, 255, 0.45), inset 0 0 22px rgba(34, 184, 255, 0.2);
+}
+.planet-name {
+  font-family: var(--neon-font);
+  font-weight: 600;
+  font-size: clamp(0.9rem, 2vh, 1.2rem);
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: #eafcff;
+  text-shadow: 0 0 6px #5fe3ff, 0 0 16px #22b8ff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .neon-block, .mission-btn-ring, .neon-cursor::after { animation: none; }
+}
+
+
+html, body, #root { height: 100%; margin: 0; }
+
+.launch-root {
+  position: relative;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  background: #000;
+}
+
+.planet-canvas {
+  width: min(38vw, 360px);
+  aspect-ratio: 1;
+}
+.planet-canvas canvas { width: 100% !important; height: 100% !important; }
