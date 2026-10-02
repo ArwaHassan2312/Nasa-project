@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import backgroundUrl from '../../assets/images/1773008.png';
 // import earthImageUrl from '../../assets/images/earth/download.jpg';
-import introImageUrl from '../../assets/images/earth/EVER QUITE AND DANGEROUS PLACE.jpg';
 import introVideo from "../../assets/videos/11892851-hd_1280_720_24fps.mp4";
 
 // Files in /public are served from the site root (no "/public" prefix).
@@ -12,7 +11,6 @@ export const ASSETS = {
   moon: '/models/moon.glb',
   background: backgroundUrl,
   // earthImage: earthImageUrl,
-  introImage: introImageUrl,
   introVideo: introVideo,
 };
 
@@ -26,7 +24,7 @@ export const PAD_SINK = 0;                 // set e.g. 0.03 if the rocket hovers
 export const EARTH_ROTATION = [0, 0, 0];   // euler radians; spin the globe to show a nicer region at the pad
 
 // Timeline (seconds, counted from the moment the player clicks START)
-export const TIMELINE = { ignite: 7.5, liftoff: 11, end: 38 };
+export const TIMELINE = { ignite: 7.5, liftoff: 11, vanish: 34.8, end: 36.5 };
 
 export const ACCEL = 0.07;
 export const ACCEL_PHASE = 14;

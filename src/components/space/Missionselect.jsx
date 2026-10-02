@@ -1,8 +1,10 @@
-import { Component, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { useGLTF } from '@react-three/drei';
+import { Component, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import NeonTypewriter from './NeonTypewriter';
+import TypedBriefing from './TypedBriefing';
+import { DESTINATIONS } from './destinations';
 import { ASSETS } from './launchConfig';
 import { prepareEarth } from '../../utils/modelUtils'; // generic "centre + scale to radius"
 import { makePlanetTexture } from '../../utils/planetTexture';
@@ -70,7 +72,38 @@ function PlanetProcedural({ kind, hovered }) {
   );
 }
 
-function PlanetCanvas({ planet, hovered }) {
+/** Keeps the planet centred and fully inside the card while the card resizes. */
+function FitCamera({ enabled }) {
+  const { camera, size } = useThree();
+  useLayoutEffect(() => {
+    if (!enabled) return;
+    const aspect = size.width / Math.max(size.height, 1);
+    const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    const z = (RADIUS * 1.32) / (tan * Math.min(1, aspect));
+    camera.position.set(0, 0, z);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+  }, [camera, size, enabled]);
+  return null;
+}
+
+/** Sun light that rides with the camera, so the world stays lit while the player orbits it. */
+function CameraLights() {
+  const ref = useRef();
+  useFrame(({ camera }) => {
+    if (ref.current) ref.current.quaternion.copy(camera.quaternion);
+  });
+  return (
+    <>
+      <ambientLight intensity={0.15} />
+      <group ref={ref}>
+        <directionalLight position={[-4, 2.5, 4]} intensity={3.2} color="#fff3e2" />
+      </group>
+    </>
+  );
+}
+
+function PlanetCanvas({ planet, hovered, interactive }) {
   return (
     <Canvas
       dpr={[1, 2]}
@@ -78,13 +111,24 @@ function PlanetCanvas({ planet, hovered }) {
       gl={{ alpha: true, antialias: true }}
       onCreated={({ gl }) => gl.setClearColor(0x000000, 0)}
     >
-      <ambientLight intensity={0.15} />
-      <directionalLight position={[-4, 2.5, 4]} intensity={3.2} color="#fff3e2" />
+      <FitCamera enabled={!interactive} />
+      <CameraLights />
       <PlanetBoundary fallback={<PlanetProcedural kind={planet.kind} hovered={hovered} />}>
         <Suspense fallback={null}>
           <PlanetGLB url={planet.url} hovered={hovered} />
         </Suspense>
       </PlanetBoundary>
+      {interactive && (
+        <OrbitControls
+          enablePan={false}
+          enableDamping
+          dampingFactor={0.08}
+          rotateSpeed={0.8}
+          zoomSpeed={0.6}
+          minDistance={3}
+          maxDistance={9}
+        />
+      )}
     </Canvas>
   );
 }
@@ -92,42 +136,120 @@ function PlanetCanvas({ planet, hovered }) {
 export default function MissionSelect({ selected, onSelect }) {
   const [show, setShow] = useState(false);
   const [hover, setHover] = useState(null);
+  const [panelOn, setPanelOn] = useState(false);   // info panel slides in
+  const [settled, setSettled] = useState(false);   // slide finished -> model becomes draggable
+  const [view, setView] = useState(null);          // { id, n } -> remounts the typing per selection
+  const [prevSelected, setPrevSelected] = useState(null);
+
+  // Reset derived state during render when the selection changes (no effect needed)
+  if (selected !== prevSelected) {
+    setPrevSelected(selected);
+    setPanelOn(false);
+    setSettled(false);
+    if (selected) setView((v) => ({ id: selected, n: (v?.n ?? 0) + 1 }));
+  }
 
   useEffect(() => {
     const id = requestAnimationFrame(() => setShow(true));
     return () => cancelAnimationFrame(id);
   }, []);
 
-  return (
-    <div className={`select-screen ${show ? 'visible' : ''}`}>
-      <NeonTypewriter lines={LINES} startDelay={700} speed={32} />
+  // Only schedules timers; setState happens inside the callbacks
+  useEffect(() => {
+    if (!selected) return undefined;
+    const t1 = setTimeout(() => setPanelOn(true), 800);
+    const t2 = setTimeout(() => setSettled(true), 1250);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [selected]);
 
-      <div className="planet-row">
-        {PLANETS.map((p) => (
-          <div
-            key={p.id}
-            role="button"
-            aria-pressed={selected === p.id}
-            tabIndex={0}
-            className={`planet-card ${selected === p.id ? 'selected' : ''}`}
-            onClick={() => onSelect?.(p.id)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onSelect?.(p.id);
-              }
-            }}
-            onPointerEnter={() => setHover(p.id)}
-            onPointerLeave={() => setHover(null)}
-          >
-            <div className="planet-canvas">
-              <PlanetCanvas planet={p} hovered={hover === p.id || selected === p.id} />
-            </div>
-            <div className="planet-name">{p.name}</div>
-            <div className="planet-tag">{selected === p.id ? 'Destination locked' : '\u00A0'}</div>
-          </div>
-        ))}
+  useEffect(() => {
+    if (!selected) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') onSelect?.(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, onSelect]);
+
+  const pick = (id) => {
+    if (!selected) onSelect?.(id);
+  };
+
+  return (
+    <div className={`select-screen ${show ? 'visible' : ''} ${selected ? 'has-selection' : ''}`}>
+      <div className="select-heading">
+        <NeonTypewriter lines={LINES} startDelay={350} speed={11} lineDelay={110} punctDelay={50} />
       </div>
+
+      <div className="dest-stage">
+        {PLANETS.map((p, idx) => {
+          const isSel = selected === p.id;
+          const dismissed = !!selected && !isSel;
+          const interactive = isSel && settled;
+          const tag = isSel
+            ? settled ? 'Drag to rotate · Scroll to zoom' : 'Destination locked'
+            : hover === p.id && !selected ? 'Select destination' : '\u00A0';
+          return (
+            <div
+              key={p.id}
+              role="button"
+              aria-pressed={isSel}
+              aria-disabled={!!selected}
+              tabIndex={selected ? -1 : 0}
+              className={[
+                'dest-card',
+                idx === 0 ? 'dest-card--left' : 'dest-card--right',
+                isSel ? 'selected' : '',
+                dismissed ? 'dismissed' : '',
+                interactive ? 'is-interactive' : '',
+              ].join(' ')}
+              onClick={() => pick(p.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  pick(p.id);
+                }
+              }}
+              onPointerEnter={() => setHover(p.id)}
+              onPointerLeave={() => setHover(null)}
+            >
+              <div className="dest-canvas">
+                <PlanetCanvas
+                  planet={p}
+                  hovered={hover === p.id && !selected}
+                  interactive={interactive}
+                />
+              </div>
+              <div className="dest-meta">
+                <div className="planet-name">{p.name}</div>
+                <div className="planet-tag">{tag}</div>
+              </div>
+            </div>
+          );
+        })}
+
+        {view && (
+          <aside className={`dest-info ${selected && panelOn ? 'dest-info--on' : ''}`}>
+            <TypedBriefing
+              key={`${view.id}-${view.n}`}
+              data={DESTINATIONS[view.id]}
+              active={!!selected && panelOn}
+            />
+          </aside>
+        )}
+      </div>
+
+      <button
+        type="button"
+        className={`dest-back ${selected ? 'dest-back--on' : ''}`}
+        tabIndex={selected ? 0 : -1}
+        onClick={() => onSelect?.(null)}
+      >
+        ← Change destination
+      </button>
     </div>
   );
 }

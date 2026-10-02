@@ -10,28 +10,32 @@ import '../components/space/Ui.css';
 export default function LaunchPage() {
   const [phase, setPhase] = useState('intro');
   const [sceneMounted, setSceneMounted] = useState(true);
-  // const [selected, setSelected] = useState(null);
-
-  const [videoDone, setVideoDone] = useState(false);           // NEW
-  const handleVideoDone = useCallback(() => setVideoDone(true), []); // NEW
+  const [selected, setSelected] = useState(null);
+  const [videoDone, setVideoDone] = useState(false);
 
   const handleStart = useCallback(() => setPhase('launch'), []);
   const handleComplete = useCallback(() => setPhase('select'), []);
+  const handleVideoDone = useCallback(() => setVideoDone(true), []);
 
   useEffect(() => {
     if (phase !== 'select') return;
-    const id = setTimeout(() => setSceneMounted(false), 2000);
+    const id = setTimeout(() => setSceneMounted(false), 2400); // after the 1.8 s fade-out
     return () => clearTimeout(id);
   }, [phase]);
 
   return (
     <div className="launch-root">
       <SpaceBackground />
-      {sceneMounted && <LaunchScene playing={phase !== 'intro'} onComplete={handleComplete} />}
+      {sceneMounted && (
+        <div className={`scene-layer ${phase === 'select' ? 'scene-layer--fade' : ''}`}>
+          <LaunchScene playing={phase !== 'intro'} onComplete={handleComplete} />
+        </div>
+      )}
       <IntroBackdrop visible={phase === 'intro'} onFinish={handleVideoDone} />
-        {phase !== 'select' && (
-          <IntroOverlay visible={phase === 'intro'} ready={videoDone} onStart={handleStart} />
-        )}
+      {phase !== 'select' && (
+        <IntroOverlay visible={phase === 'intro'} ready={videoDone} onStart={handleStart} />
+      )}
+      {phase === 'select' && <MissionSelect selected={selected} onSelect={setSelected} />}
     </div>
   );
 }

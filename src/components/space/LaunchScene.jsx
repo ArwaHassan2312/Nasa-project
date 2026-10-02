@@ -120,8 +120,12 @@ function Director({ rocketRef, state, onComplete }) {
     if (state.playing) state.t += dt;
     const t = state.t;
 
+    // arrival: over the last 1.4 s before `vanish` the rocket shrinks away and the engine cuts out
+    const vk = THREE.MathUtils.clamp((t - ((TIMELINE.vanish ?? Infinity) - 1.4)) / 1.4, 0, 1);
+    const fadeOut = vk * vk * (3 - 2 * vk);
+
     const ig = THREE.MathUtils.clamp((t - TIMELINE.ignite) / 3.5, 0, 1);
-    state.throttle = Math.pow(ig, 0.7);
+    state.throttle = Math.pow(ig, 0.7) * (1 - fadeOut);
 
     const s = Math.max(0, t - TIMELINE.liftoff);
     state.altitude = altitudeAt(s);
@@ -138,6 +142,8 @@ function Director({ rocketRef, state, onComplete }) {
       }
       qRoll.setFromAxisAngle(Y, s * 0.04);
       rocket.quaternion.copy(q0).multiply(qRoll);
+      rocket.scale.setScalar(Math.max(1 - fadeOut, 0.0001));
+      rocket.visible = fadeOut < 1;
     }
 
     if (!state.done && t >= TIMELINE.end) {

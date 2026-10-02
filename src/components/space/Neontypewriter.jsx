@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
  * Types `lines` out character by character with a blinking neon caret.
  * IMPORTANT: pass a constant `lines` array (define it outside the component).
  */
-export default function NeonTypewriter({ lines, startDelay = 400, speed = 45, onDone }) {
+export default function NeonTypewriter({
+  lines, startDelay = 400, speed = 45, lineDelay = 320, punctDelay = 140, onDone,
+}){
   const [count, setCount] = useState(0);
   const doneRef = useRef(onDone);
   useEffect(() => {
@@ -34,13 +36,15 @@ export default function NeonTypewriter({ lines, startDelay = 400, speed = 45, on
       }
       const ch = flat[n - 1];
       let d = speed * (0.6 + Math.random() * 1.1);
-      if (ch === '\n') d += 320;
-      else if (ch === '.' || ch === ',') d += 140;
+      // if (ch === '\n') d += 320;
+      // else if (ch === '.' || ch === ',') d += 140;
+      if (ch === '\n') d += lineDelay;
+      else if (ch === '.' || ch === ',') d += punctDelay;
       timer = setTimeout(step, d);
     };
     timer = setTimeout(step, startDelay);
     return () => clearTimeout(timer);
-  }, [lines, speed, startDelay]);
+  }, [lines, speed, startDelay, lineDelay, punctDelay]);
 
   return (
     <div className="neon-block" aria-label={lines.join(' ')}>
