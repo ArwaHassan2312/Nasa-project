@@ -1,13 +1,56 @@
 import * as THREE from 'three';
 
 /** Clone, centre and scale a model so its largest dimension equals 2*radius. */
-export function prepareEarth(scene, radius) {
+export function prepareEarth(scene, radius, opts = {}) {
+  const { exclude = null, include = null, autoShell = false, debug = false } = opts;
   const model = scene.clone(true);
-  const holder = new THREE.Group();
-  holder.add(model);
-  const box = new THREE.Box3().setFromObject(model);
+  model.updateMatrixWorld(true);
+
+  const infos = [];
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    const b = new THREE.Box3().setFromObject(o);
+    const s = b.getSize(new THREE.Vector3());
+    const mat = Array.isArray(o.material) ? o.material[0] : o.material;
+    infos.push({
+      mesh: o,
+      name: o.name || '(unnamed)',
+      maxDim: Math.max(s.x, s.y, s.z),
+      verts: o.geometry?.attributes?.position?.count ?? 0,
+      transparent: !!mat?.transparent,
+    });
+  });
+
+  // reference = smallest "real" mesh (the planet body)
+  const real = infos.filter((i) => i.verts >= 1000);
+  const ref = real.length ? Math.min(...real.map((i) => i.maxDim)) : 0;
+
+  infos.forEach((i) => {
+    let keep = true;
+    if (include) keep = include.includes(i.name);
+    else if (exclude && exclude.test(i.name)) keep = false;
+    else if (autoShell && ref > 0 && i.maxDim > ref * 1.6) keep = false;
+    i.keep = keep;
+    i.mesh.visible = keep;
+  });
+
+  if (debug) {
+    console.table(
+      infos.map(({ name, maxDim, verts, transparent, keep }) => ({
+        name, size: +maxDim.toFixed(3), verts, transparent, keep,
+      }))
+    );
+  }
+
+  const box = new THREE.Box3();
+  infos.filter((i) => i.keep).forEach((i) => box.expandByObject(i.mesh));
+  if (box.isEmpty()) box.setFromObject(model); // safety net
+
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
+
+  const holder = new THREE.Group();
+  holder.add(model);
   model.position.sub(center);
   holder.scale.setScalar((radius * 2) / Math.max(size.x, size.y, size.z));
   return holder;

@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600&display=swap');
+
 .launch-root {
   position: fixed;
   inset: 0;
@@ -230,3 +232,35 @@ html, body, #root { height: 100%; margin: 0; }
   aspect-ratio: 1;
 }
 .planet-canvas canvas { width: 100% !important; height: 100% !important; }
+
+/* ---------- destination select tweaks ---------- */
+.select-screen { gap: clamp(0.8rem, 3vh, 2rem); }
+.select-screen .neon-block { font-size: clamp(0.9rem, min(2.6vh, 3vw), 1.6rem); }
+.planet-card.selected .planet-name {
+  text-shadow: 0 0 8px #fff, 0 0 18px #5fe3ff, 0 0 36px #0a7cff;
+}
+.planet-tag {
+  min-height: 1.2em;
+  font-family: var(--neon-font);
+  font-size: clamp(0.65rem, 1.3vh, 0.8rem);
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #7ff0ff;
+  text-shadow: 0 0 8px #22b8ff;
+}
+
+
+/* ---------- intro image (download.png) ---------- */
+.intro-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 2;              /* above the 3D canvas (z 1), below the UI (z 5) */
+  pointer-events: none;
+  user-select: none;
+  opacity: 1;
+  transition: opacity 2.4s ease 0.4s;  /* text fades first, then the image dissolves into the 3D scene */
+}
+.intro-backdrop--gone { opacity: 0; }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import NeonTypewriter from './Neontypewriter';
+import NeonTypewriter from './NeonTypewriter';
 
 const LINES = [
   'Every decision matters.',
@@ -21,7 +21,7 @@ export default function IntroOverlay({ visible, onStart }) {
         <div className="mission-btn-wrap">
           <span className="mission-btn-ring" />
           <button type="button" className="mission-btn" onClick={onStart} disabled={!showButton}>
-            Start a mission
+            Start your mission
           </button>
         </div>
       </div>

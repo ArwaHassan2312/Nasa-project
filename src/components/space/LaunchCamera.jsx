@@ -8,14 +8,14 @@ import { UP, TANGENT, RIGHT, EARTH_RADIUS } from './launchConfig';
 // Earth's centre (w=0) to the rocket (w=1).
 const toLocal = (v) => [v.dot(TANGENT), v.dot(UP), v.dot(RIGHT)];
 const KEYS = [
-  { t: 0,  v: [...toLocal(new THREE.Vector3(0, 2, 38)), 0, 0] },   // 1 wide Earth
-  { t: 5.5, v: [7, 3, 4, 1, 0.5] },                                // 2 move toward pad
-  { t: 9,  v: [3.2, 0.9, 1.6, 1, 0.6] },                           // 3 ignition close-up
-  { t: 11, v: [3.0, 0.9, 1.5, 1, 0.6] },
-  { t: 15, v: [4, 1.5, 2.2, 1, 0.3] },                             // 4 follow
-  { t: 23, v: [10, 4, 5, 1, 0] },                                  // 5 pull back
-  { t: 30, v: [20, 4, 40, 0.8, 3] },                               // 6 entering space
-  { t: 37, v: [12, 0, 70, 0.5, 0] },                               // 7 rocket + Earth
+  { t: 0,    v: [...toLocal(new THREE.Vector3(44, 3, 0)), 0, 6] },  // 1 wide Earth, rocket in profile
+  { t: 5.5,  v: [11, 5, 6, 1, 0.8] },                               // 2 move toward pad
+  { t: 9,    v: [5, 1.5, 2.6, 1, 1.0] },                            // 3 ignition close-up
+  { t: 11,   v: [4.8, 1.5, 2.5, 1, 1.0] },
+  { t: 15,   v: [6.5, 2.5, 3.6, 1, 0.5] },                          // 4 follow
+  { t: 23,   v: [16, 6.5, 8, 1, 0] },                               // 5 pull back
+  { t: 30,   v: [20, 4, 40, 0.8, 3] },                              // 6 entering space
+  { t: 37,   v: [12, 0, 70, 0.5, 0] },                              // 7 rocket + Earth
 ];
 
 // Catmull-Rom for smooth velocity across keys

@@ -8,10 +8,16 @@ import { prepareEarth } from '../../utils/modelUtils'; // generic "centre + scal
 import { makePlanetTexture } from '../../utils/planetTexture';
 
 const PLANETS = [
+  { id: 'moon', name: 'Moon', url: ASSETS.moon, kind: 'moon' },
   { id: 'mars', name: 'Mars', url: ASSETS.mars, kind: 'mars' },
-  { id: 'moon', name: 'The Moon', url: ASSETS.moon, kind: 'moon' },
 ];
-const LINES = ['Choose your world.', 'Choose your landing site.', 'Shape your mission.'];
+const LINES = [
+  'Your destination awaits.',
+  '',
+  'Choose your world.',
+  'Choose your landing site.',
+  'Shape your mission.',
+];
 const RADIUS = 1.25;
 
 /** Falls back to a procedural planet if the GLB is missing or fails to load. */
@@ -25,7 +31,6 @@ class PlanetBoundary extends Component {
   }
 }
 
-/** Slow spin + hover scale. */
 function Spin({ hovered, children }) {
   const ref = useRef();
   useFrame((_, dt) => {
@@ -73,7 +78,7 @@ function PlanetCanvas({ planet, hovered }) {
       gl={{ alpha: true, antialias: true }}
       onCreated={({ gl }) => gl.setClearColor(0x000000, 0)}
     >
-      <ambientLight intensity={0.12} />
+      <ambientLight intensity={0.15} />
       <directionalLight position={[-4, 2.5, 4]} intensity={3.2} color="#fff3e2" />
       <PlanetBoundary fallback={<PlanetProcedural kind={planet.kind} hovered={hovered} />}>
         <Suspense fallback={null}>
@@ -95,11 +100,14 @@ export default function MissionSelect({ selected, onSelect }) {
 
   return (
     <div className={`select-screen ${show ? 'visible' : ''}`}>
+      <NeonTypewriter lines={LINES} startDelay={700} speed={32} />
+
       <div className="planet-row">
         {PLANETS.map((p) => (
           <div
             key={p.id}
             role="button"
+            aria-pressed={selected === p.id}
             tabIndex={0}
             className={`planet-card ${selected === p.id ? 'selected' : ''}`}
             onClick={() => onSelect?.(p.id)}
@@ -116,11 +124,10 @@ export default function MissionSelect({ selected, onSelect }) {
               <PlanetCanvas planet={p} hovered={hover === p.id || selected === p.id} />
             </div>
             <div className="planet-name">{p.name}</div>
+            <div className="planet-tag">{selected === p.id ? 'Destination locked' : '\u00A0'}</div>
           </div>
         ))}
       </div>
-
-      <NeonTypewriter lines={LINES} startDelay={1400} />
     </div>
   );
 }
