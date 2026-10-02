@@ -2,17 +2,21 @@ import * as THREE from 'three';
 import backgroundUrl from '../../assets/images/1773008.png';
 // import earthImageUrl from '../../assets/images/earth/download.jpg';
 import introImageUrl from '../../assets/images/earth/EVER QUITE AND DANGEROUS PLACE.jpg';
+import introVideo from "../../assets/videos/11892851-hd_1280_720_24fps.mp4";
 
 // Files in /public are served from the site root (no "/public" prefix).
 export const ASSETS = {
-  earth: '/models/earth-00.glb',
+  earth: '/models/3d-earth.glb',
   rocket: '/models/3d-white-rocket.glb',
   mars: '/models/24881_Mars_1_6792.glb',
   moon: '/models/moon.glb',
   background: backgroundUrl,
   // earthImage: earthImageUrl,
   introImage: introImageUrl,
+  introVideo: introVideo,
 };
+
+export const INTRO_VIDEO_SECONDS = 10;
 
 // Scene units. The rocket is exaggerated vs. the real Earth, otherwise it would be sub-pixel.
 export const EARTH_RADIUS = 10;

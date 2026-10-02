@@ -10,7 +10,10 @@ import '../components/space/Ui.css';
 export default function LaunchPage() {
   const [phase, setPhase] = useState('intro');
   const [sceneMounted, setSceneMounted] = useState(true);
-  const [selected, setSelected] = useState(null);
+  // const [selected, setSelected] = useState(null);
+
+  const [videoDone, setVideoDone] = useState(false);           // NEW
+  const handleVideoDone = useCallback(() => setVideoDone(true), []); // NEW
 
   const handleStart = useCallback(() => setPhase('launch'), []);
   const handleComplete = useCallback(() => setPhase('select'), []);
@@ -25,9 +28,10 @@ export default function LaunchPage() {
     <div className="launch-root">
       <SpaceBackground />
       {sceneMounted && <LaunchScene playing={phase !== 'intro'} onComplete={handleComplete} />}
-      <IntroBackdrop visible={phase === 'intro'} />
-      {phase !== 'select' && <IntroOverlay visible={phase === 'intro'} onStart={handleStart} />}
-      {phase === 'select' && <MissionSelect selected={selected} onSelect={setSelected} />}
+      <IntroBackdrop visible={phase === 'intro'} onFinish={handleVideoDone} />
+        {phase !== 'select' && (
+          <IntroOverlay visible={phase === 'intro'} ready={videoDone} onStart={handleStart} />
+        )}
     </div>
   );
 }
