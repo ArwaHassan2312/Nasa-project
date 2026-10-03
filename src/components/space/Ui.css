@@ -1,8 +1,11 @@
-/* @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600&display=swap'); */
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600&family=Rajdhani:wght@500;600&display=swap');
+
+html, body, #root { height: 100%; margin: 0; }
+
 .launch-root {
-  position: fixed;
-  inset: 0;
+  position: relative;
+  width: 100vw;
+  height: 100dvh;
   overflow: hidden;
   background: #000;
   --neon-font: 'Orbitron', 'Rajdhani', 'Segoe UI', system-ui, sans-serif;
@@ -58,28 +61,40 @@
 }
 @keyframes caretBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
 
-/* ---------- intro overlay ---------- */
+/* ---------- intro overlay (text, then button beneath it) ---------- */
 .intro-overlay {
   position: absolute;
   inset: 0;
   z-index: 5;
   pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 7vh 4vw 0;            /* top spacing: raise or lower to move the text */
+  gap: clamp(1.8rem, 6vh, 3.5rem);
+  box-sizing: border-box;
 }
 .intro-title {
-  position: absolute;
-  top: 5vh;
-  left: 0;
-  right: 0;
-  padding: 0 4vw;
+  width: 100%;
+  max-width: 1100px;
+  /* reserves 3 lines so nothing jumps when the typing starts */
+  min-height: calc(3 * 1.45 * clamp(0.95rem, min(3.1vh, 3.2vw), 2rem));
 }
-.intro-action {
+
+/* ---------- intro image ---------- */
+.intro-backdrop {
   position: absolute;
-  bottom: 9vh;
-  left: 0;
-  right: 0;
-  display: flex;
-  justify-content: center;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 2;              /* above the 3D canvas (z 1), below the UI (z 5) */
+  pointer-events: none;
+  user-select: none;
+  opacity: 1;
+  transition: opacity 2.4s ease 0.4s;
 }
+.intro-backdrop--gone { opacity: 0; }
 
 /* ---------- start button ---------- */
 .mission-btn-wrap { position: relative; pointer-events: auto; }
@@ -135,24 +150,64 @@
 .mission-btn:active:not(:disabled) { transform: scale(0.98); }
 .mission-btn:focus-visible { outline: 2px solid #7ff0ff; outline-offset: 5px; }
 
-/* ---------- mission select ---------- */
+/* =====================================================================
+   Space scene fade-out + destination select
+   ===================================================================== */
+.scene-layer { position: absolute; inset: 0; z-index: 1; transition: opacity 1.8s ease; }
+.scene-layer--fade { opacity: 0; }
+
 .select-screen {
   position: absolute;
   inset: 0;
   z-index: 5;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(1rem, 4.5vh, 3rem);
-  padding: 4vh 4vw;
+  display: block;
   box-sizing: border-box;
   background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.65));
   opacity: 0;
   transition: opacity 1.4s ease;
+  --ease: cubic-bezier(0.65, 0, 0.2, 1);
 }
 .select-screen.visible { opacity: 1; }
+.select-screen .neon-block { font-size: clamp(0.9rem, min(2.6vh, 3vw), 1.6rem); }
 
+.select-heading {
+  position: absolute;
+  top: 5vh; left: 0; right: 0;
+  padding: 0 4vw;
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.select-screen.has-selection .select-heading {
+  opacity: 0;
+  transform: translateY(-10px);
+  pointer-events: none;
+}
+.dest-stage { position: absolute; inset: 0; }
+
+/* ---------- shared planet labels ---------- */
+.planet-name {
+  font-family: var(--neon-font);
+  font-weight: 600;
+  font-size: clamp(0.9rem, 2vh, 1.2rem);
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: #eafcff;
+  text-shadow: 0 0 6px #5fe3ff, 0 0 16px #22b8ff;
+}
+.planet-card.selected .planet-name,
+.dest-card.selected .planet-name {
+  text-shadow: 0 0 8px #fff, 0 0 18px #5fe3ff, 0 0 36px #0a7cff;
+}
+.planet-tag {
+  min-height: 1.2em;
+  font-family: var(--neon-font);
+  font-size: clamp(0.65rem, 1.3vh, 0.8rem);
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #7ff0ff;
+  text-shadow: 0 0 8px #22b8ff;
+}
+
+/* ---------- OLD planet cards (probably unused now, see note) ---------- */
 .planet-row {
   display: flex;
   flex-wrap: wrap;
@@ -176,10 +231,11 @@
 
 .planet-canvas {
   position: relative;
-  width: 100%;
+  width: min(38vw, 360px);
   aspect-ratio: 1;
   pointer-events: none;
 }
+.planet-canvas canvas { width: 100% !important; height: 100% !important; }
 .planet-canvas::before {
   content: '';
   position: absolute;
@@ -202,111 +258,6 @@
   border-color: rgba(95, 227, 255, 0.6);
   box-shadow: 0 0 22px rgba(34, 184, 255, 0.45), inset 0 0 22px rgba(34, 184, 255, 0.2);
 }
-.planet-name {
-  font-family: var(--neon-font);
-  font-weight: 600;
-  font-size: clamp(0.9rem, 2vh, 1.2rem);
-  letter-spacing: 0.35em;
-  text-transform: uppercase;
-  color: #eafcff;
-  text-shadow: 0 0 6px #5fe3ff, 0 0 16px #22b8ff;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .neon-block, .mission-btn-ring, .neon-cursor::after { animation: none; }
-}
-
-
-html, body, #root { height: 100%; margin: 0; }
-
-.launch-root {
-  position: relative;
-  width: 100vw;
-  height: 100dvh;
-  overflow: hidden;
-  background: #000;
-}
-
-.planet-canvas {
-  width: min(38vw, 360px);
-  aspect-ratio: 1;
-}
-.planet-canvas canvas { width: 100% !important; height: 100% !important; }
-
-/* ---------- destination select tweaks ---------- */
-.select-screen { gap: clamp(0.8rem, 3vh, 2rem); }
-.select-screen .neon-block { font-size: clamp(0.9rem, min(2.6vh, 3vw), 1.6rem); }
-.planet-card.selected .planet-name {
-  text-shadow: 0 0 8px #fff, 0 0 18px #5fe3ff, 0 0 36px #0a7cff;
-}
-.planet-tag {
-  min-height: 1.2em;
-  font-family: var(--neon-font);
-  font-size: clamp(0.65rem, 1.3vh, 0.8rem);
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
-  color: #7ff0ff;
-  text-shadow: 0 0 8px #22b8ff;
-}
-
-
-/* ---------- intro image (download.png) ---------- */
-.intro-backdrop {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  z-index: 2;              /* above the 3D canvas (z 1), below the UI (z 5) */
-  pointer-events: none;
-  user-select: none;
-  opacity: 1;
-  transition: opacity 2.4s ease 0.4s;  /* text fades first, then the image dissolves into the 3D scene */
-}
-.intro-backdrop--gone { opacity: 0; }
-
-
-/* ---------- intro: centred composition (text, then button beneath it) ---------- */
-.intro-overlay {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;   /* was: center */
-  padding: 7vh 4vw 0;            /* top spacing: raise or lower this to move the text */
-  gap: clamp(1.8rem, 6vh, 3.5rem);
-  box-sizing: border-box;
-}
-.intro-title {
-  position: static;
-  width: 100%;
-  max-width: 1100px;
-  padding: 0;
-  /* reserves 3 lines so nothing jumps when the typing starts */
-  min-height: calc(3 * 1.45 * clamp(0.95rem, min(3.1vh, 3.2vw), 2rem));
-}
-.intro-action { position: static; }
-
-
-/* =====================================================================
-   Space scene fade-out + destination select (cards, slide, briefing)
-   ===================================================================== */
-.scene-layer { position: absolute; inset: 0; z-index: 1; transition: opacity 1.8s ease; }
-.scene-layer--fade { opacity: 0; }
-
-.select-screen { display: block; padding: 0; --ease: cubic-bezier(0.65, 0, 0.2, 1); }
-
-.select-heading {
-  position: absolute;
-  top: 5vh; left: 0; right: 0;
-  padding: 0 4vw;
-  transition: opacity 0.7s ease, transform 0.7s ease;
-}
-.select-screen.has-selection .select-heading {
-  opacity: 0;
-  transform: translateY(-10px);
-  pointer-events: none;
-}
-.dest-stage { position: absolute; inset: 0; }
 
 /* ---------- destination cards ---------- */
 .dest-card {
@@ -384,7 +335,6 @@ html, body, #root { height: 100%; margin: 0; }
   gap: 0.35rem;
   padding: 0.4rem 1rem 1.1rem;
 }
-.dest-card.selected .planet-name { text-shadow: 0 0 8px #fff, 0 0 18px #5fe3ff, 0 0 36px #0a7cff; }
 
 /* ---------- mission briefing panel ---------- */
 .dest-info {
@@ -517,5 +467,6 @@ html, body, #root { height: 100%; margin: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .neon-block, .mission-btn-ring, .neon-cursor::after { animation: none; }
   .dest-card, .dest-info, .scene-layer { transition-duration: 0.01s; }
 }
