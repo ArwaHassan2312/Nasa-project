@@ -5,8 +5,8 @@ import introVideo from "../../assets/videos/11892851-hd_1280_720_24fps.mp4";
 
 // Files in /public are served from the site root (no "/public" prefix).
 export const ASSETS = {
-  earth: '/models/3d-earth.glb',
-  rocket: '/models/3d-white-rocket.glb',
+  earth: '/models/earth.glb',
+rocket: '/models/jupiter-c-rocket.glb',
   mars: '/models/24881_Mars_1_6792.glb',
   moon: '/models/moon.glb',
   background: backgroundUrl,
@@ -18,13 +18,15 @@ export const INTRO_VIDEO_SECONDS = 10;
 
 // Scene units. The rocket is exaggerated vs. the real Earth, otherwise it would be sub-pixel.
 export const EARTH_RADIUS = 10;
-export const ROCKET_HEIGHT = 2.0;
+export const ROCKET_HEIGHT = 0.8;
 export const ROCKET_FLIP = false;          // set true if the nose points down after load
-export const PAD_SINK = 0;                 // set e.g. 0.03 if the rocket hovers slightly
+export const PAD_HEIGHT = 0.1;              // deck top; rocket engine bells rest on this plane
+export const PAD_SINK = 0;
+export const UNDERGROUND_DEPTH = 4.2;
 export const EARTH_ROTATION = [0, 0, 0];   // euler radians; spin the globe to show a nicer region at the pad
 
 // Timeline (seconds, counted from the moment the player clicks START)
-export const TIMELINE = { ignite: 7.5, liftoff: 11, vanish: 34.8, end: 36.5 };
+export const TIMELINE = { ignite: 7.5, liftoff: 11, end: 36.5 };
 
 export const ACCEL = 0.07;
 export const ACCEL_PHASE = 14;
@@ -44,7 +46,8 @@ export function speedAt(s) {
 export const UP = new THREE.Vector3(0, 0.6, 0.8).normalize();
 export const RIGHT = new THREE.Vector3(1, 0, 0);
 export const TANGENT = new THREE.Vector3().crossVectors(RIGHT, UP).normalize();
-export const LAUNCH_POINT = UP.clone().multiplyScalar(EARTH_RADIUS - PAD_SINK);
+export const LAUNCH_RADIUS = EARTH_RADIUS - UNDERGROUND_DEPTH + PAD_HEIGHT - PAD_SINK;
+export const LAUNCH_POINT = UP.clone().multiplyScalar(LAUNCH_RADIUS);
 
 export const SUN_DIR = new THREE.Vector3(30, 18, 40).normalize();
 

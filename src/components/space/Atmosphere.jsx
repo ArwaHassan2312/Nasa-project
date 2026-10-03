@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'react';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { EARTH_RADIUS, SUN_DIR } from './launchConfig';
 
@@ -57,9 +58,14 @@ function makeMaterial(frag, side, intensity) {
   });
 }
 
-export default function Atmosphere() {
+export default function Atmosphere({ state }) {
   const halo = useMemo(() => makeMaterial(haloFrag, THREE.BackSide, 0.55), []);
   const rim = useMemo(() => makeMaterial(rimFrag, THREE.FrontSide, 0.7), []);
+  useFrame(() => {
+    const reveal = state?.surfaceMix ?? 1;
+    halo.uniforms.uIntensity.value = 0.55 * reveal;
+    rim.uniforms.uIntensity.value = 0.7 * reveal;
+  });
   useEffect(() => () => { halo.dispose(); rim.dispose(); }, [halo, rim]);
 
   return (
