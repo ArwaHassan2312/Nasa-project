@@ -4,9 +4,10 @@ import LaunchScene from '../components/space/LaunchScene';
 import IntroBackdrop from '../components/space/IntroBackdrop';
 import IntroOverlay from '../components/space/IntroOverlay';
 import MissionSelect from '../components/space/MissionSelect';
+import LunarOutpost from '../components/lunar/LunarOutpost';
 import '../components/space/Ui.css';
 
-// phases: 'intro' -> 'launch' -> 'select'
+// phases: 'intro' -> 'launch' -> 'select' -> 'lunar'
 export default function LaunchPage() {
   const [phase, setPhase] = useState('intro');
   const [sceneMounted, setSceneMounted] = useState(true);
@@ -16,6 +17,9 @@ export default function LaunchPage() {
   const handleStart = useCallback(() => setPhase('launch'), []);
   const handleComplete = useCallback(() => setPhase('select'), []);
   const handleVideoDone = useCallback(() => setVideoDone(true), []);
+  const handleLaunchMission = useCallback((id) => {
+    if (id === 'moon') setPhase('lunar');
+  }, []);
 
   useEffect(() => {
     if (phase !== 'select') return;
@@ -25,17 +29,29 @@ export default function LaunchPage() {
 
   return (
     <div className="launch-root">
-      <SpaceBackground />
-      {sceneMounted && (
-        <div className={`scene-layer ${phase === 'select' ? 'scene-layer--fade' : ''}`}>
-          <LaunchScene playing={phase !== 'intro'} onComplete={handleComplete} />
-        </div>
+      {phase === 'lunar' ? (
+        <LunarOutpost onExitToOrbit={() => setPhase('select')} />
+      ) : (
+        <>
+          <SpaceBackground />
+          {sceneMounted && (
+            <div className={`scene-layer ${phase === 'select' ? 'scene-layer--fade' : ''}`}>
+              <LaunchScene playing={phase !== 'intro'} onComplete={handleComplete} />
+            </div>
+          )}
+          <IntroBackdrop visible={phase === 'intro'} onFinish={handleVideoDone} />
+          {phase !== 'select' && (
+            <IntroOverlay visible={phase === 'intro'} ready={videoDone} onStart={handleStart} />
+          )}
+          {phase === 'select' && (
+            <MissionSelect
+              selected={selected}
+              onSelect={setSelected}
+              onLaunchMission={handleLaunchMission}
+            />
+          )}
+        </>
       )}
-      <IntroBackdrop visible={phase === 'intro'} onFinish={handleVideoDone} />
-      {phase !== 'select' && (
-        <IntroOverlay visible={phase === 'intro'} ready={videoDone} onStart={handleStart} />
-      )}
-      {phase === 'select' && <MissionSelect selected={selected} onSelect={setSelected} />}
     </div>
   );
 }

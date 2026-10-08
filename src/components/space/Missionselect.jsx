@@ -133,7 +133,7 @@ function PlanetCanvas({ planet, hovered, interactive }) {
   );
 }
 
-export default function MissionSelect({ selected, onSelect }) {
+export default function MissionSelect({ selected, onSelect, onLaunchMission }) {
   const [show, setShow] = useState(false);
   const [hover, setHover] = useState(null);
   const [panelOn, setPanelOn] = useState(false);   // info panel slides in
@@ -238,6 +238,33 @@ export default function MissionSelect({ selected, onSelect }) {
               data={DESTINATIONS[view.id]}
               active={!!selected && panelOn}
             />
+            {selected === 'moon' && (
+              <div className="dest-action-container">
+                <button
+                  type="button"
+                  className="dest-deploy-btn"
+                  onClick={() => onLaunchMission?.('moon')}
+                >
+                  <span className="dest-deploy-icon">⚡</span>
+                  <div className="dest-deploy-info">
+                    <span className="dest-deploy-title">DEPLOY TO LUNAR SURFACE</span>
+                    <span className="dest-deploy-desc">Apollo 12 & 16 Outpost Recon · Habitat & Greenhouse</span>
+                  </div>
+                  <span className="dest-deploy-arrow">→</span>
+                </button>
+              </div>
+            )}
+            {selected === 'mars' && (
+              <div className="dest-action-container">
+                <div className="dest-deploy-btn dest-deploy-btn--disabled">
+                  <span className="dest-deploy-icon">⏳</span>
+                  <div className="dest-deploy-info">
+                    <span className="dest-deploy-title">MARS RECONNAISSANCE</span>
+                    <span className="dest-deploy-desc">Orbital scan active · Surface mission in development</span>
+                  </div>
+                </div>
+              </div>
+            )}
           </aside>
         )}
       </div>
