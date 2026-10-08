@@ -7,7 +7,7 @@ import TypedBriefing from './TypedBriefing';
 import { DESTINATIONS } from './destinations';
 import { ASSETS } from './launchConfig';
 import { prepareEarth } from '../../utils/modelUtils'; // generic "centre + scale to radius"
-import { makePlanetTexture } from '../../utils/planetTexture';
+import { makePlanetTexture } from '../../utils/Planettexture';
 
 const PLANETS = [
   { id: 'moon', name: 'Moon', url: ASSETS.moon, kind: 'moon' },
@@ -106,7 +106,7 @@ function CameraLights() {
 function PlanetCanvas({ planet, hovered, interactive }) {
   return (
     <Canvas
-      dpr={[1, 2]}
+      dpr={[1, 1.5]}
       camera={{ fov: 35, position: [0, 0, 5.2] }}
       gl={{ alpha: true, antialias: true }}
       onCreated={({ gl }) => gl.setClearColor(0x000000, 0)}

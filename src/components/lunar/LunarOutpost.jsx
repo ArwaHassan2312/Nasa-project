@@ -3,7 +3,7 @@ import { createLunarEngine } from './lunarOutpostEngine';
 import './LunarOutpost.css';
 
 export default function LunarOutpost({ onExitToOrbit }) {
-  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
   const engineRef = useRef(null);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -16,9 +16,13 @@ export default function LunarOutpost({ onExitToOrbit }) {
   });
 
   useEffect(() => {
-    if (!canvasRef.current) return;
+    if (!containerRef.current) return;
 
-    const engine = createLunarEngine(canvasRef.current, {
+    const canvas = document.createElement('canvas');
+    canvas.className = 'lunar-canvas';
+    containerRef.current.prepend(canvas);
+
+    const engine = createLunarEngine(canvas, {
       onLoading: (state) => setIsLoading(state.active),
       onModeChange: (mode) => setCameraMode(mode),
       onPromptChange: (type, data) => setPrompt({ type, data }),
@@ -28,14 +32,14 @@ export default function LunarOutpost({ onExitToOrbit }) {
     engineRef.current = engine;
 
     return () => {
-      engine.destroy();
+      engine?.destroy?.();
       engineRef.current = null;
+      canvas.remove();
     };
   }, []);
 
   return (
-    <div className="lunar-root">
-      <canvas ref={canvasRef} className="lunar-canvas" />
+    <div className="lunar-root" ref={containerRef}>
       <div className="lunar-grain" />
       <div className="lunar-shade" />
 

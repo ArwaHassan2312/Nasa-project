@@ -3,6 +3,34 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
+// Module-level caches: raw asset buffers loaded once to prevent memory leaks and repeated downloads
+const ASSET_CACHE = {
+  skyTexture: null,
+  apollo12Geo: null,
+  apollo16Geo: null,
+  gltfs: new Map(), // path -> gltf.scene clone source
+};
+
+const sharedGltfLoader = new GLTFLoader();
+const sharedStlLoader = new STLLoader();
+const sharedTexLoader = new THREE.TextureLoader();
+
+function loadCachedGLTF(path, onLoad, onProgress, onError) {
+  if (ASSET_CACHE.gltfs.has(path)) {
+    onLoad(ASSET_CACHE.gltfs.get(path).clone(true));
+    return;
+  }
+  sharedGltfLoader.load(
+    path,
+    gltf => {
+      ASSET_CACHE.gltfs.set(path, gltf.scene);
+      onLoad(gltf.scene.clone(true));
+    },
+    onProgress,
+    onError
+  );
+}
+
 export function createLunarEngine(canvas, callbacks = {}) {
   const {
     onLoading = () => {},
@@ -27,7 +55,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     antialias: true,
     powerPreference: 'high-performance'
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.35));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -66,11 +94,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let airlockTriggerRadius = 0;
   let airlockInterior = null;
   let airlockInteriorBounds = null;
+  let airlockCenter = new THREE.Vector3();
   let airlockInteriorLight = null;
   let greenhouseInterior = null;
   let greenhouseInteriorBounds = null;
+  let greenhouseCenter = new THREE.Vector3();
   let greenhouseInteriorLight = null;
-  let greenhousePlants = null;
   let componentTargets = [];
   let activeComponentTarget = null;
   let dismissedComponentId = null;
@@ -78,6 +107,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let activeModuleInterior = null;
   let activeModuleInteriorBounds = null;
   let activeModuleInteriorLight = null;
+  let activeModuleGeometries = [];
+  let activeModuleMaterials = [];
   let moduleInteriorLoading = false;
   let greenhouseReturnMode = 'airlock';
   let airlockReturnPosition = null;
@@ -95,19 +126,32 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let airlockPromptDismissed = false;
   let airlockLoading = false;
 
+  // Track dynamic sprite textures and materials for leak-free disposal
+  const labelTextures = [];
+  const labelMaterials = [];
+
   const clock = new THREE.Clock();
   let cameraMode = 'free'; // 'free' | 'first-person' | 'interior'
   let firstPersonYaw = 0;
   let firstPersonPitch = 0;
 
-  // Prompts state tracked for callback updates
+  // Prompts state tracked for callback updates with zero GC stringify
   let currentPromptType = null;
-  let currentPromptData = null;
+  let currentPromptId = null;
+  let currentPromptTitle = null;
+
+  function isSamePrompt(type, data) {
+    if (currentPromptType !== type) return false;
+    if (!data && !currentPromptTitle) return true;
+    if (!data || !currentPromptTitle) return false;
+    return currentPromptId === (data.id || null) && currentPromptTitle === data.title;
+  }
 
   function setPrompt(type, data = null) {
-    if (currentPromptType !== type || JSON.stringify(currentPromptData) !== JSON.stringify(data)) {
+    if (!isSamePrompt(type, data)) {
       currentPromptType = type;
-      currentPromptData = data;
+      currentPromptId = data?.id || null;
+      currentPromptTitle = data?.title || null;
       onPromptChange(type, data);
       if (type && document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
@@ -124,15 +168,29 @@ export function createLunarEngine(canvas, callbacks = {}) {
   fill.position.set(80, 40, -100);
   scene.add(fill);
 
-  // Milky Way Skybox
-  const skyLoader = new THREE.TextureLoader();
-  skyLoader.load('/lunar/textures/8k_stars_milky_way.jpg', texture => {
-    if (isDestroyed) return;
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.mapping = THREE.EquirectangularReflectionMapping;
-    scene.background = texture;
+  // Milky Way Skybox: Cached & mipmap-free to save ~45MB VRAM and eliminate hitching
+  if (ASSET_CACHE.skyTexture) {
+    scene.background = ASSET_CACHE.skyTexture;
     scene.backgroundIntensity = 0.8;
-  }, undefined, () => console.warn('Could not load Milky Way texture.'));
+  } else {
+    sharedTexLoader.load(
+      '/lunar/textures/8k_stars_milky_way.jpg',
+      texture => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        texture.generateMipmaps = false;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        ASSET_CACHE.skyTexture = texture;
+        if (!isDestroyed) {
+          scene.background = texture;
+          scene.backgroundIntensity = 0.8;
+        }
+      },
+      undefined,
+      () => console.warn('Could not load Milky Way texture.')
+    );
+  }
 
   // Earth
   const EARTH_DISTANCE = 120;
@@ -148,27 +206,31 @@ export function createLunarEngine(canvas, callbacks = {}) {
     Math.cos(THREE.MathUtils.degToRad(EARTH_AZIMUTH_DEGREES)) * Math.cos(THREE.MathUtils.degToRad(EARTH_ELEVATION_DEGREES))
   ).normalize();
 
-  new GLTFLoader().load('/lunar/earth.glb', gltf => {
-    if (isDestroyed) return;
-    const model = gltf.scene;
-    const normalizedModel = new THREE.Group();
-    normalizedModel.add(model);
-    normalizedModel.updateMatrixWorld(true);
-    const modelBounds = new THREE.Box3().setFromObject(normalizedModel);
-    const modelCenter = modelBounds.getCenter(new THREE.Vector3());
-    const modelSize = modelBounds.getSize(new THREE.Vector3());
-    const modelDiameter = Math.max(modelSize.x, modelSize.y, modelSize.z, 0.0001);
-    const unitScale = 2 / modelDiameter;
-    normalizedModel.scale.setScalar(unitScale);
-    normalizedModel.position.copy(modelCenter).multiplyScalar(-unitScale);
+  loadCachedGLTF(
+    '/lunar/earth.glb',
+    model => {
+      if (isDestroyed) return;
+      const normalizedModel = new THREE.Group();
+      normalizedModel.add(model);
+      normalizedModel.updateMatrixWorld(true);
+      const modelBounds = new THREE.Box3().setFromObject(normalizedModel);
+      const modelCenter = modelBounds.getCenter(new THREE.Vector3());
+      const modelSize = modelBounds.getSize(new THREE.Vector3());
+      const modelDiameter = Math.max(modelSize.x, modelSize.y, modelSize.z, 0.0001);
+      const unitScale = 2 / modelDiameter;
+      normalizedModel.scale.setScalar(unitScale);
+      normalizedModel.position.copy(modelCenter).multiplyScalar(-unitScale);
 
-    earthMesh = new THREE.Group();
-    earthMesh.add(normalizedModel);
-    earthMesh.scale.setScalar(EARTH_FIRST_PERSON_RADIUS);
-    earthMesh.position.copy(earthAnchor).addScaledVector(earthDirection, EARTH_DISTANCE);
-    earthMesh.name = 'Earth';
-    scene.add(earthMesh);
-  }, undefined, error => console.warn('Could not load /lunar/earth.glb.', error));
+      earthMesh = new THREE.Group();
+      earthMesh.add(normalizedModel);
+      earthMesh.scale.setScalar(EARTH_FIRST_PERSON_RADIUS);
+      earthMesh.position.copy(earthAnchor).addScaledVector(earthDirection, EARTH_DISTANCE);
+      earthMesh.name = 'Earth';
+      scene.add(earthMesh);
+    },
+    undefined,
+    error => console.warn('Could not load /lunar/earth.glb.', error)
+  );
 
   // Terrain scans: Apollo 12 & Apollo 16
   const APOLLO_12_POSITION_X = 0;
@@ -190,72 +252,65 @@ export function createLunarEngine(canvas, callbacks = {}) {
     side: THREE.DoubleSide
   });
 
-  const stlLoader = new STLLoader();
   const models = [
-    { name: 'Apollo 12', path: '/lunar/MOON/Apollo%2012%20-%20Landing%20Site.stl' },
-    { name: 'Apollo 16', path: '/lunar/MOON/Apollo%2016%20-%20Landing%20Site.stl' }
+    { name: 'Apollo 12', path: '/lunar/MOON/Apollo%2012%20-%20Landing%20Site.stl', cacheKey: 'apollo12Geo' },
+    { name: 'Apollo 16', path: '/lunar/MOON/Apollo%2016%20-%20Landing%20Site.stl', cacheKey: 'apollo16Geo' }
   ];
   const terrainScans = [];
   const moonTerrainMeshes = [];
   let loaded = 0;
 
-  for (const entry of models) {
-    onLoading({ active: true, text: `MAPPING ${entry.name.toUpperCase()} LANDING SITE`, progress: 10 + loaded * 25 });
-    stlLoader.load(entry.path, geometry => {
-      if (isDestroyed) return;
-      geometry.computeVertexNormals();
-      geometry.computeBoundingBox();
-      const box = geometry.boundingBox;
-      const center = box.getCenter(new THREE.Vector3());
-      const size = box.getSize(new THREE.Vector3());
+  function onTerrainGeometryReady(entry, geometry) {
+    if (isDestroyed) return;
+    const box = geometry.boundingBox || new THREE.Box3().setFromBufferAttribute(geometry.attributes.position);
+    const size = box.getSize(new THREE.Vector3());
 
-      geometry.translate(-center.x, -center.y, -center.z);
-      const terrain = new THREE.Mesh(geometry, terrainMaterial);
-      terrain.rotation.x = -Math.PI / 2;
-      const horizontalSpan = Math.max(size.x, size.y) || 1;
-      const horizontalScale = 190 / horizontalSpan;
-      const nominalHeight = size.z * (190 / Math.max(size.x, size.y, size.z));
-      terrain.scale.set(horizontalScale, horizontalScale, horizontalScale);
-      terrain.position.set(0, 0, 0);
-      terrain.castShadow = false;
-      terrain.receiveShadow = true;
-      terrain.userData.siteName = entry.name;
-      scene.add(terrain);
-      moonTerrainMeshes.push(terrain);
-      terrainScans.push({ name: entry.name, terrain, size, horizontalScale, nominalHeight });
-      loaded++;
+    const terrain = new THREE.Mesh(geometry, terrainMaterial);
+    terrain.rotation.x = -Math.PI / 2;
+    const horizontalSpan = Math.max(size.x, size.y) || 1;
+    const horizontalScale = 190 / horizontalSpan;
+    const nominalHeight = size.z * (190 / Math.max(size.x, size.y, size.z));
+    terrain.scale.set(horizontalScale, horizontalScale, horizontalScale);
+    terrain.position.set(0, 0, 0);
+    terrain.castShadow = false;
+    terrain.receiveShadow = true;
+    terrain.userData.siteName = entry.name;
+    scene.add(terrain);
+    moonTerrainMeshes.push(terrain);
+    terrainScans.push({ name: entry.name, terrain, size, horizontalScale, nominalHeight });
+    loaded++;
 
-      if (loaded === models.length) {
-        terrainScans.sort((a, b) => a.name.localeCompare(b.name));
-        const apollo12 = terrainScans[0];
-        const apollo16 = terrainScans[1];
-        const sharedRelief = apollo16.nominalHeight;
+    if (loaded === models.length) {
+      terrainScans.sort((a, b) => a.name.localeCompare(b.name));
+      const apollo12 = terrainScans[0];
+      const apollo16 = terrainScans[1];
+      const sharedRelief = apollo16.nominalHeight;
 
-        for (const scan of terrainScans) {
-          scan.terrain.scale.set(scan.horizontalScale, scan.horizontalScale, sharedRelief / scan.size.z);
-          const bounds = new THREE.Box3().setFromObject(scan.terrain);
-          scan.terrain.position.y -= bounds.min.y;
-          scan.width = bounds.max.x - bounds.min.x;
-        }
+      for (const scan of terrainScans) {
+        scan.terrain.scale.set(scan.horizontalScale, scan.horizontalScale, sharedRelief / scan.size.z);
+        const bounds = new THREE.Box3().setFromObject(scan.terrain);
+        scan.terrain.position.y -= bounds.min.y;
+        scan.width = bounds.max.x - bounds.min.x;
+      }
 
-        apollo12.terrain.scale.multiplyScalar(APOLLO_12_SCALE);
-        apollo12.width *= APOLLO_12_SCALE;
-        apollo12.terrain.position.x = APOLLO_12_POSITION_X;
-        apollo12.terrain.position.y += APOLLO_12_POSITION_Y;
-        apollo16.terrain.position.x = (apollo12.width + apollo16.width) / 2 - 4;
-        const sceneCenterX = (apollo12.terrain.position.x + apollo16.terrain.position.x) / 2;
-        const sceneWidth = apollo12.width + apollo16.width;
-        controls.target.set(sceneCenterX, sharedRelief * 0.18, 0);
-        camera.position.set(sceneCenterX + sceneWidth * 0.3, sharedRelief + sceneWidth * 0.48, sceneWidth * 0.72);
-        controls.minDistance = sceneWidth * 0.12;
-        controls.maxDistance = sceneWidth * 2.5;
-        controls.update();
+      apollo12.terrain.scale.multiplyScalar(APOLLO_12_SCALE);
+      apollo12.width *= APOLLO_12_SCALE;
+      apollo12.terrain.position.x = APOLLO_12_POSITION_X;
+      apollo12.terrain.position.y += APOLLO_12_POSITION_Y;
+      apollo16.terrain.position.x = (apollo12.width + apollo16.width) / 2 - 4;
+      const sceneCenterX = (apollo12.terrain.position.x + apollo16.terrain.position.x) / 2;
+      const sceneWidth = apollo12.width + apollo16.width;
+      controls.target.set(sceneCenterX, sharedRelief * 0.18, 0);
+      camera.position.set(sceneCenterX + sceneWidth * 0.3, sharedRelief + sceneWidth * 0.48, sceneWidth * 0.72);
+      controls.minDistance = sceneWidth * 0.12;
+      controls.maxDistance = sceneWidth * 2.5;
+      controls.update();
 
-        onLoading({ active: true, text: 'DEPLOYING LUNAR OUTPOST', progress: 75 });
-        const gltfLoader = new GLTFLoader();
-        gltfLoader.load('/lunar/model.glb', gltf => {
+      onLoading({ active: true, text: 'DEPLOYING LUNAR OUTPOST', progress: 75 });
+      loadCachedGLTF(
+        '/lunar/model.glb',
+        outpost => {
           if (isDestroyed) return;
-          const outpost = gltf.scene;
           outpost.updateMatrixWorld(true);
 
           const originalBounds = new THREE.Box3().setFromObject(outpost);
@@ -271,12 +326,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
           outpost.position.z += targetZ - (bounds.min.z + bounds.max.z) / 2;
           outpost.updateMatrixWorld(true);
 
+          // Fast terrain raycast
           const raycaster = new THREE.Raycaster(
             new THREE.Vector3(targetX, sharedRelief + sceneWidth, targetZ),
             new THREE.Vector3(0, -1, 0),
             0,
             sceneWidth * 3
           );
+          raycaster.firstHitOnly = true;
           const terrainHits = raycaster.intersectObjects([apollo12.terrain, apollo16.terrain], false);
           const surfaceY = terrainHits.length ? terrainHits[0].point.y : 0;
           const scaledBounds = new THREE.Box3().setFromObject(outpost);
@@ -316,7 +373,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
           airlockTriggerRadius = AIRLOCK_PROMPT_DISTANCE;
 
           onLoading({ active: false, text: 'SURFACE RECON READY', progress: 100 });
-        }, event => {
+        },
+        event => {
           if (event.total) {
             onLoading({
               active: true,
@@ -324,30 +382,52 @@ export function createLunarEngine(canvas, callbacks = {}) {
               progress: 75 + Math.round((event.loaded / event.total) * 25)
             });
           }
-        }, error => {
+        },
+        error => {
           console.error('Unable to load /lunar/model.glb', error);
           onLoading({ active: false, text: 'READY (OUTPOST MISSING)', progress: 100 });
-        });
-      }
-    }, event => {
-      if (event.total) {
-        onLoading({
-          active: true,
-          text: `LOADING ${entry.name.toUpperCase()} · ${Math.round((event.loaded / event.total) * 100)}%`,
-          progress: Math.round((event.loaded / event.total) * 50)
-        });
-      }
-    }, error => {
-      console.error(`Unable to load ${entry.name}`, error);
-      onLoading({ active: false, text: `ERROR LOADING ${entry.name}`, progress: 100 });
-    });
+        }
+      );
+    }
+  }
+
+  for (const entry of models) {
+    if (ASSET_CACHE[entry.cacheKey]) {
+      onTerrainGeometryReady(entry, ASSET_CACHE[entry.cacheKey]);
+    } else {
+      onLoading({ active: true, text: `MAPPING ${entry.name.toUpperCase()} LANDING SITE`, progress: 10 + loaded * 25 });
+      sharedStlLoader.load(
+        entry.path,
+        geometry => {
+          geometry.computeVertexNormals();
+          geometry.computeBoundingBox();
+          const box = geometry.boundingBox;
+          const center = box.getCenter(new THREE.Vector3());
+          geometry.translate(-center.x, -center.y, -center.z);
+          ASSET_CACHE[entry.cacheKey] = geometry;
+          onTerrainGeometryReady(entry, geometry);
+        },
+        event => {
+          if (event.total) {
+            onLoading({
+              active: true,
+              text: `LOADING ${entry.name.toUpperCase()} · ${Math.round((event.loaded / event.total) * 100)}%`,
+              progress: Math.round((event.loaded / event.total) * 50)
+            });
+          }
+        },
+        error => {
+          console.error(`Unable to load ${entry.name}`, error);
+          onLoading({ active: false, text: `ERROR LOADING ${entry.name}`, progress: 100 });
+        }
+      );
+    }
   }
 
   // Horizon Plane
-  const horizon = new THREE.Mesh(
-    new THREE.PlaneGeometry(1200, 1200),
-    new THREE.MeshStandardMaterial({ color: 0x4b4947, roughness: 1 })
-  );
+  const horizonGeo = new THREE.PlaneGeometry(1200, 1200);
+  const horizonMat = new THREE.MeshStandardMaterial({ color: 0x4b4947, roughness: 1 });
+  const horizon = new THREE.Mesh(horizonGeo, horizonMat);
   horizon.rotation.x = -Math.PI / 2;
   horizon.position.y = -1.2;
   scene.add(horizon);
@@ -417,13 +497,20 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
       const texture = new THREE.CanvasTexture(canvasTex);
       texture.colorSpace = THREE.SRGBColorSpace;
-      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      texture.generateMipmaps = false;
+      texture.minFilter = THREE.LinearFilter;
+      labelTextures.push(texture);
+
+      const mat = new THREE.SpriteMaterial({
         map: texture,
         transparent: true,
         depthTest: true,
         depthWrite: false,
         toneMapped: false
-      }));
+      });
+      labelMaterials.push(mat);
+
+      const sprite = new THREE.Sprite(mat);
       const worldWidth = Math.max(3.5, Math.min(7, label.length * 0.28));
       sprite.scale.set(worldWidth / parentScale, worldWidth * (96 / 512) / parentScale, 1);
       sprite.position.copy(outpost.worldToLocal(worldPosition));
@@ -471,7 +558,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
         id: match[1],
         name,
         roomType,
-        object,
         center: bounds.getCenter(new THREE.Vector3()),
         radius: Math.max(7, Math.min(18, Math.max(size.x, size.z) * 0.55))
       });
@@ -483,24 +569,41 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (componentInteriorKit) { onReady(componentInteriorKit); return; }
     if (moduleInteriorLoading) return;
     moduleInteriorLoading = true;
-    new GLTFLoader().load('/lunar/outpost_interior_kit.glb', gltf => {
-      moduleInteriorLoading = false;
-      componentInteriorKit = gltf.scene;
-      onReady(componentInteriorKit);
-    }, undefined, error => {
-      console.error('Unable to load modular outpost interior kit', error);
-      moduleInteriorLoading = false;
-    });
+    loadCachedGLTF(
+      '/lunar/outpost_interior_kit.glb',
+      kit => {
+        moduleInteriorLoading = false;
+        componentInteriorKit = kit;
+        onReady(componentInteriorKit);
+      },
+      undefined,
+      error => {
+        console.error('Unable to load modular outpost interior kit', error);
+        moduleInteriorLoading = false;
+      }
+    );
+  }
+
+  function disposeModuleInterior(room) {
+    if (!room) return;
+    for (const g of activeModuleGeometries) g.dispose();
+    for (const m of activeModuleMaterials) m.dispose();
+    activeModuleGeometries = [];
+    activeModuleMaterials = [];
   }
 
   function createModuleInterior(roomType) {
+    disposeModuleInterior(activeModuleInterior);
     const room = new THREE.Group();
     room.name = `${roomType} Module Interior`;
     const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x8c969d, roughness: 0.86, side: THREE.DoubleSide });
     const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x343d45, roughness: 0.92, metalness: 0.25 });
+    activeModuleMaterials.push(wallMaterial, floorMaterial);
 
     function box(width, height, depth, x, y, z, mat = wallMaterial) {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), mat);
+      const geo = new THREE.BoxGeometry(width, height, depth);
+      activeModuleGeometries.push(geo);
+      const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(x, y, z);
       room.add(mesh);
       return mesh;
@@ -561,7 +664,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     return room;
   }
 
-  function enterModuleInterior(target, kit) {
+  function enterModuleInterior(target) {
     outsideCameraPosition = camera.position.clone();
     outsideCameraYaw = firstPersonYaw;
     outsideCameraPitch = firstPersonPitch;
@@ -597,6 +700,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (!activeModuleInterior) return;
     scene.remove(activeModuleInterior);
     scene.remove(activeModuleInteriorLight);
+    disposeModuleInterior(activeModuleInterior);
     activeModuleInterior = null;
     activeModuleInteriorBounds = null;
     activeModuleInteriorLight = null;
@@ -624,11 +728,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
       enterGreenhouseFromExterior();
       return;
     }
-    ensureComponentInteriorKit(kit => enterModuleInterior(target, kit));
+    ensureComponentInteriorKit(() => enterModuleInterior(target));
   }
 
-  function prepareAirlockInterior(gltf) {
-    const interior = gltf.scene;
+  function prepareAirlockInterior(gltfScene) {
+    const interior = gltfScene;
     interior.updateMatrixWorld(true);
     const originalBounds = new THREE.Box3().setFromObject(interior);
     const originalSize = originalBounds.getSize(new THREE.Vector3());
@@ -652,6 +756,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     });
     airlockInterior = interior;
     airlockInteriorBounds = new THREE.Box3().setFromObject(interior);
+    airlockCenter = airlockInteriorBounds.getCenter(new THREE.Vector3());
   }
 
   function enterAirlockInterior() {
@@ -666,16 +771,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
     scene.add(airlockInterior);
 
     const roomSize = airlockInteriorBounds.getSize(new THREE.Vector3());
-    const roomCenter = airlockInteriorBounds.getCenter(new THREE.Vector3());
     const cameraY = airlockInteriorBounds.min.y + roomSize.y * 0.5;
     const entryInset = Math.max(0.8, Math.max(roomSize.x, roomSize.z) * 0.12);
-    const lookTarget = roomCenter.clone();
+    const lookTarget = airlockCenter.clone();
     airlockLongAxis = roomSize.x >= roomSize.z ? 'x' : 'z';
     if (roomSize.x >= roomSize.z) {
-      camera.position.set(airlockInteriorBounds.min.x + entryInset, cameraY, roomCenter.z);
+      camera.position.set(airlockInteriorBounds.min.x + entryInset, cameraY, airlockCenter.z);
       lookTarget.x = camera.position.x + roomSize.x * 0.3;
     } else {
-      camera.position.set(roomCenter.x, cameraY, airlockInteriorBounds.min.z + entryInset);
+      camera.position.set(airlockCenter.x, cameraY, airlockInteriorBounds.min.z + entryInset);
       lookTarget.z = camera.position.z + roomSize.z * 0.3;
     }
     lookTarget.y = cameraY;
@@ -707,14 +811,19 @@ export function createLunarEngine(canvas, callbacks = {}) {
       return;
     }
     airlockLoading = true;
-    new GLTFLoader().load('/lunar/airlock.glb', gltf => {
-      airlockLoading = false;
-      prepareAirlockInterior(gltf);
-      enterAirlockInterior();
-    }, undefined, error => {
-      console.error('Unable to load /lunar/airlock.glb', error);
-      airlockLoading = false;
-    });
+    loadCachedGLTF(
+      '/lunar/airlock.glb',
+      gltfScene => {
+        airlockLoading = false;
+        prepareAirlockInterior(gltfScene);
+        enterAirlockInterior();
+      },
+      undefined,
+      error => {
+        console.error('Unable to load /lunar/airlock.glb', error);
+        airlockLoading = false;
+      }
+    );
   }
 
   function exitAirlock() {
@@ -745,8 +854,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
     setPrompt(null);
   }
 
-  function prepareGreenhouse(gltf) {
-    const interior = gltf.scene;
+  function prepareGreenhouse(gltfScene) {
+    const interior = gltfScene;
     interior.updateMatrixWorld(true);
     const originalBounds = new THREE.Box3().setFromObject(interior);
     const originalSize = originalBounds.getSize(new THREE.Vector3());
@@ -763,12 +872,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
     });
     greenhouseInterior = interior;
     greenhouseInteriorBounds = new THREE.Box3().setFromObject(interior);
+    greenhouseCenter = greenhouseInteriorBounds.getCenter(new THREE.Vector3());
     const greenhouseSize = greenhouseInteriorBounds.getSize(new THREE.Vector3());
     greenhouseLongAxis = greenhouseSize.x >= greenhouseSize.z ? 'x' : 'z';
   }
 
-  function populateGreenhouseWithTomatoes(gltf) {
-    const source = gltf.scene;
+  function populateGreenhouseWithTomatoes(tomatoScene) {
+    const source = tomatoScene;
     source.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(source);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -813,7 +923,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
         tomatoes.add(wrapper);
       }
     }
-    greenhousePlants = tomatoes;
     greenhouseInterior.add(tomatoes);
   }
 
@@ -826,15 +935,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
     scene.add(greenhouseInterior);
     if (airlockInteriorLight) scene.remove(airlockInteriorLight);
     const size = greenhouseInteriorBounds.getSize(new THREE.Vector3());
-    const center = greenhouseInteriorBounds.getCenter(new THREE.Vector3());
     const y = greenhouseInteriorBounds.min.y + size.y * 0.5;
     const inset = Math.max(0.8, Math.max(size.x, size.z) * 0.12);
-    const target = center.clone();
+    const target = greenhouseCenter.clone();
     if (size.x >= size.z) {
-      camera.position.set(greenhouseInteriorBounds.min.x + inset, y, center.z);
+      camera.position.set(greenhouseInteriorBounds.min.x + inset, y, greenhouseCenter.z);
       target.x = camera.position.x + size.x * 0.3;
     } else {
-      camera.position.set(center.x, y, greenhouseInteriorBounds.min.z + inset);
+      camera.position.set(greenhouseCenter.x, y, greenhouseInteriorBounds.min.z + inset);
       target.z = camera.position.z + size.z * 0.3;
     }
     target.y = y;
@@ -865,22 +973,32 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (greenhouseLoading) return;
     if (greenhouseInterior) { placeInsideGreenhouse(); return; }
     greenhouseLoading = true;
-    new GLTFLoader().load('/lunar/greenhouse.glb', gltf => {
-      prepareGreenhouse(gltf);
-      new GLTFLoader().load('/lunar/tomato_plant.glb', tomatoGltf => {
-        populateGreenhouseWithTomatoes(tomatoGltf);
+    loadCachedGLTF(
+      '/lunar/greenhouse.glb',
+      ghScene => {
+        prepareGreenhouse(ghScene);
+        loadCachedGLTF(
+          '/lunar/tomato_plant.glb',
+          tomatoScene => {
+            populateGreenhouseWithTomatoes(tomatoScene);
+            greenhouseLoading = false;
+            placeInsideGreenhouse();
+          },
+          undefined,
+          error => {
+            console.error('Unable to load /lunar/tomato_plant.glb', error);
+            greenhouseLoading = false;
+            placeInsideGreenhouse();
+          }
+        );
+      },
+      undefined,
+      error => {
+        console.error('Unable to load /lunar/greenhouse.glb', error);
         greenhouseLoading = false;
-        placeInsideGreenhouse();
-      }, undefined, error => {
-        console.error('Unable to load /lunar/tomato_plant.glb', error);
-        greenhouseLoading = false;
-        placeInsideGreenhouse();
-      });
-    }, undefined, error => {
-      console.error('Unable to load /lunar/greenhouse.glb', error);
-      greenhouseLoading = false;
-      if (greenhouseReturnMode === 'exterior') restoreExteriorAfterGreenhouseFailure();
-    });
+        if (greenhouseReturnMode === 'exterior') restoreExteriorAfterGreenhouseFailure();
+      }
+    );
   }
 
   function restoreExteriorAfterGreenhouseFailure() {
@@ -1113,7 +1231,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   document.addEventListener('keyup', handleKeyUp);
   window.addEventListener('resize', handleResize);
 
-  // Prompt checks
+  // Prompt checks (zero per-frame Vector3 allocations)
   function updateAirlockPrompt() {
     if (cameraMode !== 'first-person' || !airlockTriggerCenter) {
       if (currentPromptType === 'airlock') setPrompt(null);
@@ -1129,6 +1247,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       if (currentPromptType === 'airlock') setPrompt(null);
     } else {
       setPrompt('airlock', {
+        id: 'airlock-entry',
         title: 'Enter the airlock?',
         message: 'You are at the habitat entrance.'
       });
@@ -1143,8 +1262,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const end = airlockLongAxis === 'x' ? airlockInteriorBounds.max.x : airlockInteriorBounds.max.z;
     const along = airlockLongAxis === 'x' ? camera.position.x : camera.position.z;
     const cross = airlockLongAxis === 'x'
-      ? Math.abs(camera.position.z - airlockInteriorBounds.getCenter(new THREE.Vector3()).z)
-      : Math.abs(camera.position.x - airlockInteriorBounds.getCenter(new THREE.Vector3()).x);
+      ? Math.abs(camera.position.z - airlockCenter.z)
+      : Math.abs(camera.position.x - airlockCenter.x);
     const crossSize = airlockLongAxis === 'x'
       ? airlockInteriorBounds.max.z - airlockInteriorBounds.min.z
       : airlockInteriorBounds.max.x - airlockInteriorBounds.min.x;
@@ -1154,6 +1273,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       if (currentPromptType === 'airlockEnd') setPrompt(null);
     } else if (!airlockEndPromptDismissed) {
       setPrompt('airlockEnd', {
+        id: 'airlock-end',
         title: 'Choose a direction',
         message: 'Left leads to the greenhouse. Right keeps you in the airlock.'
       });
@@ -1167,8 +1287,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
     }
     const end = greenhouseLongAxis === 'x' ? greenhouseInteriorBounds.max.x : greenhouseInteriorBounds.max.z;
     const along = greenhouseLongAxis === 'x' ? camera.position.x : camera.position.z;
-    const center = greenhouseInteriorBounds.getCenter(new THREE.Vector3());
-    const cross = greenhouseLongAxis === 'x' ? Math.abs(camera.position.z - center.z) : Math.abs(camera.position.x - center.x);
+    const cross = greenhouseLongAxis === 'x'
+      ? Math.abs(camera.position.z - greenhouseCenter.z)
+      : Math.abs(camera.position.x - greenhouseCenter.x);
     const crossSize = greenhouseLongAxis === 'x'
       ? greenhouseInteriorBounds.max.z - greenhouseInteriorBounds.min.z
       : greenhouseInteriorBounds.max.x - greenhouseInteriorBounds.min.x;
@@ -1179,6 +1300,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       if (currentPromptType === 'greenhouseDoor') setPrompt(null);
     } else if (!greenhouseDoorPromptDismissed) {
       setPrompt('greenhouseDoor', {
+        id: 'greenhouse-door',
         title: 'Return to the airlock?',
         message: 'You are at the greenhouse door. Leave the crop bay and go back to the airlock?'
       });
@@ -1192,7 +1314,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
     }
     let nearest = null;
     let nearestDistance = Infinity;
-    for (const target of componentTargets) {
+    for (let i = 0; i < componentTargets.length; i++) {
+      const target = componentTargets[i];
       const distance = Math.hypot(camera.position.x - target.center.x, camera.position.z - target.center.z);
       if (distance <= target.radius && distance < nearestDistance) {
         nearest = target;
@@ -1212,26 +1335,36 @@ export function createLunarEngine(canvas, callbacks = {}) {
     }
     activeComponentTarget = nearest;
     setPrompt('component', {
+      id: nearest.id,
       title: `Enter the ${nearest.name}?`,
-      message: `You are near the ${nearest.name.toLowerCase()}. Enter to explore its interior.`,
-      target: nearest
+      message: `You are near the ${nearest.name.toLowerCase()}. Enter to explore its interior.`
     });
   }
 
-  // Animation loop
+  // Animation loop with throttled prompt evaluation (10 Hz vs 120 Hz)
+  let promptCheckTimer = 0;
+
   function animate() {
     if (isDestroyed) return;
     animId = requestAnimationFrame(animate);
 
-    updateAirlockPrompt();
-    updateAirlockEndPrompt();
-    updateGreenhouseDoorPrompt();
-    updateComponentPrompt();
+    const dt = Math.min(clock.getDelta(), 0.05);
+
+    promptCheckTimer += dt;
+    if (promptCheckTimer >= 0.1) {
+      promptCheckTimer = 0;
+      if (cameraMode === 'first-person') {
+        updateAirlockPrompt();
+        updateComponentPrompt();
+      } else if (cameraMode === 'interior') {
+        updateAirlockEndPrompt();
+        updateGreenhouseDoorPrompt();
+      }
+    }
 
     if (cameraMode === 'free') {
       controls.update();
     } else {
-      const dt = Math.min(clock.getDelta(), 0.05);
       const forward = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
       const side = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
       camera.rotation.order = 'YXZ';
@@ -1318,6 +1451,44 @@ export function createLunarEngine(canvas, callbacks = {}) {
       if (document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
       }
+
+      // Dispose label sprites
+      for (let i = 0; i < labelTextures.length; i++) labelTextures[i].dispose();
+      for (let i = 0; i < labelMaterials.length; i++) labelMaterials[i].dispose();
+      labelTextures.length = 0;
+      labelMaterials.length = 0;
+
+      // Dispose active procedural module
+      if (activeModuleInterior) {
+        disposeModuleInterior(activeModuleInterior);
+        activeModuleInterior = null;
+      }
+
+      horizonGeo.dispose();
+      horizonMat.dispose();
+
+      // Deep recursive disposal of un-cached mesh geometries & materials
+      scene.traverse(obj => {
+        if (obj.isMesh) {
+          if (obj.geometry && obj.geometry !== ASSET_CACHE.apollo12Geo && obj.geometry !== ASSET_CACHE.apollo16Geo) {
+            obj.geometry.dispose();
+          }
+          if (obj.material) {
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            for (let i = 0; i < mats.length; i++) {
+              const m = mats[i];
+              if (m.map && m.map !== ASSET_CACHE.skyTexture) m.map.dispose();
+              if (m.normalMap) m.normalMap.dispose();
+              if (m.roughnessMap) m.roughnessMap.dispose();
+              if (m.metalnessMap) m.metalnessMap.dispose();
+              if (m.emissiveMap) m.emissiveMap.dispose();
+              m.dispose();
+            }
+          }
+        }
+      });
+
+      scene.clear();
       controls.dispose();
       renderer.dispose();
     }

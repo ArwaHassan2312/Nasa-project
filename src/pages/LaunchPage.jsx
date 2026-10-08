@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import SpaceBackground from '../components/space/SpaceBackground';
 import LaunchScene from '../components/space/LaunchScene';
 import IntroBackdrop from '../components/space/IntroBackdrop';
 import IntroOverlay from '../components/space/IntroOverlay';
 import MissionSelect from '../components/space/MissionSelect';
-import LunarOutpost from '../components/lunar/LunarOutpost';
 import '../components/space/Ui.css';
+
+const LunarOutpost = lazy(() => import('../components/lunar/LunarOutpost'));
 
 // phases: 'intro' -> 'launch' -> 'select' -> 'lunar'
 export default function LaunchPage() {
@@ -30,7 +31,9 @@ export default function LaunchPage() {
   return (
     <div className="launch-root">
       {phase === 'lunar' ? (
-        <LunarOutpost onExitToOrbit={() => setPhase('select')} />
+        <Suspense fallback={null}>
+          <LunarOutpost onExitToOrbit={() => setPhase('select')} />
+        </Suspense>
       ) : (
         <>
           <SpaceBackground />

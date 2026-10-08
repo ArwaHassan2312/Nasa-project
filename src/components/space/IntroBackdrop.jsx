@@ -37,7 +37,6 @@ export default function IntroBackdrop({ visible, onFinish }) {
       clearTimeout(timer.current); timer.current = null;
       clearTimeout(safety.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

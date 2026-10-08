@@ -46,22 +46,31 @@ export default function Earth({ state }) {
     return obj;
   }, [scene, gl]);
 
+  let lastReveal = -1;
   useFrame(() => {
     const reveal = state?.surfaceMix ?? 1;
+    if (Math.abs(reveal - lastReveal) < 0.001) return;
+    lastReveal = reveal;
+
     earth.visible = reveal > 0.005;
-    earth.userData.fadeMaterials.forEach(({ material, opacity }) => {
-      const fading = reveal < 0.995;
-      if (material.transparent !== fading) {
-        material.transparent = fading;
-        material.depthWrite = !fading;
-        material.needsUpdate = true;
+    if (!earth.visible) return;
+
+    const fading = reveal < 0.995;
+    const fadeMaterials = earth.userData.fadeMaterials;
+    for (let i = 0; i < fadeMaterials.length; i++) {
+      const item = fadeMaterials[i];
+      const mat = item.material;
+      if (mat.transparent !== fading) {
+        mat.transparent = fading;
+        mat.depthWrite = !fading;
+        mat.needsUpdate = true;
       }
-      material.opacity = opacity * reveal;
-    });
+      mat.opacity = item.opacity * reveal;
+    }
   });
 
   useEffect(() => () => {
-    earth.userData.fadeMaterials.forEach(({ material }) => material.dispose());
+    earth.userData.fadeMaterials?.forEach(({ material }) => material.dispose());
   }, [earth]);
 
   return <primitive object={earth} />;

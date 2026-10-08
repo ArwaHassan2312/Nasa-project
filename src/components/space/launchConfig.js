@@ -50,8 +50,9 @@ export const LAUNCH_RADIUS = EARTH_RADIUS - UNDERGROUND_DEPTH + PAD_HEIGHT - PAD
 export const LAUNCH_POINT = UP.clone().multiplyScalar(LAUNCH_RADIUS);
 
 export const SUN_DIR = new THREE.Vector3(30, 18, 40).normalize();
+export const SUN_LIGHT_POS = SUN_DIR.clone().multiplyScalar(100);
 
 // Earth model cleanup
-export const EARTH_DEBUG = true;                       // prints a mesh table in the browser console
+export const EARTH_DEBUG = false;                       // prints a mesh table in the browser console
 export const EARTH_EXCLUDE = /atmos|glow|halo|sky|star|ring|orbit/i; // mesh names to hide
 export const EARTH_INCLUDE = null;                     // e.g. ['Sphere'] = keep ONLY these meshes
