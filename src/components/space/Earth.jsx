@@ -1,79 +1,66 @@
 import { useEffect, useMemo } from 'react';
-import { useGLTF } from '@react-three/drei';
-import { useFrame, useThree } from '@react-three/fiber';
+import { useTexture } from '@react-three/drei';
 import * as THREE from 'three';
-import {
-  ASSETS, EARTH_RADIUS, EARTH_ROTATION, EARTH_DEBUG, EARTH_EXCLUDE, EARTH_INCLUDE,
-} from './launchConfig';
-import { prepareEarth } from '../../utils/modelUtils';
+import { EARTH_RADIUS, EARTH_ROTATION } from './launchConfig';
 
-export default function Earth({ state }) {
-  const { scene } = useGLTF(ASSETS.earth);
-  const gl = useThree((s) => s.gl);
+const EARTH_TEXTURES = [
+  '/Textures/8k_earth_daymap.jpg',
+  '/Textures/8k_earth_nightmap.jpg',
+  '/Textures/8k_earth_clouds.jpg',
+  '/Textures/8k_earth_specular.jpeg',
+];
 
-  const earth = useMemo(() => {
-    const obj = prepareEarth(scene, EARTH_RADIUS, {
-      exclude: EARTH_EXCLUDE,
-      include: EARTH_INCLUDE,
-      autoShell: false,
-      fitToBody: false,            // NEW
-      debug: EARTH_DEBUG,
-    });
-    obj.rotation.set(...EARTH_ROTATION);
-    const fadeMaterials = [];
-    const aniso = Math.min(8, gl.capabilities.getMaxAnisotropy());
-    obj.traverse((o) => {
-      if (!o.isMesh || !o.material) return;
-      const sourceMats = Array.isArray(o.material) ? o.material : [o.material];
-      const mats = sourceMats.map((material) => {
-        const materialClone = material.clone();
-        fadeMaterials.push({ material: materialClone, opacity: materialClone.opacity });
-        return materialClone;
-      });
-      o.material = Array.isArray(o.material) ? mats : mats[0];
-      mats.forEach((m) => {
-        ['map', 'normalMap', 'roughnessMap', 'emissiveMap'].forEach((k) => {
-          if (m[k]) m[k].anisotropy = aniso;
-        });
-        if (m.map) m.map.colorSpace = THREE.SRGBColorSpace;
-        if (m.emissiveMap) m.emissiveMap.colorSpace = THREE.SRGBColorSpace;   // NEW
-        // glTF defaults metallicFactor to 1; with no env map that renders a black planet
-        if (m.isMeshStandardMaterial && !m.metalnessMap && m.metalness > 0.1) m.metalness = 0; // NEW
-        m.needsUpdate = true;
-      });
-    });
-    obj.userData.fadeMaterials = fadeMaterials;
-    return obj;
-  }, [scene, gl]);
+export default function Earth() {
+  const [dayMap, nightMap, cloudMap, specularMap] = useTexture(EARTH_TEXTURES);
 
-  let lastReveal = -1;
-  useFrame(() => {
-    const reveal = state?.surfaceMix ?? 1;
-    if (Math.abs(reveal - lastReveal) < 0.001) return;
-    lastReveal = reveal;
+  const { surfaceMaterial, cloudMaterial } = useMemo(() => {
+    dayMap.colorSpace = THREE.SRGBColorSpace;
+    nightMap.colorSpace = THREE.SRGBColorSpace;
+    cloudMap.colorSpace = THREE.SRGBColorSpace;
+    specularMap.colorSpace = THREE.NoColorSpace;
 
-    earth.visible = reveal > 0.005;
-    if (!earth.visible) return;
-
-    const fading = reveal < 0.995;
-    const fadeMaterials = earth.userData.fadeMaterials;
-    for (let i = 0; i < fadeMaterials.length; i++) {
-      const item = fadeMaterials[i];
-      const mat = item.material;
-      if (mat.transparent !== fading) {
-        mat.transparent = fading;
-        mat.depthWrite = !fading;
-        mat.needsUpdate = true;
-      }
-      mat.opacity = item.opacity * reveal;
+    for (const texture of [dayMap, nightMap, cloudMap, specularMap]) {
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.anisotropy = 8;
+      texture.needsUpdate = true;
     }
-  });
+
+    return {
+      surfaceMaterial: new THREE.MeshPhongMaterial({
+        map: dayMap,
+        emissiveMap: nightMap,
+        emissive: new THREE.Color(0xffc777),
+        emissiveIntensity: 0.7,
+        specularMap,
+        specular: new THREE.Color(0x454545),
+        shininess: 18,
+      }),
+      cloudMaterial: new THREE.MeshPhongMaterial({
+        map: cloudMap,
+        alphaMap: cloudMap,
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.38,
+        depthWrite: false,
+        specular: new THREE.Color(0x111111),
+        shininess: 8,
+      }),
+    };
+  }, [dayMap, nightMap, cloudMap, specularMap]);
 
   useEffect(() => () => {
-    earth.userData.fadeMaterials?.forEach(({ material }) => material.dispose());
-  }, [earth]);
+    surfaceMaterial.dispose();
+    cloudMaterial.dispose();
+  }, [surfaceMaterial, cloudMaterial]);
 
-  return <primitive object={earth} />;
+  return (
+    <group rotation={EARTH_ROTATION}>
+      <mesh material={surfaceMaterial}>
+        <sphereGeometry args={[EARTH_RADIUS, 128, 96]} />
+      </mesh>
+      <mesh material={cloudMaterial} scale={1.003} renderOrder={1}>
+        <sphereGeometry args={[EARTH_RADIUS, 128, 96]} />
+      </mesh>
+    </group>
+  );
 }
-
-useGLTF.preload(ASSETS.earth);

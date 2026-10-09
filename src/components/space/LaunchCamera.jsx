@@ -7,15 +7,11 @@ import { UP, TANGENT, RIGHT, LAUNCH_RADIUS } from './launchConfig';
 // Offsets are in the launch-site frame, relative to a base that blends from
 // Earth's centre (w=0) to the rocket (w=1).
 const KEYS = [
-  { t: 0,    v: [0.9, 1.05, 0.55, 1, 0.55] }, // Close interior view, still inside the shaft.
-  { t: 5.5,  v: [0.85, 1.0, 0.5, 1, 0.5] },
-  { t: 9,    v: [0.72, 0.8, 0.42, 1, 0.5] }, // ignition close-up
-  { t: 11,   v: [0.72, 0.8, 0.42, 1, 0.5] },
-  { t: 15,   v: [0.9, 1.05, 0.55, 1, 0.55] }, // follow upward through the shaft
-  { t: 18,   v: [1.0, 1.5, 0.6, 1, 0.8] },   // approach the surface opening
-  { t: 22,   v: [4, 1.5, 3, 1, 0.7] },       // exterior tracking view
-  { t: 27,   v: [12, 3, 15, 0.72, 2] },      // reveal the planet
-  { t: 36.5, v: [8, 2, 28, 0.35, 0] },       // distant Earth and rocket
+  { t: 0,  v: [2.5, 1.8, 1.5, 1, 0] },
+  { t: 4,  v: [3, 2, 2, 1, 0] },
+  { t: 10, v: [4, 2, 5, 0.9, 0.1] },
+  { t: 18, v: [6, 2, 12, 0.65, 0] },
+  { t: 28, v: [8, 3, 24, 0.4, 0] },
 ];
 
 // Catmull-Rom for smooth velocity across keys

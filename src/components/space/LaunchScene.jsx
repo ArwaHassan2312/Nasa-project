@@ -3,28 +3,21 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import * as THREE from 'three';
 import Earth from './Earth';
+import Atmosphere from './Atmosphere';
 import Rocket from './Rocket';
-import LaunchPad from './LaunchPad';
-import UndergroundLaunchShaft from './UndergroundLaunchShaft';
 import RocketExhaust from './RocketExhaust';
 import LaunchCamera from './LaunchCamera';
 import {
-  SUN_LIGHT_POS, UP, TANGENT, RIGHT, PAD_HEIGHT, UNDERGROUND_DEPTH, LAUNCH_RADIUS,
+  SUN_LIGHT_POS, UP, LAUNCH_RADIUS, START_ALTITUDE,
   TIMELINE, altitudeAt, speedAt,
 } from './launchConfig';
 
-function Lights({ state }) {
-  const sun = useRef(null);
-  useFrame(() => {
-    if (!sun.current) return;
-    const outside = THREE.MathUtils.smoothstep(state.surfaceMix, 0.3, 1);
-    sun.current.intensity = THREE.MathUtils.lerp(0.18, 3.2, outside);
-  });
+function Lights() {
   return (
     <>
-      <ambientLight intensity={0.055} />
-      <hemisphereLight args={['#6f8fc7', '#05070b', 0.22]} />
-      <directionalLight ref={sun} position={SUN_LIGHT_POS} intensity={0.18} color="#fff4e6" />
+      <ambientLight intensity={0.25} />
+      <hemisphereLight args={['#6f8fc7', '#05070b', 0.35]} />
+      <directionalLight position={SUN_LIGHT_POS} intensity={1.2} color="#fff4e6" />
     </>
   );
 }
@@ -63,28 +56,15 @@ function Director({ rocketRef, state, onComplete }) {
     if (state.playing) state.t += dt;
     const t = state.t;
 
-    const ig = THREE.MathUtils.clamp((t - TIMELINE.ignite) / 3.5, 0, 1);
-    state.throttle = Math.pow(ig, 0.7);
-
-    const s = Math.max(0, t - TIMELINE.liftoff);
-    state.altitude = altitudeAt(s);
-    state.speed = speedAt(s);
-    state.surfaceMix = THREE.MathUtils.smoothstep(
-      state.altitude,
-      UNDERGROUND_DEPTH - PAD_HEIGHT - 0.45,
-      UNDERGROUND_DEPTH - PAD_HEIGHT + 0.45
-    );
+    state.throttle = state.playing ? 1 : 0;
+    state.altitude = START_ALTITUDE + altitudeAt(t);
+    state.speed = speedAt(t);
+    state.surfaceMix = 1;
 
     const rocket = rocketRef.current;
     if (rocket) {
       rocket.position.copy(UP).multiplyScalar(LAUNCH_RADIUS + state.altitude);
-      const amp = 0.004 * state.throttle * (1 - THREE.MathUtils.clamp(s / 3, 0, 1));
-      if (amp > 0) {
-        rocket.position
-          .addScaledVector(TANGENT, Math.sin(t * 93) * amp)
-          .addScaledVector(RIGHT, Math.sin(t * 71 + 1.3) * amp);
-      }
-      qRoll.setFromAxisAngle(Y, s * 0.04);
+      qRoll.setFromAxisAngle(Y, t * 0.025);
       rocket.quaternion.copy(q0).multiply(qRoll);
       rocket.scale.setScalar(1);
       rocket.visible = true;
@@ -115,10 +95,9 @@ export default function LaunchScene({ playing = false, onComplete }) {
       onCreated={({ gl }) => gl.setClearColor(0x000000, 0)}
     >
       <Suspense fallback={null}>
-        <Lights state={state} />
-        <Earth state={state} />
-        <UndergroundLaunchShaft state={state} />
-        <LaunchPad state={state} />
+        <Lights />
+        <Earth />
+        <Atmosphere />
         <Rocket ref={rocketRef} />
         <RocketExhaust rocketRef={rocketRef} state={state} timeline={TIMELINE} />
         <Director rocketRef={rocketRef} state={state} onComplete={onComplete} />

@@ -4,7 +4,6 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { UP, TANGENT, RIGHT } from './launchConfig';
 
-const SMOKE_COUNT = 700;
 const FLAME_COUNT = 240;
 const { lerp, smoothstep } = THREE.MathUtils;
 
@@ -507,18 +506,6 @@ export default function RocketExhaust({
     const map =
       makeSmokeTexture();
 
-    const smokeMat =
-      makeParticleMaterial(
-        map,
-        [
-          [0.95, 0.72, 0.5],
-          [0.62, 0.62, 0.64],
-          [0.38, 0.38, 0.4],
-        ],
-        0.5,
-        false
-      );
-
     const flameMat =
       makeParticleMaterial(
         map,
@@ -549,7 +536,6 @@ export default function RocketExhaust({
 
     return {
       map,
-      smokeMat,
       flameMat,
       coneGeo,
 
@@ -558,12 +544,6 @@ export default function RocketExhaust({
 
       innerMat:
         makeConeMaterial(true),
-
-      smoke:
-        createPool(
-          SMOKE_COUNT,
-          smokeMat
-        ),
 
       flame:
         createPool(
@@ -576,14 +556,12 @@ export default function RocketExhaust({
   useEffect(
     () => () => {
       res.map.dispose();
-      res.smokeMat.dispose();
       res.flameMat.dispose();
 
       res.coneGeo.dispose();
       res.outerMat.dispose();
       res.innerMat.dispose();
 
-      res.smoke.geo.dispose();
       res.flame.geo.dispose();
     },
     [res]
@@ -638,203 +616,17 @@ export default function RocketExhaust({
         22
       );
 
-    // Smoke disappears completely
-    // as the rocket reaches space.
-    const smokeFade =
-      1 -
-      smoothstep(
-        alt,
-        12,
-        22
-      );
-
-    const ground =
-      1 -
-      smoothstep(
-        alt,
-        0.15,
-        1.4
-      );
-
-    const density =
-      lerp(
-        1,
-        0.02,
-        vac
-      );
-
     gl.getDrawingBufferSize(
       buf
     );
 
-    res.smokeMat.uniforms.uHeight.value =
-      buf.y;
-
     res.flameMat.uniforms.uHeight.value =
       buf.y;
 
-    // Smoke gradually disappears
-    // before reaching space.
-    res.smokeMat.uniforms.uOpacity.value =
-      0.5 * smokeFade;
-
     /* ---------- emission ---------- */
     if (thr > 0.02) {
-      const {
-        smoke,
-        flame,
-      } = res;
-
-      // Smoke emission fades to zero in space.
-      smoke.carry +=
-        260 *
-        thr *
-        density *
-        smokeFade *
-        dt;
-
-      let n =
-        Math.floor(
-          smoke.carry
-        );
-
-      smoke.carry -= n;
-
-      while (n-- > 0) {
-        const f =
-          Math.random();
-
-        const ang =
-          Math.random() *
-          Math.PI *
-          2;
-
-        const rr =
-          Math.random() *
-          0.05 *
-          thr;
-
-        const ox =
-          TANGENT.x *
-            Math.cos(ang) *
-            rr +
-          RIGHT.x *
-            Math.sin(ang) *
-            rr;
-
-        const oy =
-          TANGENT.y *
-            Math.cos(ang) *
-            rr +
-          RIGHT.y *
-            Math.sin(ang) *
-            rr;
-
-        const oz =
-          TANGENT.z *
-            Math.cos(ang) *
-            rr +
-          RIGHT.z *
-            Math.sin(ang) *
-            rr;
-
-        const th =
-          Math.random() *
-          Math.PI *
-          2;
-
-        const down =
-          lerp(
-            0.3,
-            4.5,
-            1 - ground
-          ) *
-          (0.5 +
-            Math.random() *
-              0.6);
-
-        const lat =
-          (
-            lerp(
-              0.35,
-              3.0,
-              ground
-            ) +
-            vac * 1.5
-          ) *
-          Math.random();
-
-        const up =
-          ground *
-          0.35 *
-          Math.random();
-
-        const c =
-          Math.cos(th) *
-          lat;
-
-        const s =
-          Math.sin(th) *
-          lat;
-
-        emit(
-          smoke,
-
-          lerp(
-            prev.x,
-            noz.x,
-            f
-          ) +
-            ox +
-            UP.x * 0.05,
-
-          lerp(
-            prev.y,
-            noz.y,
-            f
-          ) +
-            oy +
-            UP.y * 0.05,
-
-          lerp(
-            prev.z,
-            noz.z,
-            f
-          ) +
-            oz +
-            UP.z * 0.05,
-
-          -UP.x * down +
-            TANGENT.x * c +
-            RIGHT.x * s +
-            UP.x * up,
-
-          -UP.y * down +
-            TANGENT.y * c +
-            RIGHT.y * s +
-            UP.y * up,
-
-          -UP.z * down +
-            TANGENT.z * c +
-            RIGHT.z * s +
-            UP.z * up,
-
-          (3 +
-            Math.random() * 4) *
-            (1 +
-              ground * 0.4),
-
-          0.12 +
-            Math.random() * 0.15,
-
-          (0.9 +
-            Math.random() * 2.2) *
-            (1 +
-              ground * 1.2) *
-            (1 +
-              vac * 0.5)
-        );
-      }
+      const { flame } = res;
+      let n;
 
       /* ---------- flame ---------- */
       flame.carry +=
@@ -935,14 +727,6 @@ export default function RocketExhaust({
 
     /* ---------- update particles ---------- */
     updatePool(
-      res.smoke,
-      dt,
-      t,
-      0.6,
-      0.8
-    );
-
-    updatePool(
       res.flame,
       dt,
       t,
@@ -1028,11 +812,6 @@ export default function RocketExhaust({
 
   return (
     <>
-      <primitive
-        object={res.smoke.points}
-        renderOrder={3}
-      />
-
       <primitive
         object={res.flame.points}
         renderOrder={4}

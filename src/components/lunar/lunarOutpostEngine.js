@@ -6,6 +6,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 // Module-level caches: raw asset buffers loaded once to prevent memory leaks and repeated downloads
 const ASSET_CACHE = {
   skyTexture: null,
+  earthTextures: null,
   apollo12Geo: null,
   apollo16Geo: null,
   gltfs: new Map(), // path -> gltf.scene clone source
@@ -212,31 +213,68 @@ export function createLunarEngine(canvas, callbacks = {}) {
     Math.cos(THREE.MathUtils.degToRad(EARTH_AZIMUTH_DEGREES)) * Math.cos(THREE.MathUtils.degToRad(EARTH_ELEVATION_DEGREES))
   ).normalize();
 
-  loadCachedGLTF(
-    '/models/earth.glb',
-    model => {
-      if (isDestroyed) return;
-      const normalizedModel = new THREE.Group();
-      normalizedModel.add(model);
-      normalizedModel.updateMatrixWorld(true);
-      const modelBounds = new THREE.Box3().setFromObject(normalizedModel);
-      const modelCenter = modelBounds.getCenter(new THREE.Vector3());
-      const modelSize = modelBounds.getSize(new THREE.Vector3());
-      const modelDiameter = Math.max(modelSize.x, modelSize.y, modelSize.z, 0.0001);
-      const unitScale = 2 / modelDiameter;
-      normalizedModel.scale.setScalar(unitScale);
-      normalizedModel.position.copy(modelCenter).multiplyScalar(-unitScale);
+  const earthTexturePaths = [
+    '/Textures/8k_earth_daymap.jpg',
+    '/Textures/8k_earth_nightmap.jpg',
+    '/Textures/8k_earth_clouds.jpg',
+    '/Textures/8k_earth_specular.jpeg',
+  ];
+  const setupEarth = ([dayMap, nightMap, cloudMap, specularMap]) => {
+    if (isDestroyed) return;
+    dayMap.colorSpace = THREE.SRGBColorSpace;
+    nightMap.colorSpace = THREE.SRGBColorSpace;
+    cloudMap.colorSpace = THREE.SRGBColorSpace;
+    specularMap.colorSpace = THREE.NoColorSpace;
+    for (const texture of [dayMap, nightMap, cloudMap, specularMap]) {
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      texture.needsUpdate = true;
+    }
 
-      earthMesh = new THREE.Group();
-      earthMesh.add(normalizedModel);
-      earthMesh.scale.setScalar(EARTH_FIRST_PERSON_RADIUS);
-      earthMesh.position.copy(earthAnchor).addScaledVector(earthDirection, EARTH_DISTANCE);
-      earthMesh.name = 'Earth';
-      scene.add(earthMesh);
-    },
-    undefined,
-    error => console.warn('Could not load /models/earth.glb.', error)
-  );
+    const earthSurface = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 128, 96),
+      new THREE.MeshPhongMaterial({
+        map: dayMap,
+        emissiveMap: nightMap,
+        emissive: new THREE.Color(0xffc777),
+        emissiveIntensity: 0.7,
+        specularMap,
+        specular: new THREE.Color(0x454545),
+        shininess: 18,
+      })
+    );
+    const earthClouds = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 128, 96),
+      new THREE.MeshPhongMaterial({
+        map: cloudMap,
+        alphaMap: cloudMap,
+        transparent: true,
+        opacity: 0.38,
+        depthWrite: false,
+        specular: new THREE.Color(0x111111),
+        shininess: 8,
+      })
+    );
+    earthClouds.scale.setScalar(1.003);
+    earthClouds.renderOrder = 1;
+    earthMesh = new THREE.Group();
+    earthMesh.add(earthSurface, earthClouds);
+    earthMesh.scale.setScalar(EARTH_FIRST_PERSON_RADIUS);
+    earthMesh.position.copy(earthAnchor).addScaledVector(earthDirection, EARTH_DISTANCE);
+    earthMesh.name = 'Earth';
+    scene.add(earthMesh);
+  };
+
+  if (ASSET_CACHE.earthTextures) {
+    setupEarth(ASSET_CACHE.earthTextures);
+  } else {
+    Promise.all(earthTexturePaths.map(path => new Promise((resolve, reject) => {
+      sharedTexLoader.load(path, resolve, undefined, reject);
+    }))).then(textures => {
+      ASSET_CACHE.earthTextures = textures;
+      setupEarth(textures);
+    }).catch(error => console.warn('Could not load Earth textures.', error));
+  }
 
   // Terrain scans: Apollo 12 & Apollo 16
   const APOLLO_12_POSITION_X = 0;
@@ -1553,11 +1591,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             for (let i = 0; i < mats.length; i++) {
               const m = mats[i];
-              if (m.map && m.map !== ASSET_CACHE.skyTexture) m.map.dispose();
-              if (m.normalMap) m.normalMap.dispose();
-              if (m.roughnessMap) m.roughnessMap.dispose();
-              if (m.metalnessMap) m.metalnessMap.dispose();
-              if (m.emissiveMap) m.emissiveMap.dispose();
+              const isCachedTexture = texture => texture === ASSET_CACHE.skyTexture || ASSET_CACHE.earthTextures?.includes(texture);
+              for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'alphaMap', 'specularMap']) {
+                if (m[key] && !isCachedTexture(m[key])) m[key].dispose();
+              }
               m.dispose();
             }
           }

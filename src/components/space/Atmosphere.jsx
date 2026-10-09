@@ -71,10 +71,10 @@ export default function Atmosphere({ state }) {
   return (
     <group renderOrder={2}>
       <mesh material={halo} renderOrder={2}>
-        <sphereGeometry args={[EARTH_RADIUS * 1.1, 96, 64]} />
+        <sphereGeometry args={[EARTH_RADIUS * 1.045, 96, 64]} />
       </mesh>
       <mesh material={rim} renderOrder={2}>
-        <sphereGeometry args={[EARTH_RADIUS * 1.015, 96, 64]} />
+        <sphereGeometry args={[EARTH_RADIUS * 1.008, 96, 64]} />
       </mesh>
     </group>
   );
