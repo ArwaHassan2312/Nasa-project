@@ -88,6 +88,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const firstPersonDirection = new THREE.Vector3();
   const firstPersonForward = new THREE.Vector3();
   const firstPersonRight = new THREE.Vector3();
+  const groundRaycaster = new THREE.Raycaster();
+  const groundRayOrigin = new THREE.Vector3();
+  const groundRayDirection = new THREE.Vector3(0, -1, 0);
+  let groundCollisionObjects = [];
 
   let outpostRoot = null;
   let airlockTriggerCenter = null;
@@ -104,12 +108,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let activeComponentTarget = null;
   let dismissedComponentId = null;
   let componentInteriorKit = null;
+  let workshopInteriorModel = null;
   let activeModuleInterior = null;
   let activeModuleInteriorBounds = null;
   let activeModuleInteriorLight = null;
   let activeModuleGeometries = [];
   let activeModuleMaterials = [];
   let moduleInteriorLoading = false;
+  let workshopInteriorLoading = false;
   let greenhouseReturnMode = 'airlock';
   let airlockReturnPosition = null;
   let airlockReturnYaw = 0;
@@ -207,7 +213,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   ).normalize();
 
   loadCachedGLTF(
-    '/lunar/earth.glb',
+    '/models/earth.glb',
     model => {
       if (isDestroyed) return;
       const normalizedModel = new THREE.Group();
@@ -229,7 +235,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       scene.add(earthMesh);
     },
     undefined,
-    error => console.warn('Could not load /lunar/earth.glb.', error)
+    error => console.warn('Could not load /models/earth.glb.', error)
   );
 
   // Terrain scans: Apollo 12 & Apollo 16
@@ -363,6 +369,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           scene.add(outpost);
           outpost.updateMatrixWorld(true);
           outpostRoot = outpost;
+          groundCollisionObjects = [...moonTerrainMeshes, outpostRoot];
 
           addOutpostPartLabels(outpost);
           componentTargets = buildComponentTargets(outpost);
@@ -584,6 +591,25 @@ export function createLunarEngine(canvas, callbacks = {}) {
     );
   }
 
+  function ensureWorkshopInterior(onReady) {
+    if (workshopInteriorModel) { onReady(workshopInteriorModel); return; }
+    if (workshopInteriorLoading) return;
+    workshopInteriorLoading = true;
+    loadCachedGLTF(
+      '/lunar/sci-fi_lab.glb',
+      model => {
+        workshopInteriorLoading = false;
+        workshopInteriorModel = model;
+        onReady(workshopInteriorModel);
+      },
+      undefined,
+      error => {
+        console.error('Unable to load workshop interior model', error);
+        workshopInteriorLoading = false;
+      }
+    );
+  }
+
   function disposeModuleInterior(room) {
     if (!room) return;
     for (const g of activeModuleGeometries) g.dispose();
@@ -592,8 +618,30 @@ export function createLunarEngine(canvas, callbacks = {}) {
     activeModuleMaterials = [];
   }
 
-  function createModuleInterior(roomType) {
+  function createWorkshopInterior(model) {
+    const room = model.clone(true);
+    room.name = 'Workshop Interior';
+    room.updateMatrixWorld(true);
+    const originalBounds = new THREE.Box3().setFromObject(room);
+    const originalSize = originalBounds.getSize(new THREE.Vector3());
+    const scale = 8 / Math.max(originalSize.x, originalSize.z, 0.01);
+    room.scale.multiplyScalar(scale);
+    room.updateMatrixWorld(true);
+    const bounds = new THREE.Box3().setFromObject(room);
+    const center = bounds.getCenter(new THREE.Vector3());
+    room.position.set(-center.x, -bounds.min.y, -center.z);
+    room.updateMatrixWorld(true);
+    room.traverse(node => {
+      if (node.isMesh) { node.castShadow = false; node.receiveShadow = false; }
+    });
+    return room;
+  }
+
+  function createModuleInterior(roomType, workshopModel) {
     disposeModuleInterior(activeModuleInterior);
+    if (roomType === 'engineering' && workshopModel) {
+      return createWorkshopInterior(workshopModel);
+    }
     const room = new THREE.Group();
     room.name = `${roomType} Module Interior`;
     const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x8c969d, roughness: 0.86, side: THREE.DoubleSide });
@@ -664,7 +712,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     return room;
   }
 
-  function enterModuleInterior(target) {
+  function enterModuleInterior(target, workshopModel) {
     outsideCameraPosition = camera.position.clone();
     outsideCameraYaw = firstPersonYaw;
     outsideCameraPitch = firstPersonPitch;
@@ -673,7 +721,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     horizon.visible = false;
     if (outpostRoot) outpostRoot.visible = false;
     scene.background = new THREE.Color(0x10151b);
-    activeModuleInterior = createModuleInterior(target.roomType);
+    activeModuleInterior = createModuleInterior(target.roomType, workshopModel);
     scene.add(activeModuleInterior);
     activeModuleInteriorBounds = new THREE.Box3().setFromObject(activeModuleInterior);
     camera.position.set(0, 1.65, 2.55);
@@ -728,7 +776,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
       enterGreenhouseFromExterior();
       return;
     }
-    ensureComponentInteriorKit(() => enterModuleInterior(target));
+    if (target.roomType === 'engineering') {
+      ensureWorkshopInterior(model => enterModuleInterior(target, model));
+    } else {
+      ensureComponentInteriorKit(() => enterModuleInterior(target));
+    }
   }
 
   function prepareAirlockInterior(gltfScene) {
@@ -1341,6 +1393,23 @@ export function createLunarEngine(canvas, callbacks = {}) {
     });
   }
 
+  function keepCameraAboveSurface() {
+    if (!groundCollisionObjects.length) return;
+    groundRayOrigin.set(camera.position.x, 10000, camera.position.z);
+    groundRaycaster.set(groundRayOrigin, groundRayDirection);
+    const hits = groundRaycaster.intersectObjects(groundCollisionObjects, true);
+    if (hits.length) camera.position.y = Math.max(camera.position.y, hits[0].point.y + 1.65);
+  }
+
+  function keepCameraInsideVerticalBounds(bounds) {
+    if (!bounds) return;
+    const floor = bounds.min.y + 1.65;
+    const ceiling = bounds.max.y - 0.2;
+    camera.position.y = floor <= ceiling
+      ? THREE.MathUtils.clamp(camera.position.y, floor, ceiling)
+      : (bounds.min.y + bounds.max.y) / 2;
+  }
+
   // Animation loop with throttled prompt evaluation (10 Hz vs 120 Hz)
   let promptCheckTimer = 0;
 
@@ -1387,6 +1456,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           greenhouseInteriorBounds.min.z + wallInset,
           greenhouseInteriorBounds.max.z - wallInset
         );
+        keepCameraInsideVerticalBounds(greenhouseInteriorBounds);
       }
       if (activeModuleInterior?.visible && activeModuleInteriorBounds) {
         const wallInset = 0.8;
@@ -1400,6 +1470,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
           activeModuleInteriorBounds.min.z + wallInset,
           activeModuleInteriorBounds.max.z - wallInset
         );
+        keepCameraInsideVerticalBounds(activeModuleInteriorBounds);
+      }
+      if (cameraMode === 'interior' && airlockInterior && !greenhouseInterior?.visible && !activeModuleInterior?.visible) {
+        keepCameraInsideVerticalBounds(airlockInteriorBounds);
+      } else if (cameraMode === 'first-person') {
+        keepCameraAboveSurface();
       }
     }
 
