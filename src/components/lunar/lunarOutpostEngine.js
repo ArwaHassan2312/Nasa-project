@@ -34,11 +34,11 @@ function loadCachedGLTF(path, onLoad, onProgress, onError) {
 
 export function createLunarEngine(canvas, callbacks = {}) {
   const {
-    onLoading = () => {},
-    onModeChange = () => {},
-    onEarthToggleChange = () => {},
-    onPromptChange = () => {},
-    onInsidePanelChange = () => {},
+    onLoading = () => { },
+    onModeChange = () => { },
+    onEarthToggleChange = () => { },
+    onPromptChange = () => { },
+    onInsidePanelChange = () => { },
   } = callbacks;
 
   let isDestroyed = false;
@@ -89,10 +89,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const firstPersonDirection = new THREE.Vector3();
   const firstPersonForward = new THREE.Vector3();
   const firstPersonRight = new THREE.Vector3();
-  const groundRaycaster = new THREE.Raycaster();
-  const groundRayOrigin = new THREE.Vector3();
-  const groundRayDirection = new THREE.Vector3(0, -1, 0);
-  let groundCollisionObjects = [];
 
   let outpostRoot = null;
   let airlockTriggerCenter = null;
@@ -349,6 +345,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       controls.minDistance = sceneWidth * 0.12;
       controls.maxDistance = sceneWidth * 2.5;
       controls.update();
+      buildHeightGrid();
 
       onLoading({ active: true, text: 'DEPLOYING LUNAR OUTPOST', progress: 75 });
       loadCachedGLTF(
@@ -407,7 +404,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
           scene.add(outpost);
           outpost.updateMatrixWorld(true);
           outpostRoot = outpost;
-          groundCollisionObjects = [...moonTerrainMeshes, outpostRoot];
 
           addOutpostPartLabels(outpost);
           componentTargets = buildComponentTargets(outpost);
@@ -1164,6 +1160,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   // Camera & Mode Controls
   function toggleCameraMode() {
+    if (cameraMode === 'free' && (!outpostRoot || !heightGrid)) return;
     if (cameraMode === 'free') {
       savedFreePosition.copy(camera.position);
       savedFreeTarget.copy(controls.target);
@@ -1431,12 +1428,70 @@ export function createLunarEngine(canvas, callbacks = {}) {
     });
   }
 
+  let heightGrid = null;
+
+  function buildHeightGrid() {
+    const CELL = 1;
+    const box = new THREE.Box3();
+    for (const mesh of moonTerrainMeshes) {
+      mesh.updateMatrixWorld(true);
+      box.union(new THREE.Box3().setFromObject(mesh));
+    }
+    const cols = Math.ceil((box.max.x - box.min.x) / CELL) + 1;
+    const rows = Math.ceil((box.max.z - box.min.z) / CELL) + 1;
+    const data = new Float32Array(cols * rows).fill(-Infinity);
+    const v = new THREE.Vector3();
+
+    for (const mesh of moonTerrainMeshes) {
+      const pos = mesh.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+        const cx = Math.floor((v.x - box.min.x) / CELL);
+        const cz = Math.floor((v.z - box.min.z) / CELL);
+        if (cx < 0 || cz < 0 || cx >= cols || cz >= rows) continue;
+        const idx = cz * cols + cx;
+        if (v.y > data[idx]) data[idx] = v.y;
+      }
+    }
+
+    // Fill small gaps from neighbours (a few dilation passes)
+    for (let pass = 0; pass < 4; pass++) {
+      const copy = data.slice();
+      for (let z = 1; z < rows - 1; z++) {
+        for (let x = 1; x < cols - 1; x++) {
+          const i = z * cols + x;
+          if (copy[i] !== -Infinity) continue;
+          let sum = 0, n = 0;
+          for (let dz = -1; dz <= 1; dz++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const h = copy[(z + dz) * cols + (x + dx)];
+              if (h !== -Infinity) { sum += h; n++; }
+            }
+          }
+          if (n) data[i] = sum / n;
+        }
+      }
+    }
+    heightGrid = { data, cols, rows, minX: box.min.x, minZ: box.min.z, CELL };
+  }
+
+  function sampleGroundHeight(x, z) {
+    if (!heightGrid) return null;
+    const { data, cols, rows, minX, minZ, CELL } = heightGrid;
+    const fx = (x - minX) / CELL;
+    const fz = (z - minZ) / CELL;
+    const x0 = Math.floor(fx), z0 = Math.floor(fz);
+    if (x0 < 0 || z0 < 0 || x0 >= cols - 1 || z0 >= rows - 1) return null;
+    const tx = fx - x0, tz = fz - z0;
+    const h00 = data[z0 * cols + x0], h10 = data[z0 * cols + x0 + 1];
+    const h01 = data[(z0 + 1) * cols + x0], h11 = data[(z0 + 1) * cols + x0 + 1];
+    if (!isFinite(h00) || !isFinite(h10) || !isFinite(h01) || !isFinite(h11)) return null;
+    return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
+  }
+
   function keepCameraAboveSurface() {
-    if (!groundCollisionObjects.length) return;
-    groundRayOrigin.set(camera.position.x, 10000, camera.position.z);
-    groundRaycaster.set(groundRayOrigin, groundRayDirection);
-    const hits = groundRaycaster.intersectObjects(groundCollisionObjects, true);
-    if (hits.length) camera.position.y = Math.max(camera.position.y, hits[0].point.y + 1.65);
+    const h = sampleGroundHeight(camera.position.x, camera.position.z);
+    if (h !== null) camera.position.y = h + 1.65;
   }
 
   function keepCameraInsideVerticalBounds(bounds) {
