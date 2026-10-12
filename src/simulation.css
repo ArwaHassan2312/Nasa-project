@@ -1,0 +1,279 @@
+.simulation-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  overflow-y: auto;
+  place-items: center;
+  padding: 22px;
+  background: rgba(3, 8, 13, 0.79);
+  backdrop-filter: blur(7px);
+}
+
+.simulation-event-modal,
+.simulation-report {
+  width: min(690px, 100%);
+  padding: clamp(22px, 5vw, 38px);
+  border: 1px solid rgba(111, 224, 216, 0.45);
+  border-radius: 12px;
+  color: #eff6fa;
+  background: linear-gradient(145deg, #14232d, #0c151e 78%);
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.55);
+  font-family: 'DM Mono', 'Segoe UI', monospace;
+}
+
+.simulation-eyebrow {
+  color: #6cd7ce;
+  font-family: 'Orbitron', 'Segoe UI', sans-serif;
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.simulation-event-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.simulation-event-heading h2,
+.simulation-report h2 {
+  margin: 0;
+  color: #f0f9fa;
+  font-family: 'Orbitron', 'Segoe UI', sans-serif;
+  font-size: clamp(1.3rem, 4vw, 1.8rem);
+  font-weight: 500;
+}
+
+.severity-badge {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+}
+
+.severity-low { color: #9de0a8; background: rgba(91, 166, 102, 0.15); }
+.severity-medium { color: #f1d278; background: rgba(210, 170, 68, 0.15); }
+.severity-high { color: #ffad70; background: rgba(220, 119, 55, 0.16); }
+.severity-critical { color: #ff8581; background: rgba(220, 75, 71, 0.17); }
+
+.simulation-event-situation,
+.simulation-event-prompt,
+.report-intro,
+.report-learning-card p,
+.report-decisions > p {
+  color: #b2c1c8;
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.simulation-event-situation {
+  margin: 16px 0 0;
+}
+
+.simulation-event-prompt {
+  margin: 18px 0 12px;
+  color: #e1eff2;
+}
+
+.simulation-decision-list {
+  display: grid;
+  gap: 9px;
+}
+
+.simulation-decision {
+  display: grid;
+  grid-template-columns: 32px 1fr 18px;
+  align-items: start;
+  gap: 12px;
+  width: 100%;
+  padding: 13px;
+  border: 1px solid rgba(154, 186, 196, 0.2);
+  border-radius: 7px;
+  color: inherit;
+  background: rgba(18, 33, 42, 0.9);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.simulation-decision:hover {
+  border-color: rgba(105, 219, 208, 0.75);
+  background: rgba(28, 54, 62, 0.95);
+}
+
+.simulation-decision-id {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  place-items: center;
+  border-radius: 50%;
+  color: #081616;
+  background: #70ded2;
+  font-family: 'Orbitron', 'Segoe UI', sans-serif;
+  font-size: 0.7rem;
+}
+
+.simulation-decision-copy {
+  display: grid;
+  gap: 4px;
+  color: #a9bbc3;
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.simulation-decision-copy strong {
+  color: #f1f7f8;
+  font-size: 0.8rem;
+}
+
+.simulation-decision-copy b {
+  color: #d7e9ed;
+  font-weight: 500;
+}
+
+.simulation-decision-risk {
+  color: #e6c77d;
+}
+
+.simulation-decision-arrow {
+  align-self: center;
+  color: #66d8d0;
+}
+
+.simulation-report {
+  width: min(720px, 100%);
+}
+
+.simulation-report > h2 {
+  margin-top: 12px;
+}
+
+.report-success { color: #9be0a7 !important; }
+.report-failed { color: #ff9891 !important; }
+
+.report-intro {
+  margin: 10px 0 20px;
+}
+
+.report-learning-card {
+  padding: 16px;
+  border-left: 2px solid #67d6cc;
+  background: rgba(32, 59, 63, 0.45);
+}
+
+.report-learning-card h3,
+.report-resources h3,
+.report-decisions h3 {
+  margin: 0 0 8px;
+  color: #e6f2f4;
+  font-family: 'Orbitron', 'Segoe UI', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.report-learning-card p {
+  margin: 7px 0 0;
+  font-size: 0.73rem;
+}
+
+.report-resources,
+.report-decisions {
+  margin-top: 19px;
+}
+
+.report-resources ul,
+.report-decisions ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.report-resources ul {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.report-resources li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(142, 177, 190, 0.14);
+  border-radius: 5px;
+  color: #aebec5;
+  font-size: 0.65rem;
+}
+
+.report-resources li strong {
+  color: #edf7f8;
+}
+
+.report-decisions ul {
+  display: grid;
+  gap: 9px;
+  max-height: 145px;
+  overflow-y: auto;
+}
+
+.report-decisions li {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-left: 2px solid rgba(103, 214, 204, 0.55);
+  color: #aebec5;
+  background: rgba(14, 25, 33, 0.76);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+.report-decisions li strong {
+  color: #eaf5f7;
+}
+
+.simulation-primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-height: 46px;
+  margin-top: 20px;
+  padding: 0 20px;
+  border: 1px solid rgba(99, 232, 217, 0.7);
+  border-radius: 5px;
+  color: #071717;
+  background: #69dbd0;
+  font-family: 'Orbitron', 'Segoe UI', sans-serif;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.simulation-primary-button:hover {
+  background: #8af1e4;
+}
+
+.report-restart {
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .simulation-modal-backdrop {
+    padding: 12px;
+  }
+
+  .report-resources ul {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .simulation-decision {
+    transition: none;
+  }
+}

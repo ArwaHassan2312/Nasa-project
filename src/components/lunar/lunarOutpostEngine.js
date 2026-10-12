@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { DAILY_CHALLENGES } from '../../data/dailyChallenges';
 
 // Module-level caches: raw asset buffers loaded once to prevent memory leaks and repeated downloads
 const ASSET_CACHE = {
@@ -15,6 +16,33 @@ const ASSET_CACHE = {
 const sharedGltfLoader = new GLTFLoader();
 const sharedStlLoader = new STLLoader();
 const sharedTexLoader = new THREE.TextureLoader();
+
+const OUTPOST_COMPONENT_NAMES = {
+  '000': 'TUNNEL JUNCTION',
+  '001': 'CYLINDER HABITAT',
+  '002': 'INFLATABLE HABITAT',
+  '003': 'OBSERVATION CUPOLA',
+  '004': 'REGOLITH SHIELDED HABITAT',
+  '005': 'AIRLOCK',
+  '006': 'CONNECTING TUNNEL',
+  '007': 'TUNNEL JUNCTION',
+  '008': 'GREENHOUSE',
+  '009': 'MEDICAL MODULE',
+  '010': 'WORKSHOP',
+  '011': 'SOLAR ARRAY',
+  '012': 'SOLAR TRACKER ARRAY',
+  '013': 'SOLAR TOWER',
+  '014': 'RADIATOR BANK',
+  '015': 'BATTERY CONTAINER',
+  '016': 'NUCLEAR POWER UNIT',
+  '017': 'COMMUNICATIONS MAST',
+  '018': 'REGOLITH EXCAVATOR',
+  '019': 'OPEN ROVER',
+  '020': 'PRESSURIZED ROVER',
+  '021': 'EVA SUIT',
+  '022': 'EQUIPMENT SLED',
+  '023': 'SURVEY MARKERS'
+};
 
 function loadCachedGLTF(path, onLoad, onProgress, onError) {
   if (ASSET_CACHE.gltfs.has(path)) {
@@ -91,6 +119,31 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const firstPersonRight = new THREE.Vector3();
 
   let outpostRoot = null;
+  let mapComponents = [];
+  let mapBounds = null;
+  let currentEventEffect = null;
+  let eventVisualGroup = null;
+  let challengeMarkerGroup = null;
+  let challengeReadinessFlags = [];
+  const eventAnimations = [];
+  let eventCinematic = null;
+  let queuedEventPresentation = null;
+  const EVENT_TARGET_PREFIXES = {
+    fire_lab: ['010'],
+    solar_storm: ['011', '012', '013'],
+    power_failure: ['011', '012'],
+    water_leak: ['001'],
+    lunar_night: ['011', '012', '013'],
+    water_ice_exploration: ['018'],
+  };
+  const EVENT_CAMERA_DIRECTIONS = {
+    fire_lab: new THREE.Vector3(0.82, 0.5, 1),
+    solar_storm: new THREE.Vector3(1, 0.55, 0.72),
+    power_failure: new THREE.Vector3(-0.95, 0.55, 0.8),
+    water_leak: new THREE.Vector3(0.78, 0.42, -1),
+    lunar_night: new THREE.Vector3(-0.8, 0.7, 1),
+    water_ice_exploration: new THREE.Vector3(0.9, 0.48, -0.9),
+  };
   let airlockTriggerCenter = null;
   let airlockTriggerRadius = 0;
   let airlockInterior = null;
@@ -164,13 +217,500 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   // Lights
-  scene.add(new THREE.HemisphereLight(0xc7d9ed, 0x34302b, 1.05));
+  const hemisphereLight = new THREE.HemisphereLight(0xc7d9ed, 0x34302b, 1.05);
+  scene.add(hemisphereLight);
   const sun = new THREE.DirectionalLight(0xffe7c3, 3.15);
   sun.position.set(-90, 125, 70);
   scene.add(sun);
   const fill = new THREE.DirectionalLight(0x829dc3, 0.6);
   fill.position.set(80, 40, -100);
   scene.add(fill);
+
+  function clearEventVisualization() {
+    eventAnimations.length = 0;
+    if (!eventVisualGroup) return;
+
+    scene.remove(eventVisualGroup);
+    eventVisualGroup.traverse(object => {
+      if (object.geometry) object.geometry.dispose();
+      if (object.material) {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach(material => material.dispose());
+      }
+    });
+    eventVisualGroup = null;
+  }
+
+  function findEventTarget(eventId) {
+    if (!outpostRoot) return null;
+    const prefixes = EVENT_TARGET_PREFIXES[eventId];
+    if (!prefixes) return null;
+
+    const matchedObjects = [];
+    outpostRoot.traverse(object => {
+      if (prefixes.some(prefix => object.name.startsWith(`${prefix}-`))) {
+        matchedObjects.push(object);
+      }
+    });
+    if (matchedObjects.length === 0) return null;
+
+    const bounds = new THREE.Box3();
+    matchedObjects.forEach(object => bounds.expandByObject(object));
+    return { bounds, objects: matchedObjects };
+  }
+
+  function setChallengeFlags(flags) {
+    challengeReadinessFlags = [...flags];
+    if (challengeMarkerGroup) {
+      outpostRoot?.remove(challengeMarkerGroup);
+      challengeMarkerGroup.traverse(object => {
+        object.geometry?.dispose();
+        if (object.material) {
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          materials.forEach(material => material.dispose());
+        }
+      });
+      challengeMarkerGroup = null;
+    }
+    if (!outpostRoot || flags.length === 0) return;
+
+    const readyFlags = new Set(flags);
+    const group = new THREE.Group();
+    group.name = 'Daily challenge readiness markers';
+
+    for (const challenge of DAILY_CHALLENGES) {
+      if (!readyFlags.has(challenge.readinessFlag)) continue;
+      let component = null;
+      outpostRoot.traverse(object => {
+        if (!component && object.name.startsWith(`${challenge.targetComponentId}-`)) {
+          component = object;
+        }
+      });
+      if (!component) {
+        console.error(
+          `[Daily challenge] No outpost component found for "${challenge.title}" target ${challenge.targetComponentId}.`,
+        );
+        continue;
+      }
+
+      const bounds = new THREE.Box3().setFromObject(component);
+      if (bounds.isEmpty()) continue;
+      const size = bounds.getSize(new THREE.Vector3());
+      const localPosition = outpostRoot.worldToLocal(
+        new THREE.Vector3(
+          (bounds.min.x + bounds.max.x) / 2,
+          bounds.max.y + Math.max(size.y * 0.2, 0.8),
+          (bounds.min.z + bounds.max.z) / 2,
+        ),
+      );
+      const marker = new THREE.Mesh(
+        new THREE.OctahedronGeometry(Math.max(Math.max(size.x, size.z) * 0.075, 0.7)),
+        new THREE.MeshStandardMaterial({
+          color: 0x64e8d2,
+          emissive: 0x1bcab5,
+          emissiveIntensity: 1.8,
+          metalness: 0.15,
+          roughness: 0.3,
+        }),
+      );
+      marker.position.copy(localPosition);
+      marker.name = `Readiness verified: ${challenge.id}`;
+      group.add(marker);
+    }
+
+    if (group.children.length > 0) {
+      challengeMarkerGroup = group;
+      outpostRoot.add(group);
+    }
+  }
+
+  function createWorldExposureSnapshot() {
+    return {
+      cameraPosition: camera.position.clone(),
+      cameraQuaternion: camera.quaternion.clone(),
+      target: controls.target.clone(),
+      controlsEnabled: controls.enabled,
+      cameraMode,
+      background: scene.background,
+      backgroundIntensity: scene.backgroundIntensity,
+      terrainVisibility: moonTerrainMeshes.map(terrain => terrain.visible),
+      horizonVisibility: horizon.visible,
+      outpostVisibility: outpostRoot?.visible ?? true,
+      airlockVisibility: airlockInterior?.visible ?? false,
+      greenhouseVisibility: greenhouseInterior?.visible ?? false,
+      moduleVisibility: activeModuleInterior?.visible ?? false,
+      closeupEarthVisibility: closeupEarthMesh?.visible ?? false,
+      earthViewActive,
+    };
+  }
+
+  function exposeOutpostForEvent() {
+    moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
+    horizon.visible = true;
+    if (outpostRoot) outpostRoot.visible = true;
+    if (airlockInterior) airlockInterior.visible = false;
+    if (greenhouseInterior) greenhouseInterior.visible = false;
+    if (activeModuleInterior) activeModuleInterior.visible = false;
+    if (closeupEarthMesh) closeupEarthMesh.visible = false;
+    if (outsideBackground) scene.background = outsideBackground;
+    controls.enabled = false;
+    keys.clear();
+    if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+  }
+
+  function restoreWorldExposure(snapshot) {
+    moonTerrainMeshes.forEach((terrain, index) => {
+      terrain.visible = snapshot.terrainVisibility[index] ?? true;
+    });
+    horizon.visible = snapshot.horizonVisibility;
+    if (outpostRoot) outpostRoot.visible = snapshot.outpostVisibility;
+    if (airlockInterior) airlockInterior.visible = snapshot.airlockVisibility;
+    if (greenhouseInterior) greenhouseInterior.visible = snapshot.greenhouseVisibility;
+    if (activeModuleInterior) activeModuleInterior.visible = snapshot.moduleVisibility;
+    if (closeupEarthMesh) closeupEarthMesh.visible = snapshot.closeupEarthVisibility;
+    scene.background = snapshot.background;
+    scene.backgroundIntensity = snapshot.backgroundIntensity;
+    cameraMode = snapshot.cameraMode;
+    camera.position.copy(snapshot.cameraPosition);
+    camera.quaternion.copy(snapshot.cameraQuaternion);
+    controls.target.copy(snapshot.target);
+    controls.enabled = snapshot.controlsEnabled;
+    earthViewActive = snapshot.earthViewActive;
+    if (controls.enabled) controls.update();
+    onModeChange(cameraMode);
+  }
+
+  function startEventReturn(onReturned) {
+    if (!eventCinematic) {
+      onReturned?.();
+      return;
+    }
+    if (eventCinematic.stage === 'return') return;
+
+    eventCinematic.stage = 'return';
+    eventCinematic.elapsed = 0;
+    eventCinematic.returnFromPosition = camera.position.clone();
+    eventCinematic.returnFromQuaternion = camera.quaternion.clone();
+    eventCinematic.onReturned = onReturned;
+  }
+
+  function beginEventPresentation(eventId, onPresented) {
+    if (isDestroyed || eventCinematic?.eventId === eventId) return;
+    if (!outpostRoot) {
+      queuedEventPresentation = { eventId, onPresented };
+      return;
+    }
+
+    const eventTarget = findEventTarget(eventId);
+    if (!eventTarget) {
+      console.error(
+        `[Lunar event] No outpost model component matched target mapping for "${eventId}".`,
+        EVENT_TARGET_PREFIXES[eventId],
+      );
+      onPresented?.();
+      return;
+    }
+
+    queuedEventPresentation = null;
+    const snapshot = createWorldExposureSnapshot();
+    exposeOutpostForEvent();
+
+    const target = eventTarget.bounds.getCenter(new THREE.Vector3());
+    const targetSize = eventTarget.bounds.getSize(new THREE.Vector3());
+    const outpostBounds = new THREE.Box3().setFromObject(outpostRoot);
+    const outpostSize = outpostBounds.getSize(new THREE.Vector3());
+    const minimumDistance = Math.max(controls.minDistance * 0.95, 24);
+    const targetDistance = Math.max(
+      targetSize.length() * 2.15,
+      Math.max(outpostSize.x, outpostSize.z) * 0.045,
+      minimumDistance,
+    );
+    const viewDirection = (EVENT_CAMERA_DIRECTIONS[eventId] || new THREE.Vector3(1, 0.55, 1))
+      .clone()
+      .normalize();
+    const destination = target.clone().addScaledVector(viewDirection, targetDistance);
+    const looker = new THREE.PerspectiveCamera();
+    looker.position.copy(destination);
+    looker.lookAt(target);
+
+    eventCinematic = {
+      eventId,
+      stage: 'approach',
+      elapsed: 0,
+      snapshot,
+      startPosition: camera.position.clone(),
+      startQuaternion: camera.quaternion.clone(),
+      destination,
+      destinationQuaternion: looker.quaternion.clone(),
+      target,
+      onPresented,
+      onReturned: null,
+      returnFromPosition: null,
+      returnFromQuaternion: null,
+    };
+  }
+
+  function addAnimatedParticles(parent, {
+    count,
+    color,
+    size,
+    offset,
+    rise,
+    speed,
+    opacity = 1,
+    falling = false,
+  }) {
+    const positions = new Float32Array(count * 3);
+    const startHeights = new Float32Array(count);
+    const velocities = new Float32Array(count);
+    const spread = Math.max(size * 0.45, 1);
+
+    for (let index = 0; index < count; index += 1) {
+      const particle = index * 3;
+      const y = falling ? rise * (0.45 + Math.random() * 0.55) : Math.random() * rise;
+      positions[particle] = (Math.random() - 0.5) * spread;
+      positions[particle + 1] = y;
+      positions[particle + 2] = (Math.random() - 0.5) * spread;
+      startHeights[index] = y;
+      velocities[index] = speed * (0.65 + Math.random() * 0.7) * (falling ? -1 : 1);
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const material = new THREE.PointsMaterial({
+      color,
+      size,
+      transparent: opacity < 1,
+      opacity,
+      depthWrite: false,
+      blending: opacity < 1 ? THREE.AdditiveBlending : THREE.NormalBlending,
+      sizeAttenuation: true,
+    });
+    const particles = new THREE.Points(geometry, material);
+    particles.position.set(offset.x, offset.y, offset.z);
+    parent.add(particles);
+
+    eventAnimations.push((elapsed, delta) => {
+      const attribute = geometry.getAttribute('position');
+      const values = attribute.array;
+      for (let index = 0; index < count; index += 1) {
+        const particle = index * 3;
+        values[particle + 1] += velocities[index] * delta;
+        if ((!falling && values[particle + 1] > rise) || (falling && values[particle + 1] < 0)) {
+          values[particle + 1] = falling ? rise * (0.8 + Math.random() * 0.2) : startHeights[index] * 0.15;
+          values[particle] = (Math.random() - 0.5) * spread;
+          values[particle + 2] = (Math.random() - 0.5) * spread;
+        }
+      }
+      attribute.needsUpdate = true;
+    });
+  }
+
+  function buildEventVisualization() {
+    if (!currentEventEffect || !outpostRoot) return;
+
+    clearEventVisualization();
+    const mappedTarget = findEventTarget(currentEventEffect);
+    const bounds = mappedTarget?.bounds || new THREE.Box3().setFromObject(outpostRoot);
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const outpostSize = new THREE.Box3().setFromObject(outpostRoot).getSize(new THREE.Vector3());
+    const width = Math.max(size.x, size.z, outpostSize.x * 0.04, 1);
+    const height = Math.max(size.y, outpostSize.y * 0.04, 1);
+    const group = new THREE.Group();
+    group.position.copy(center);
+    group.updateMatrixWorld(true);
+    eventVisualGroup = group;
+    scene.add(group);
+    const cameraDirection = (EVENT_CAMERA_DIRECTIONS[currentEventEffect]
+      || new THREE.Vector3(1, 0.55, 1)).clone().normalize();
+
+    if (currentEventEffect === 'fire_lab') {
+      const fireOffset = new THREE.Vector3(
+        cameraDirection.x * size.x * 0.34,
+        height * 0.22,
+        cameraDirection.z * size.z * 0.34,
+      );
+      addAnimatedParticles(group, {
+        count: 55,
+        color: 0xff582e,
+        size: Math.max(0.8, height * 0.055),
+        offset: fireOffset,
+        rise: height * 1.3,
+        speed: height * 0.42,
+        opacity: 0.9,
+      });
+      addAnimatedParticles(group, {
+        count: 42,
+        color: 0x777b80,
+        size: Math.max(1.2, height * 0.085),
+        offset: fireOffset.clone().add(new THREE.Vector3(0, height * 0.3, 0)),
+        rise: height * 2.2,
+        speed: height * 0.24,
+        opacity: 0.42,
+      });
+      const fireLight = new THREE.PointLight(0xff4d1f, 85, width * 0.75);
+      fireLight.position.copy(fireOffset);
+      group.add(fireLight);
+      eventAnimations.push((time) => {
+        fireLight.intensity = 62 + Math.sin(time * 18) * 20 + Math.random() * 12;
+      });
+    } else if (currentEventEffect === 'lunar_night') {
+      hemisphereLight.intensity = 0.2;
+      sun.intensity = 0.24;
+      fill.intensity = 0.16;
+      const floodlight = new THREE.PointLight(0x9bdcff, 45, width * 1.8);
+      floodlight.position.set(0, height * 0.38, 0);
+      group.add(floodlight);
+      const transitionBeacon = new THREE.PointLight(0xff9f52, 25, width * 0.9);
+      transitionBeacon.position.set(cameraDirection.x * size.x * 0.35, -height * 0.1, cameraDirection.z * size.z * 0.35);
+      group.add(transitionBeacon);
+    } else if (currentEventEffect === 'solar_storm') {
+      const skyShell = new THREE.Mesh(
+        new THREE.SphereGeometry(width * 18, 40, 24, 0, Math.PI * 2, 0, Math.PI * 0.48),
+        new THREE.MeshBasicMaterial({
+          color: 0x49ffc9,
+          side: THREE.BackSide,
+          transparent: true,
+          opacity: 0.11,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      skyShell.position.y = height * 0.5;
+      group.add(skyShell);
+      for (const panel of mappedTarget?.objects || []) {
+        const panelBounds = new THREE.Box3().setFromObject(panel);
+        const panelPosition = group.worldToLocal(panelBounds.getCenter(new THREE.Vector3()));
+        const panelSize = panelBounds.getSize(new THREE.Vector3());
+        addAnimatedParticles(group, {
+          count: 24,
+          color: 0x61ffd0,
+          size: Math.max(0.8, panelSize.y * 0.18),
+          offset: panelPosition.add(new THREE.Vector3(0, panelSize.y * 0.55, 0)),
+          rise: Math.max(panelSize.y * 2.2, height * 0.7),
+          speed: Math.max(panelSize.y * 0.32, height * 0.06),
+          opacity: 0.62,
+        });
+      }
+
+      for (let index = 0; index < 3; index += 1) {
+        const aurora = new THREE.Mesh(
+          new THREE.TorusGeometry(width * (0.52 + index * 0.12), Math.max(0.5, height * 0.035), 8, 96),
+          new THREE.MeshBasicMaterial({
+            color: index === 1 ? 0x69aaff : 0x63ffd1,
+            transparent: true,
+            opacity: 0.34,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        aurora.rotation.x = Math.PI / 2.15;
+        aurora.rotation.z = -0.14 + index * 0.11;
+        aurora.position.y = height * (0.8 + index * 0.12);
+        group.add(aurora);
+        eventAnimations.push((time) => {
+          aurora.rotation.z += Math.sin(time * 0.5 + index) * 0.0008;
+          aurora.material.opacity = 0.2 + (Math.sin(time * 1.4 + index) + 1) * 0.11;
+        });
+      }
+    } else if (currentEventEffect === 'water_ice_exploration') {
+      const scanRing = new THREE.Mesh(
+        new THREE.TorusGeometry(Math.max(1, width * 0.28), Math.max(0.25, height * 0.04), 8, 64),
+        new THREE.MeshBasicMaterial({
+          color: 0x70eaff,
+          transparent: true,
+          opacity: 0.78,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }),
+      );
+      scanRing.rotation.x = Math.PI / 2;
+      scanRing.position.y = -height * 0.35;
+      group.add(scanRing);
+      const scanLight = new THREE.PointLight(0x56dfff, 38, width * 1.6);
+      scanLight.position.set(0, height * 0.2, 0);
+      group.add(scanLight);
+      addAnimatedParticles(group, {
+        count: 34,
+        color: 0x9aeeff,
+        size: Math.max(0.7, height * 0.055),
+        offset: new THREE.Vector3(0, -height * 0.2, 0),
+        rise: Math.max(height * 0.9, 3),
+        speed: Math.max(height * 0.2, 0.8),
+        opacity: 0.7,
+      });
+      eventAnimations.push((time) => {
+        scanRing.rotation.z = time * 0.32;
+        scanRing.material.opacity = 0.38 + (Math.sin(time * 2.2) + 1) * 0.25;
+        scanLight.intensity = 24 + (Math.sin(time * 3.5) + 1) * 16;
+      });
+    } else if (currentEventEffect === 'power_failure' || currentEventEffect === 'water_leak') {
+      const location = new THREE.Vector3(
+        cameraDirection.x * size.x * 0.36,
+        currentEventEffect === 'water_leak' ? -height * 0.25 : height * 0.08,
+        cameraDirection.z * size.z * 0.36,
+      );
+      if (currentEventEffect === 'power_failure') {
+        hemisphereLight.intensity = 0.46;
+        sun.intensity = 1.25;
+        fill.intensity = 0.18;
+      }
+      const beacon = new THREE.Mesh(
+        new THREE.ConeGeometry(Math.max(1, height * 0.11), Math.max(2, height * 0.5), 12),
+        new THREE.MeshBasicMaterial({
+          color: currentEventEffect === 'water_leak' ? 0x54ccff : 0xff493f,
+          transparent: true,
+          opacity: 0.78,
+        }),
+      );
+      beacon.position.copy(location).add(new THREE.Vector3(0, height * 0.22, 0));
+      group.add(beacon);
+      const warningLight = new THREE.PointLight(
+        currentEventEffect === 'water_leak' ? 0x36bfff : 0xff3228,
+        55,
+        width * 0.55,
+      );
+      warningLight.position.copy(beacon.position);
+      group.add(warningLight);
+      eventAnimations.push((time) => {
+        const pulse = 0.45 + (Math.sin(time * 6) + 1) * 0.48;
+        warningLight.intensity = 20 + pulse * 48;
+        beacon.material.opacity = 0.28 + pulse * 0.62;
+      });
+
+      if (currentEventEffect === 'water_leak') {
+        addAnimatedParticles(group, {
+          count: 20,
+          color: 0x66d9ff,
+          size: Math.max(0.7, height * 0.04),
+          offset: location.clone().add(new THREE.Vector3(0, height * 0.12, 0)),
+          rise: Math.max(height * 0.5, 2),
+          speed: height * 0.8,
+          falling: true,
+        });
+      }
+    }
+  }
+
+  function setEventEffect(eventId) {
+    currentEventEffect = eventId;
+    hemisphereLight.intensity = 1.05;
+    sun.intensity = 3.15;
+    fill.intensity = 0.6;
+    clearEventVisualization();
+    buildEventVisualization();
+  }
+
+  function presentEvent(eventId, onPresented) {
+    if (eventCinematic?.eventId === eventId) return;
+    if (queuedEventPresentation?.eventId === eventId) return;
+    beginEventPresentation(eventId, onPresented);
+  }
+
+  function returnFromEvent(onReturned) {
+    startEventReturn(onReturned);
+  }
 
   // Milky Way Skybox: Cached & mipmap-free to save ~45MB VRAM and eliminate hitching
   if (ASSET_CACHE.skyTexture) {
@@ -405,9 +945,26 @@ export function createLunarEngine(canvas, callbacks = {}) {
           scene.add(outpost);
           outpost.updateMatrixWorld(true);
           outpostRoot = outpost;
+          buildEventVisualization();
 
           addOutpostPartLabels(outpost);
           componentTargets = buildComponentTargets(outpost);
+          mapComponents = buildMapComponents(outpost);
+          if (mapComponents.length) {
+            mapBounds = {
+              minX: Math.min(...mapComponents.map(component => component.minX)),
+              maxX: Math.max(...mapComponents.map(component => component.maxX)),
+              minZ: Math.min(...mapComponents.map(component => component.minZ)),
+              maxZ: Math.max(...mapComponents.map(component => component.maxZ))
+            };
+          }
+          setChallengeFlags(challengeReadinessFlags);
+          if (queuedEventPresentation) {
+            beginEventPresentation(
+              queuedEventPresentation.eventId,
+              queuedEventPresentation.onPresented,
+            );
+          }
 
           const airlockEntrance = outpost.getObjectByName('005-airlock-with-dust-lock-vestibule');
           const entranceBounds = new THREE.Box3().setFromObject(airlockEntrance || outpost);
@@ -475,39 +1032,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
   scene.add(horizon);
 
   function addOutpostPartLabels(outpost) {
-    const names = {
-      '000': 'TUNNEL JUNCTION',
-      '001': 'CYLINDER HABITAT',
-      '002': 'INFLATABLE HABITAT',
-      '003': 'OBSERVATION CUPOLA',
-      '004': 'REGOLITH SHIELDED HABITAT',
-      '005': 'AIRLOCK',
-      '006': 'CONNECTING TUNNEL',
-      '007': 'TUNNEL JUNCTION',
-      '008': 'GREENHOUSE',
-      '009': 'MEDICAL MODULE',
-      '010': 'WORKSHOP',
-      '011': 'SOLAR ARRAY',
-      '012': 'SOLAR TRACKER ARRAY',
-      '013': 'SOLAR TOWER',
-      '014': 'RADIATOR BANK',
-      '015': 'BATTERY CONTAINER',
-      '016': 'NUCLEAR POWER UNIT',
-      '017': 'COMMUNICATIONS MAST',
-      '018': 'REGOLITH EXCAVATOR',
-      '019': 'OPEN ROVER',
-      '020': 'PRESSURIZED ROVER',
-      '021': 'EVA SUIT',
-      '022': 'EQUIPMENT SLED',
-      '023': 'SURVEY MARKERS'
-    };
     const partGroups = [];
     const addedLabels = new Set();
     outpost.traverse(object => {
       const match = object.name.match(/^(\d{3})-[^/]+$/);
-      if (match && names[match[1]] && !addedLabels.has(names[match[1]])) {
-        addedLabels.add(names[match[1]]);
-        partGroups.push({ object, label: names[match[1]] });
+      const label = match ? OUTPOST_COMPONENT_NAMES[match[1]] : null;
+      if (label && !addedLabels.has(label)) {
+        addedLabels.add(label);
+        partGroups.push({ object, label });
       }
     });
 
@@ -561,6 +1093,38 @@ export function createLunarEngine(canvas, callbacks = {}) {
     }
   }
 
+  function buildMapComponents(outpost) {
+    const boundsById = new Map();
+    outpost.traverse(object => {
+      const match = object.name.match(/^(\d{3})-[^/]+$/);
+      const id = match?.[1];
+      if (!id || !OUTPOST_COMPONENT_NAMES[id]) return;
+
+      const bounds = new THREE.Box3().setFromObject(object);
+      if (bounds.isEmpty()) return;
+      const existingBounds = boundsById.get(id);
+      if (existingBounds) existingBounds.union(bounds);
+      else boundsById.set(id, bounds.clone());
+    });
+
+    return [...boundsById.entries()].map(([id, bounds]) => {
+      const center = bounds.getCenter(new THREE.Vector3());
+      return {
+        id,
+        name: OUTPOST_COMPONENT_NAMES[id],
+        category: Number(id) <= 10
+          ? (id === '006' ? 'corridor' : 'room')
+          : 'equipment',
+        minX: bounds.min.x,
+        maxX: bounds.max.x,
+        minZ: bounds.min.z,
+        maxZ: bounds.max.z,
+        x: center.x,
+        z: center.z,
+      };
+    });
+  }
+
   function buildComponentTargets(outpost) {
     const definitions = {
       '000': ['Tunnel Junction', 'corridor'],
@@ -601,6 +1165,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
         name,
         roomType,
         center: bounds.getCenter(new THREE.Vector3()),
+        bounds: {
+          minX: bounds.min.x,
+          maxX: bounds.max.x,
+          minZ: bounds.min.z,
+          maxZ: bounds.max.z
+        },
         radius: Math.max(7, Math.min(18, Math.max(size.x, size.z) * 0.55))
       });
     });
@@ -775,7 +1345,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
     onInsidePanelChange({
       visible: true,
       label: `INSIDE ${target.name.toUpperCase()} · E TO EXIT`,
-      buttonText: 'EXIT MODULE'
+      buttonText: 'EXIT MODULE',
+      componentId: target.id
     });
   }
 
@@ -1189,6 +1760,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   // Camera & Mode Controls
   function toggleCameraMode() {
+    if (eventCinematic) return;
     if (cameraMode === 'free' && (!outpostRoot || !heightGrid)) return;
     if (cameraMode === 'free') {
       savedFreePosition.copy(camera.position);
@@ -1214,6 +1786,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function toggleEarthView() {
+    if (eventCinematic) return;
     if (!earthMesh || cameraMode !== 'free') return;
     if (earthViewActive) {
       camera.position.copy(savedEarthViewPosition);
@@ -1262,18 +1835,23 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   // Listeners
   function handleCanvasClick() {
+    if (eventCinematic) return;
     if (['first-person', 'interior'].includes(cameraMode) && document.pointerLockElement !== canvas) {
       canvas.requestPointerLock?.();
     }
   }
 
   function handleMouseMove(event) {
-    if (!['first-person', 'interior'].includes(cameraMode) || document.pointerLockElement !== canvas) return;
+    if (eventCinematic || !['first-person', 'interior'].includes(cameraMode) || document.pointerLockElement !== canvas) return;
     firstPersonYaw -= event.movementX * 0.0022;
     firstPersonPitch = THREE.MathUtils.clamp(firstPersonPitch - event.movementY * 0.0018, -1.45, 1.45);
   }
 
   function handleKeyDown(event) {
+    if (eventCinematic) {
+      event.preventDefault();
+      return;
+    }
     const key = event.key.toLowerCase();
     if (key === 'e' && cameraMode === 'interior') {
       event.preventDefault();
@@ -1337,6 +1915,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleKeyUp(event) {
+    if (eventCinematic) return;
     keys.delete(event.key.toLowerCase());
   }
 
@@ -1537,6 +2116,66 @@ export function createLunarEngine(canvas, callbacks = {}) {
       : (bounds.min.y + bounds.max.y) / 2;
   }
 
+  function animateEventCamera(delta) {
+    const cinematic = eventCinematic;
+    if (!cinematic) return;
+
+    if (cinematic.stage === 'approach') {
+      cinematic.elapsed += delta;
+      const progress = Math.min(cinematic.elapsed / 1.8, 1);
+      const eased = progress * progress * (3 - 2 * progress);
+      camera.position.lerpVectors(cinematic.startPosition, cinematic.destination, eased);
+      camera.quaternion.slerpQuaternions(
+        cinematic.startQuaternion,
+        cinematic.destinationQuaternion,
+        eased,
+      );
+
+      if (progress >= 1) {
+        camera.position.copy(cinematic.destination);
+        camera.quaternion.copy(cinematic.destinationQuaternion);
+        cinematic.stage = 'hold';
+        cinematic.elapsed = 0;
+      }
+      return;
+    }
+
+    if (cinematic.stage === 'hold') {
+      cinematic.elapsed += delta;
+      if (cinematic.elapsed >= 3.8) {
+        cinematic.stage = 'awaitingDecision';
+        const callback = cinematic.onPresented;
+        cinematic.onPresented = null;
+        callback?.();
+      }
+      return;
+    }
+
+    if (cinematic.stage === 'awaitingDecision') return;
+
+    cinematic.elapsed += delta;
+    const progress = Math.min(cinematic.elapsed / 1.35, 1);
+    const eased = progress * progress * (3 - 2 * progress);
+    camera.position.lerpVectors(
+      cinematic.returnFromPosition,
+      cinematic.snapshot.cameraPosition,
+      eased,
+    );
+    camera.quaternion.slerpQuaternions(
+      cinematic.returnFromQuaternion,
+      cinematic.snapshot.cameraQuaternion,
+      eased,
+    );
+
+    if (progress >= 1) {
+      camera.position.copy(cinematic.snapshot.cameraPosition);
+      camera.quaternion.copy(cinematic.snapshot.cameraQuaternion);
+      restoreWorldExposure(cinematic.snapshot);
+      eventCinematic = null;
+      cinematic.onReturned?.();
+    }
+  }
+
   // Animation loop with throttled prompt evaluation (10 Hz vs 120 Hz)
   let promptCheckTimer = 0;
 
@@ -1547,7 +2186,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const dt = Math.min(clock.getDelta(), 0.05);
 
     promptCheckTimer += dt;
-    if (promptCheckTimer >= 0.1) {
+    if (!eventCinematic && promptCheckTimer >= 0.1) {
       promptCheckTimer = 0;
       if (cameraMode === 'first-person') {
         updateAirlockPrompt();
@@ -1558,7 +2197,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
       }
     }
 
-    if (cameraMode === 'free') {
+    if (eventCinematic) {
+      animateEventCamera(dt);
+    } else if (cameraMode === 'free') {
       controls.update();
     } else {
       const forward = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
@@ -1606,13 +2247,55 @@ export function createLunarEngine(canvas, callbacks = {}) {
       }
     }
 
+    for (const animateEvent of eventAnimations) {
+      animateEvent(clock.elapsedTime, dt);
+    }
+
     renderer.render(scene, camera);
+  }
+
+  function getMapSnapshot() {
+    if (!outpostRoot || !mapComponents.length || !mapBounds) return null;
+    let player = null;
+
+    if (cameraMode === 'first-person') {
+      player = {
+        x: camera.position.x,
+        z: camera.position.z,
+        yaw: firstPersonYaw,
+        location: 'exterior'
+      };
+    } else if (cameraMode === 'interior') {
+      const logicalLocation = activeComponentTarget
+        || (greenhouseInterior?.visible ? componentTargets.find(target => target.id === '008') : null)
+        || mapComponents.find(component => component.id === '005');
+      if (logicalLocation) {
+        player = {
+          x: logicalLocation.center.x,
+          z: logicalLocation.center.z,
+          yaw: firstPersonYaw,
+          location: 'interior'
+        };
+      }
+    }
+
+    return {
+      components: mapComponents,
+      bounds: mapBounds,
+      player,
+      cameraMode
+    };
   }
 
   animate();
 
   // Public API returned to React
   return {
+    getMapSnapshot,
+    setEventEffect,
+    setChallengeFlags,
+    presentEvent,
+    returnFromEvent,
     toggleCameraMode,
     toggleEarthView,
     enterAirlock,
@@ -1654,6 +2337,21 @@ export function createLunarEngine(canvas, callbacks = {}) {
       window.removeEventListener('resize', handleResize);
       if (document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
+      }
+
+      queuedEventPresentation = null;
+      eventCinematic = null;
+      clearEventVisualization();
+      if (challengeMarkerGroup) {
+        outpostRoot?.remove(challengeMarkerGroup);
+        challengeMarkerGroup.traverse(object => {
+          object.geometry?.dispose();
+          if (object.material) {
+            const materials = Array.isArray(object.material) ? object.material : [object.material];
+            materials.forEach(material => material.dispose());
+          }
+        });
+        challengeMarkerGroup = null;
       }
 
       // Dispose label sprites

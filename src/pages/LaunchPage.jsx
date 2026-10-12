@@ -9,7 +9,11 @@ import '../components/space/Ui.css';
 const LunarOutpost = lazy(() => import('../components/lunar/LunarOutpost'));
 
 // phases: 'intro' -> 'launch' -> 'select' -> 'lunar'
-export default function LaunchPage() {
+export default function LaunchPage({
+  simulation,
+  onMissionStart,
+  onMissionPause,
+}) {
   const [phase, setPhase] = useState('intro');
   const [sceneMounted, setSceneMounted] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -19,8 +23,16 @@ export default function LaunchPage() {
   const handleComplete = useCallback(() => setPhase('select'), []);
   const handleVideoDone = useCallback(() => setVideoDone(true), []);
   const handleLaunchMission = useCallback((id) => {
-    if (id === 'moon') setPhase('lunar');
-  }, []);
+    if (id === 'moon') {
+      onMissionStart?.();
+      setPhase('lunar');
+    }
+  }, [onMissionStart]);
+
+  const handleExitToOrbit = useCallback(() => {
+    onMissionPause?.();
+    setPhase('select');
+  }, [onMissionPause]);
 
   useEffect(() => {
     if (phase !== 'select') return;
@@ -32,7 +44,10 @@ export default function LaunchPage() {
     <div className="launch-root">
       {phase === 'lunar' ? (
         <Suspense fallback={null}>
-          <LunarOutpost onExitToOrbit={() => setPhase('select')} />
+          <LunarOutpost
+            onExitToOrbit={handleExitToOrbit}
+            simulation={simulation}
+          />
         </Suspense>
       ) : (
         <>
