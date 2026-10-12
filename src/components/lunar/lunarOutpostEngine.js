@@ -111,6 +111,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let activeModuleInteriorLight = null;
   let activeModuleGeometries = [];
   let activeModuleMaterials = [];
+  let moduleReturnMode = 'exterior';
   let moduleInteriorLoading = false;
   let workshopInteriorLoading = false;
   let greenhouseReturnMode = 'airlock';
@@ -786,26 +787,41 @@ export function createLunarEngine(canvas, callbacks = {}) {
     activeModuleInterior = null;
     activeModuleInteriorBounds = null;
     activeModuleInteriorLight = null;
-    moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
-    horizon.visible = true;
-    if (outpostRoot) outpostRoot.visible = true;
-    scene.background = outsideBackground;
-    camera.position.copy(outsideCameraPosition);
-    firstPersonYaw = outsideCameraYaw;
-    firstPersonPitch = outsideCameraPitch;
-    camera.rotation.order = 'YXZ';
-    camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
-    cameraMode = 'first-person';
-    onModeChange(cameraMode);
+    if (moduleReturnMode === 'airlock') {
+      if (airlockInterior) airlockInterior.visible = true;
+      if (airlockInteriorLight) scene.add(airlockInteriorLight);
+      camera.position.copy(airlockReturnPosition);
+      firstPersonYaw = airlockReturnYaw;
+      firstPersonPitch = airlockReturnPitch;
+      camera.rotation.order = 'YXZ';
+      camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
+      cameraMode = 'interior';
+      onModeChange(cameraMode);
+      onInsidePanelChange({ visible: true, label: 'INSIDE AIRLOCK · E TO EXIT', buttonText: 'EXIT AIRLOCK' });
+      airlockEndPromptDismissed = true;
+    } else {
+      moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
+      horizon.visible = true;
+      if (outpostRoot) outpostRoot.visible = true;
+      scene.background = outsideBackground;
+      camera.position.copy(outsideCameraPosition);
+      firstPersonYaw = outsideCameraYaw;
+      firstPersonPitch = outsideCameraPitch;
+      camera.rotation.order = 'YXZ';
+      camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
+      cameraMode = 'first-person';
+      onModeChange(cameraMode);
+      onInsidePanelChange({ visible: false, label: '', buttonText: '' });
+      dismissedComponentId = activeComponentTarget?.id ?? null;
+      activeComponentTarget = null;
+    }
     controls.enabled = false;
-    onInsidePanelChange({ visible: false, label: '', buttonText: '' });
-    dismissedComponentId = activeComponentTarget?.id ?? null;
-    activeComponentTarget = null;
   }
 
   function enterNearbyComponent() {
     if (!activeComponentTarget) return;
     const target = activeComponentTarget;
+    moduleReturnMode = 'exterior';
     if (target.roomType === 'greenhouse') {
       enterGreenhouseFromExterior();
       return;
@@ -1087,6 +1103,19 @@ export function createLunarEngine(canvas, callbacks = {}) {
     );
   }
 
+  function enterWorkshopFromAirlock() {
+    if (workshopInteriorLoading) return;
+    setPrompt(null);
+    airlockEndPromptDismissed = true;
+    airlockReturnPosition = camera.position.clone();
+    airlockReturnYaw = firstPersonYaw;
+    airlockReturnPitch = firstPersonPitch;
+    moduleReturnMode = 'airlock';
+    if (airlockInterior) airlockInterior.visible = false;
+    if (airlockInteriorLight) scene.remove(airlockInteriorLight);
+    ensureWorkshopInterior(model => enterModuleInterior({ name: 'Workshop', roomType: 'engineering' }, model));
+  }
+
   function restoreExteriorAfterGreenhouseFailure() {
     moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
     horizon.visible = true;
@@ -1266,7 +1295,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
         enterGreenhouse();
         return;
       }
-      if (key === 'arrowright' || key === 'd' || key === 'escape') {
+      if (key === 'arrowright' || key === 'd') {
+        event.preventDefault();
+        enterWorkshopFromAirlock();
+        return;
+      }
+      if (key === 'escape') {
         event.preventDefault();
         setPrompt(null);
         airlockEndPromptDismissed = true;
@@ -1362,7 +1396,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       setPrompt('airlockEnd', {
         id: 'airlock-end',
         title: 'Choose a direction',
-        message: 'Left leads to the greenhouse. Right keeps you in the airlock.'
+        message: 'Left leads to the greenhouse. Right leads to the workshop.'
       });
     }
   }
@@ -1595,6 +1629,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       greenhouseReturnMode = 'airlock';
       enterGreenhouse();
     },
+    enterWorkshop: enterWorkshopFromAirlock,
     stayAirlock: () => {
       setPrompt(null);
       airlockEndPromptDismissed = true;

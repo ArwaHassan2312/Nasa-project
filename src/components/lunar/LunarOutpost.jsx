@@ -122,7 +122,7 @@ export default function LunarOutpost({ onExitToOrbit }) {
         <div className="lunar-modal" role="dialog" aria-labelledby="airlock-end-title">
           <div className="lunar-modal-kicker">AIRLOCK TRANSIT</div>
           <h2 id="airlock-end-title">{prompt.data?.title || 'Choose a direction'}</h2>
-          <p>{prompt.data?.message || 'Left leads to the greenhouse. Right keeps you in the airlock.'}</p>
+          <p>{prompt.data?.message || 'Choose a side: the greenhouse or the workshop.'}</p>
           <div className="lunar-modal-actions">
             <button
               type="button"
@@ -134,12 +134,12 @@ export default function LunarOutpost({ onExitToOrbit }) {
             <button
               type="button"
               className="lunar-action-secondary"
-              onClick={() => engineRef.current?.stayAirlock()}
+              onClick={() => engineRef.current?.enterWorkshop()}
             >
-              RIGHT · STAY HERE
+              RIGHT · WORKSHOP
             </button>
           </div>
-          <div className="lunar-modal-hint">A or ← for greenhouse · D or → to stay</div>
+          <div className="lunar-modal-hint">A or ← for greenhouse · D or → for workshop</div>
         </div>
       )}
 
