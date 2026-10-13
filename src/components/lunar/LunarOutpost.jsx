@@ -62,6 +62,15 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     (challenge) => challenge.status === 'inProgress'
       && challenge.targetComponentId === prompt.data?.id,
   );
+  const taskActionRef = useRef(null);
+  taskActionRef.current = (componentId) => {
+    const challenge = simulation.dailyChallenges.find(
+      (entry) => entry.status === 'inProgress' && entry.targetComponentId === componentId,
+    );
+    if (challenge) completeDailyChallenge(challenge.id, componentId);
+  };
+  const [consoleEdit, setConsoleEdit] = useState(false);
+  const [consoleInfo, setConsoleInfo] = useState(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -77,7 +86,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         onLoading: (state) => setIsLoading(state.active),
         onModeChange: (mode) => setCameraMode(mode),
         onPromptChange: (type, data) => setPrompt({ type, data }),
-        onInsidePanelChange: (panel) => setInsidePanel(panel)
+        onInsidePanelChange: (panel) => setInsidePanel(panel),
+        onTaskAction: (componentId) => taskActionRef.current?.(componentId),
+        onConsoleEdit: (info) => setConsoleInfo(info)
       });
     } catch (error) {
       console.error('[LunarOutpost] Engine failed to start, retry on next mount.', error);
@@ -105,6 +116,22 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   useEffect(() => {
     engineRef.current?.setChallengeFlags(simulation.flags);
   }, [simulation.flags]);
+
+  useEffect(() => {
+    engineRef.current?.setTaskTargets?.(
+      simulation.dailyChallenges
+        .filter((challenge) => challenge.status === 'inProgress')
+        .map((challenge) => ({ componentId: challenge.targetComponentId, label: challenge.actionLabel }))
+    );
+  }, [simulation.dailyChallenges]);
+
+  useEffect(() => {
+    engineRef.current?.setConsoleEditMode?.(consoleEdit);
+  }, [consoleEdit]);
+
+  useEffect(() => {
+    if (!insidePanel.visible) setConsoleEdit(false);
+  }, [insidePanel.visible]);
 
   // Fallback: guarantee Enter works while a proximity prompt is visible,
   // even if the engine key handler missed it (e.g. focus quirks).
@@ -319,8 +346,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </div>
       )}
 
-      {/* Crosshair in First Person - stays visible while proximity prompt shows */}
-      {simulation.eventPhase === 'idle' && cameraMode !== 'free' && !insidePanel.visible && (
+      {/* Crosshair in First Person / interior - needed to aim at the task console */}
+      {(cameraMode === 'interior' || (simulation.eventPhase === 'idle' && cameraMode !== 'free' && !insidePanel.visible)) && (
         <div className="lunar-crosshair" />
       )}
 
@@ -391,6 +418,14 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
               >
                 {insidePanel.buttonText || 'EXIT'}
               </button>
+              <button
+                type="button"
+                className={consoleEdit ? 'lunar-console-edit-active' : ''}
+                title="Move / resize the task console"
+                onClick={() => setConsoleEdit((editing) => !editing)}
+              >
+                {consoleEdit ? 'DONE' : 'MOVE'}
+              </button>
             </div>
           ) : (
             <button
@@ -404,6 +439,22 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
           )}
         </div>
       </div>
+
+      {/* Task console editor (positioning only, no coordinates) */}
+      {consoleEdit && insidePanel.visible && (
+        <div className="lunar-console-editor" role="status" aria-label="Task console position editor">
+          <div className="lunar-console-editor-title">
+            <span>CONSOLE · {consoleInfo?.kind ? consoleInfo.kind.toUpperCase() : ''}</span>
+          </div>
+          <small>Drag the button to move it · mouse wheel resizes · saved automatically</small>
+          <button
+            type="button"
+            onClick={() => engineRef.current?.resetConsolePlacement?.()}
+          >
+            RESET POSITION
+          </button>
+        </div>
+      )}
 
       {/* Live opacity minimap - top-left under Mission Control, realtime player tracking */}
       {showMinimap && (

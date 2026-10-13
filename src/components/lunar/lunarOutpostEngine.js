@@ -102,6 +102,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
     onEarthToggleChange = () => { },
     onPromptChange = () => { },
     onInsidePanelChange = () => { },
+    onTaskAction = () => { },
+    onConsoleEdit = () => { },
   } = callbacks;
 
   let isDestroyed = false;
@@ -200,6 +202,70 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let activeModuleGeometries = [];
   let activeModuleMaterials = [];
   let moduleReturnMode = 'exterior';
+  let activeTaskTargets = [];
+  let taskConsoleGroup = null;
+  let taskConsoleInner = null;
+  let taskConsoleButton = null;
+  let taskConsoleScreen = null;
+  let taskConsoleLabel = null;
+  let taskConsoleLabelCanvas = null;
+  let taskConsoleLabelTexture = null;
+  let taskConsoleArrow = null;
+  const TASK_CONSOLE_ARROW_Y = 2.6;
+  let taskConsoleArrowBaseY = TASK_CONSOLE_ARROW_Y;
+  let taskConsoleComponentId = null;
+  let taskConsoleKind = null;
+  let taskConsoleActive = false;
+  let taskConsoleLabelText = 'STANDBY';
+  const taskRaycaster = new THREE.Raycaster();
+  const taskScreenCenter = new THREE.Vector2(0, 0);
+  // In-game console editor: drag to reposition, wheel to resize.
+  const CONSOLE_STORE_KEY = 'lunar-task-console:v1';
+  let consoleOverrides = {};
+  try {
+    consoleOverrides = JSON.parse(localStorage.getItem(CONSOLE_STORE_KEY) || '{}') || {};
+  } catch (error) {
+    consoleOverrides = {};
+  }
+  let consoleEditMode = false;
+  let consoleDragging = false;
+  const consoleDragPlane = new THREE.Plane();
+  const consoleGrabOffset = new THREE.Vector3();
+  const consolePointerNdc = new THREE.Vector2();
+  function saveConsoleOverrides() {
+    try {
+      localStorage.setItem(CONSOLE_STORE_KEY, JSON.stringify(consoleOverrides));
+    } catch (error) {
+      /* storage unavailable - customization lasts for this session only */
+    }
+  }
+  function getConsolePlacement(kind, fallbackPos, fallbackSize) {
+    const saved = consoleOverrides[kind];
+    if (saved && Array.isArray(saved.pos) && saved.pos.length === 3) {
+      return {
+        pos: new THREE.Vector3(saved.pos[0], saved.pos[1], saved.pos[2]),
+        size: typeof saved.size === 'number' ? saved.size : fallbackSize,
+      };
+    }
+    return { pos: fallbackPos, size: fallbackSize };
+  }
+  function pushConsoleInfo() {
+    if (!taskConsoleGroup || !taskConsoleKind) {
+      onConsoleEdit({ editing: consoleEditMode, kind: null, x: 0, y: 0, z: 0, size: 1 });
+      return;
+    }
+    taskConsoleGroup.updateWorldMatrix(true, false);
+    const world = new THREE.Vector3().setFromMatrixPosition(taskConsoleGroup.matrixWorld);
+    onConsoleEdit({
+      editing: consoleEditMode,
+      kind: taskConsoleKind,
+      x: Math.round(world.x * 100) / 100,
+      y: Math.round(world.y * 100) / 100,
+      z: Math.round(world.z * 100) / 100,
+      size: Math.round((taskConsoleInner?.scale.x ?? 1) * 100) / 100,
+    });
+    if (taskConsoleLabel) drawTaskConsoleLabel(taskConsoleLabelText);
+  }
   let moduleInteriorLoading = false;
   let workshopInteriorLoading = false;
   let kitWaiters = [];
@@ -876,6 +942,22 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const OUTPOST_SITE_MARGIN = 6;
   const OUTPOST_GROUND_EPSILON = 0.05;
   const FIRST_PERSON_EYE_HEIGHT = 3.2;
+
+  // Task console tuning: position + size for both console variants.
+  // Wall console appears in workshop / sci-fi interiors, pedestal in the rest.
+  const TASK_CONSOLE_CONFIG = {
+    wall: {
+      inset: 0.12, // distance in front of the right wall
+      height: 1.6, // button height above the room floor
+      zOffset: 0, // shift along the wall (+/-)
+      size: 1, // overall size multiplier
+    },
+    pedestal: {
+      x: 1.15, // world x beside the entrance
+      z: 1.2, // world z beside the entrance
+      size: 1, // overall size multiplier
+    },
+  };
   const AIRLOCK_PROMPT_DISTANCE = 26;
   const AIRLOCK_INTERIOR_WIDTH = 25;
   const TOMATO_PLANT_Y_SCALE = 2;
@@ -1404,6 +1486,239 @@ export function createLunarEngine(canvas, callbacks = {}) {
     return room;
   }
 
+  function setTaskTargets(targets) {
+    activeTaskTargets = Array.isArray(targets)
+      ? targets.map(target => ({ componentId: target.componentId, label: target.label || '' }))
+      : [];
+    console.log('[TaskConsole] active targets:', activeTaskTargets.map(entry => entry.componentId).join(', ') || '(none)');
+    refreshTaskConsole();
+  }
+
+  function drawTaskConsoleLabel(text) {
+    if (!taskConsoleLabelCanvas || !taskConsoleLabelTexture) return;
+    taskConsoleLabelText = text;
+    const context = taskConsoleLabelCanvas.getContext('2d');
+    context.clearRect(0, 0, taskConsoleLabelCanvas.width, taskConsoleLabelCanvas.height);
+    context.fillStyle = 'rgba(6, 14, 18, 0.88)';
+    context.strokeStyle = taskConsoleActive ? 'rgba(57, 255, 136, 0.95)' : 'rgba(120, 150, 155, 0.6)';
+    context.lineWidth = 6;
+    context.beginPath();
+    context.roundRect(4, 4, taskConsoleLabelCanvas.width - 8, taskConsoleLabelCanvas.height - 8, 18);
+    context.fill();
+    context.stroke();
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillStyle = taskConsoleActive ? '#c9ffd9' : '#8fa3a8';
+    context.font = 'bold 34px monospace';
+    context.fillText(text, taskConsoleLabelCanvas.width / 2, taskConsoleLabelCanvas.height / 2 + 2, taskConsoleLabelCanvas.width - 40);
+    taskConsoleLabelTexture.needsUpdate = true;
+  }
+
+  function refreshTaskConsole() {
+    if (!taskConsoleButton) {
+      taskConsoleActive = false;
+      return;
+    }
+    const target = activeTaskTargets.find(entry => entry.componentId === taskConsoleComponentId);
+    taskConsoleActive = Boolean(target);
+    taskConsoleButton.material.emissive.set(taskConsoleActive ? 0x2bff88 : 0x1e9e5c);
+    taskConsoleButton.material.emissiveIntensity = taskConsoleActive ? 1.6 : 0.7;
+    if (taskConsoleScreen) {
+      taskConsoleScreen.material.emissive.set(taskConsoleActive ? 0x18e08a : 0x0e3a32);
+      taskConsoleScreen.material.emissiveIntensity = taskConsoleActive ? 0.9 : 0.35;
+    }
+    // Button only when idle; label joins it while a task is active.
+    if (taskConsoleLabel) taskConsoleLabel.visible = taskConsoleActive;
+    drawTaskConsoleLabel(
+      target && target.label ? target.label.toUpperCase().slice(0, 28) : 'STANDBY'
+    );
+  }
+
+  function unmountTaskConsole() {
+    if (taskConsoleGroup?.parent) taskConsoleGroup.parent.remove(taskConsoleGroup);
+    taskConsoleGroup?.traverse(object => {
+      object.geometry?.dispose();
+      if (object.material) {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach(material => {
+          if (material.map && material.map !== taskConsoleLabelTexture) material.map?.dispose();
+          material.dispose();
+        });
+      }
+    });
+    taskConsoleLabelTexture?.dispose();
+    taskConsoleGroup = null;
+    taskConsoleInner = null;
+    taskConsoleButton = null;
+    taskConsoleScreen = null;
+    taskConsoleLabel = null;
+    taskConsoleArrow = null;
+    taskConsoleLabelCanvas = null;
+    taskConsoleLabelTexture = null;
+    taskConsoleArrowBaseY = TASK_CONSOLE_ARROW_Y;
+    taskConsoleComponentId = null;
+    taskConsoleKind = null;
+    taskConsoleActive = false;
+  }
+
+  // Mount the task button centered on the room's right wall (world +x face).
+  // Returns true when wall-mounted, false to use the pedestal fallback.
+  function mountWallConsole() {
+    if (!activeModuleInteriorBounds) return false;
+    activeModuleInterior.updateMatrixWorld(true);
+    const cfg = TASK_CONSOLE_CONFIG.wall;
+    const toLocal = (world) => activeModuleInterior.worldToLocal(world.clone());
+    const bounds = activeModuleInteriorBounds;
+    const anchor = new THREE.Vector3(
+      bounds.max.x - cfg.inset,
+      Math.min(bounds.min.y + cfg.height, bounds.max.y - 0.6),
+      (bounds.min.z + bounds.max.z) / 2 + cfg.zOffset
+    );
+    if (!(anchor.y > bounds.min.y + 0.3)) return false;
+    const placement = getConsolePlacement('wall', anchor, cfg.size);
+    taskConsoleKind = 'wall';
+
+    const group = new THREE.Group();
+    group.name = 'Task Console';
+    const inner = new THREE.Group();
+    inner.name = 'Task Console Inner';
+    inner.scale.setScalar(placement.size);
+    group.add(inner);
+    const anchorLocal = toLocal(anchor);
+    group.position.copy(toLocal(placement.pos));
+    const rel = (world) => toLocal(world).sub(anchorLocal);
+
+    taskConsoleButton = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.15, 0.17, 0.12, 28),
+      new THREE.MeshStandardMaterial({
+        color: 0x0d2b1a, emissive: 0x2bff88, emissiveIntensity: 1.6,
+        roughness: 0.3, metalness: 0.1
+      })
+    );
+    taskConsoleButton.rotation.z = Math.PI / 2;
+    taskConsoleButton.position.copy(rel(anchor.clone().add(new THREE.Vector3(-0.1, 0, 0))));
+    taskConsoleButton.userData.taskButton = true;
+    taskConsoleScreen = null;
+
+    taskConsoleLabelCanvas = document.createElement('canvas');
+    taskConsoleLabelCanvas.width = 512;
+    taskConsoleLabelCanvas.height = 112;
+    taskConsoleLabelTexture = new THREE.CanvasTexture(taskConsoleLabelCanvas);
+    taskConsoleLabelTexture.colorSpace = THREE.SRGBColorSpace;
+    taskConsoleLabel = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: taskConsoleLabelTexture, transparent: true, depthWrite: false
+    }));
+    taskConsoleLabel.scale.set(1.7, 0.37, 1);
+    taskConsoleLabel.position.copy(rel(anchor.clone().add(new THREE.Vector3(-0.05, 0.9, 0))));
+    taskConsoleLabel.name = 'Label: Task Console';
+
+    taskConsoleArrow = new THREE.Group();
+    taskConsoleArrow.name = 'Task Console Arrow';
+    const arrowMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1a2b12, emissive: 0xc8ff4d, emissiveIntensity: 1.8,
+      roughness: 0.4, metalness: 0.1
+    });
+    const arrowHead = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.32, 20), arrowMaterial);
+    arrowHead.rotation.x = Math.PI;
+    arrowHead.position.y = -0.12;
+    const arrowTail = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.3, 12), arrowMaterial);
+    arrowTail.position.y = 0.18;
+    taskConsoleArrow.add(arrowHead, arrowTail);
+    taskConsoleArrowBaseY = 1.5;
+    taskConsoleArrow.position.copy(rel(anchor.clone().add(new THREE.Vector3(-0.05, 1.5, 0))));
+
+    group.add(inner);
+    inner.add(taskConsoleButton, taskConsoleLabel, taskConsoleArrow);
+    activeModuleInterior.add(group);
+    taskConsoleGroup = group;
+    taskConsoleInner = inner;
+    pushConsoleInfo();
+    return true;
+  }
+
+  // Physical task console inside module interiors: walk up to the glowing
+  // button and click it to run the component's active daily task.
+  function mountTaskConsole(componentId, isWorkshop) {
+    unmountTaskConsole();
+    if (!activeModuleInterior) return;
+    taskConsoleComponentId = componentId;
+    if (isWorkshop && mountWallConsole()) {
+      refreshTaskConsole();
+      const worldPos = new THREE.Vector3();
+      taskConsoleGroup.getWorldPosition(worldPos);
+      console.log(
+        `[TaskConsole] on right wall component=${componentId} ` +
+        `pos=(${worldPos.x.toFixed(2)}, ${worldPos.y.toFixed(2)}, ${worldPos.z.toFixed(2)})`
+      );
+      return;
+    }
+    taskConsoleKind = 'pedestal';
+    const group = new THREE.Group();
+    group.name = 'Task Console';
+    const inner = new THREE.Group();
+    inner.name = 'Task Console Inner';
+    group.add(inner);
+    const spot = new THREE.Vector3(TASK_CONSOLE_CONFIG.pedestal.x, 0, TASK_CONSOLE_CONFIG.pedestal.z);
+    const placement = getConsolePlacement('pedestal', spot, TASK_CONSOLE_CONFIG.pedestal.size);
+    inner.scale.setScalar(placement.size);
+    taskConsoleScreen = null;
+
+    taskConsoleButton = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.19, 0.1, 24),
+      new THREE.MeshStandardMaterial({
+        color: 0x0d2b1a, emissive: 0x2bff88, emissiveIntensity: 1.6,
+        roughness: 0.3, metalness: 0.1
+      })
+    );
+    taskConsoleButton.position.set(0, 1.1, 0.2);
+    taskConsoleButton.rotation.x = 0.45;
+    taskConsoleButton.userData.taskButton = true;
+
+    taskConsoleLabelCanvas = document.createElement('canvas');
+    taskConsoleLabelCanvas.width = 512;
+    taskConsoleLabelCanvas.height = 112;
+    taskConsoleLabelTexture = new THREE.CanvasTexture(taskConsoleLabelCanvas);
+    taskConsoleLabelTexture.colorSpace = THREE.SRGBColorSpace;
+    const labelMaterial = new THREE.SpriteMaterial({ map: taskConsoleLabelTexture, transparent: true, depthWrite: false });
+    taskConsoleLabel = new THREE.Sprite(labelMaterial);
+    taskConsoleLabel.scale.set(1.7, 0.37, 1);
+    taskConsoleLabel.position.set(0, 2.05, 0);
+    taskConsoleLabel.name = 'Label: Task Console';
+
+    taskConsoleArrow = new THREE.Group();
+    taskConsoleArrow.name = 'Task Console Arrow';
+    const arrowMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1a2b12, emissive: 0xc8ff4d, emissiveIntensity: 1.8,
+      roughness: 0.4, metalness: 0.1
+    });
+    const arrowHead = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.32, 20), arrowMaterial);
+    arrowHead.rotation.x = Math.PI;
+    arrowHead.position.y = -0.12;
+    const arrowTail = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.3, 12), arrowMaterial);
+    arrowTail.position.y = 0.18;
+    taskConsoleArrow.add(arrowHead, arrowTail);
+    taskConsoleArrow.position.set(0, TASK_CONSOLE_ARROW_Y, 0);
+
+    inner.add(taskConsoleButton, taskConsoleLabel, taskConsoleArrow);
+    // Place beside the entrance in world space: room groups (e.g. the loaded
+    // workshop) can carry their own centering offset, so local placement would
+    // land behind walls. The entrance spawn is always (0, *, 2.55) facing -z.
+    activeModuleInterior.updateMatrixWorld(true);
+    group.position.copy(activeModuleInterior.worldToLocal(placement.pos.clone()));
+    group.rotation.y = Math.atan2(0 - placement.pos.x, 2.55 - placement.pos.z);
+    activeModuleInterior.add(group);
+    taskConsoleGroup = group;
+    taskConsoleInner = inner;
+    pushConsoleInfo();
+    refreshTaskConsole();
+    const worldPos = new THREE.Vector3();
+    group.getWorldPosition(worldPos);
+    console.log(
+      `[TaskConsole] mounted component=${componentId} children=${activeModuleInterior.children.length} ` +
+      `pos=(${worldPos.x.toFixed(2)}, ${worldPos.y.toFixed(2)}, ${worldPos.z.toFixed(2)})`
+    );
+  }
+
   function enterModuleInterior(target, workshopModel) {
     if (activeModuleInterior) return;
     if (moduleReturnMode !== 'airlock') {
@@ -1419,6 +1734,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
     activeModuleInterior = createModuleInterior(target.roomType, workshopModel);
     scene.add(activeModuleInterior);
     activeModuleInteriorBounds = new THREE.Box3().setFromObject(activeModuleInterior);
+    console.log(
+      `[Interior] entering ${target.name} id=${target.id} roomType=${target.roomType}`
+    );
+    try {
+      mountTaskConsole(target.id, target.roomType === 'engineering');
+    } catch (error) {
+      console.error('[TaskConsole] mount failed, entry continues without console.', error);
+    }
     camera.position.set(0, FIRST_PERSON_EYE_HEIGHT, 2.55);
     camera.rotation.order = 'YXZ';
     camera.lookAt(0, FIRST_PERSON_EYE_HEIGHT, -1.5);
@@ -1445,6 +1768,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     scene.remove(activeModuleInterior);
     scene.remove(activeModuleInteriorLight);
     disposeModuleInterior(activeModuleInterior);
+    unmountTaskConsole();
+    consoleEditMode = false;
+    consoleDragging = false;
+    if (canvas) canvas.style.cursor = '';
     activeModuleInterior = null;
     activeModuleInteriorBounds = null;
     activeModuleInteriorLight = null;
@@ -1783,7 +2110,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     moduleReturnMode = 'airlock';
     if (airlockInterior) airlockInterior.visible = false;
     if (airlockInteriorLight) scene.remove(airlockInteriorLight);
-    ensureWorkshopInterior(model => enterModuleInterior({ name: 'Workshop', roomType: 'engineering' }, model));
+    ensureWorkshopInterior(model => enterModuleInterior({ id: '010', name: 'Workshop', roomType: 'engineering' }, model));
   }
 
   function restoreExteriorAfterGreenhouseFailure() {
@@ -1933,10 +2260,126 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   // Listeners
+  function setConsoleEditMode(enabled) {
+    consoleEditMode = Boolean(enabled);
+    if (!consoleEditMode) consoleDragging = false;
+    if (canvas) canvas.style.cursor = consoleEditMode ? 'move' : '';
+    if (consoleEditMode && taskConsoleGroup) {
+      if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+      pushConsoleInfo();
+    } else {
+      saveConsoleOverrides();
+      pushConsoleInfo();
+    }
+  }
+
+  function resetConsolePlacement() {
+    if (!taskConsoleKind) return;
+    delete consoleOverrides[taskConsoleKind];
+    saveConsoleOverrides();
+    const componentId = taskConsoleComponentId;
+    const isWorkshop = taskConsoleKind === 'wall';
+    mountTaskConsole(componentId, isWorkshop);
+    refreshTaskConsole();
+  }
+
+  function storeConsolePlacement() {
+    if (!taskConsoleGroup || !taskConsoleKind || !taskConsoleInner) return;
+    taskConsoleGroup.updateWorldMatrix(true, false);
+    const world = new THREE.Vector3().setFromMatrixPosition(taskConsoleGroup.matrixWorld);
+    consoleOverrides[taskConsoleKind] = {
+      pos: [Math.round(world.x * 100) / 100, Math.round(world.y * 100) / 100, Math.round(world.z * 100) / 100],
+      size: Math.round(taskConsoleInner.scale.x * 100) / 100,
+    };
+    saveConsoleOverrides();
+  }
+
+  function consolePointerNdcFromEvent(event) {
+    const rect = canvas.getBoundingClientRect();
+    consolePointerNdc.set(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1
+    );
+    return consolePointerNdc;
+  }
+
+  function handleConsolePointerDown(event) {
+    if (!consoleEditMode || !taskConsoleGroup || event.button !== 0) return;
+    taskRaycaster.setFromCamera(consolePointerNdcFromEvent(event), camera);
+    const hits = taskRaycaster.intersectObjects(taskConsoleGroup.children, true);
+    if (!hits.length) return;
+    event.preventDefault();
+    try { canvas.setPointerCapture?.(event.pointerId); } catch (error) { /* noop */ }
+    const viewDir = new THREE.Vector3();
+    camera.getWorldDirection(viewDir);
+    consoleDragPlane.setFromNormalAndCoplanarPoint(viewDir, hits[0].point);
+    taskConsoleGroup.updateWorldMatrix(true, false);
+    const groupWorld = new THREE.Vector3().setFromMatrixPosition(taskConsoleGroup.matrixWorld);
+    consoleGrabOffset.copy(groupWorld).sub(hits[0].point);
+    consoleDragging = true;
+    if (canvas) canvas.style.cursor = 'grabbing';
+  }
+
+  function handleConsolePointerMove(event) {
+    if (!consoleEditMode || !consoleDragging || !taskConsoleGroup) return;
+    event.preventDefault();
+    taskRaycaster.setFromCamera(consolePointerNdcFromEvent(event), camera);
+    const target = new THREE.Vector3();
+    if (!taskRaycaster.ray.intersectPlane(consoleDragPlane, target)) return;
+    target.add(consoleGrabOffset);
+    if (activeModuleInteriorBounds) {
+      const bounds = activeModuleInteriorBounds;
+      const inset = 0.2;
+      target.x = THREE.MathUtils.clamp(target.x, bounds.min.x + inset, bounds.max.x - inset);
+      target.z = THREE.MathUtils.clamp(target.z, bounds.min.z + inset, bounds.max.z - inset);
+      if (taskConsoleKind === 'pedestal') {
+        taskConsoleGroup.updateWorldMatrix(true, false);
+        target.y = new THREE.Vector3().setFromMatrixPosition(taskConsoleGroup.matrixWorld).y;
+      } else {
+        target.y = THREE.MathUtils.clamp(target.y, bounds.min.y + 0.2, bounds.max.y - 0.3);
+      }
+    }
+    activeModuleInterior.updateMatrixWorld(true);
+    taskConsoleGroup.position.copy(activeModuleInterior.worldToLocal(target.clone()));
+    pushConsoleInfo();
+  }
+
+  function handleConsolePointerUp() {
+    if (!consoleDragging) return;
+    consoleDragging = false;
+    if (canvas) canvas.style.cursor = consoleEditMode ? 'move' : '';
+    storeConsolePlacement();
+    pushConsoleInfo();
+  }
+
+  function handleConsoleWheel(event) {
+    if (!consoleEditMode || !taskConsoleInner || !taskConsoleGroup) return;
+    event.preventDefault();
+    const next = THREE.MathUtils.clamp(
+      taskConsoleInner.scale.x * (event.deltaY < 0 ? 1.1 : 1 / 1.1),
+      0.3, 3
+    );
+    taskConsoleInner.scale.setScalar(next);
+    storeConsolePlacement();
+    pushConsoleInfo();
+  }
+
   function handleCanvasClick() {
     if (eventCinematic) return;
+    if (consoleEditMode) return;
     if (['first-person', 'interior'].includes(cameraMode) && document.pointerLockElement !== canvas) {
       canvas.requestPointerLock?.();
+      return;
+    }
+    // Click the physical task console while inside a module interior.
+    if (cameraMode === 'interior' && document.pointerLockElement === canvas && activeModuleInterior?.visible && taskConsoleGroup) {
+      taskRaycaster.setFromCamera(taskScreenCenter, camera);
+      const hits = taskRaycaster.intersectObjects(taskConsoleGroup.children, true);
+      if (hits.length > 0 && hits[0].distance < 8) {
+        const active = activeTaskTargets.find(entry => entry.componentId === taskConsoleComponentId);
+        console.log('[TaskConsole] clicked, component:', taskConsoleComponentId, 'active:', Boolean(active));
+        if (active) onTaskAction(taskConsoleComponentId);
+      }
     }
   }
 
@@ -2030,6 +2473,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   canvas.addEventListener('click', handleCanvasClick);
+  canvas.addEventListener('pointerdown', handleConsolePointerDown);
+  canvas.addEventListener('pointermove', handleConsolePointerMove);
+  canvas.addEventListener('pointerup', handleConsolePointerUp);
+  canvas.addEventListener('wheel', handleConsoleWheel, { passive: false });
   document.addEventListener('mousemove', handleMouseMove);
   document.addEventListener('keydown', handleKeyDown);
   document.addEventListener('keyup', handleKeyUp);
@@ -2388,6 +2835,17 @@ export function createLunarEngine(canvas, callbacks = {}) {
       animateEvent(clock.elapsedTime, dt);
     }
 
+    if (taskConsoleButton && taskConsoleActive) {
+      taskConsoleButton.material.emissiveIntensity = 1.3 + Math.sin(performance.now() * 0.006) * 0.6;
+    }
+    if (taskConsoleArrow) {
+      taskConsoleArrow.visible = taskConsoleActive;
+      if (taskConsoleActive) {
+        taskConsoleArrow.position.y = taskConsoleArrowBaseY + Math.sin(performance.now() * 0.004) * 0.12;
+        taskConsoleArrow.rotation.y += dt * 1.5;
+      }
+    }
+
     renderer.render(scene, camera);
   }
 
@@ -2431,6 +2889,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
     getMapSnapshot,
     setEventEffect,
     setChallengeFlags,
+    setTaskTargets,
+    setConsoleEditMode,
+    resetConsolePlacement,
     presentEvent,
     returnFromEvent,
     toggleCameraMode,
@@ -2468,6 +2929,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
       isDestroyed = true;
       if (animId) cancelAnimationFrame(animId);
       canvas.removeEventListener('click', handleCanvasClick);
+      canvas.removeEventListener('pointerdown', handleConsolePointerDown);
+      canvas.removeEventListener('pointermove', handleConsolePointerMove);
+      canvas.removeEventListener('pointerup', handleConsolePointerUp);
+      canvas.removeEventListener('wheel', handleConsoleWheel);
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('keyup', handleKeyUp);

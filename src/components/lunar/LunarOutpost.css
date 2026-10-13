@@ -1133,6 +1133,71 @@
   border-color: var(--lunar-lime);
 }
 
+.lunar-inside-panel .lunar-console-edit-active {
+  border-color: var(--lunar-cyan);
+  background: rgba(127, 240, 255, 0.2);
+  color: var(--lunar-cyan);
+}
+
+/* Task console in-game editor readout */
+.lunar-console-editor {
+  position: absolute;
+  z-index: 6;
+  left: clamp(12px, 3vw, 28px);
+  bottom: clamp(14px, 4vh, 28px);
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid rgba(200, 237, 139, 0.45);
+  border-radius: 8px;
+  background: rgba(7, 14, 22, 0.9);
+  box-shadow: 0 10px 35px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  pointer-events: auto;
+}
+
+.lunar-console-editor-title span {
+  color: var(--lunar-lime);
+  font-family: var(--lunar-font-tech);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+}
+
+.lunar-console-editor-coords {
+  display: flex;
+  gap: 12px;
+  color: #9fb2ba;
+}
+
+.lunar-console-editor-coords strong {
+  color: #fff;
+  font-size: 0.74rem;
+}
+
+.lunar-console-editor small {
+  color: #8da1a9;
+  font-size: 0.58rem;
+}
+
+.lunar-console-editor button {
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-family: var(--lunar-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.lunar-console-editor button:hover {
+  border-color: var(--lunar-lime);
+  color: var(--lunar-lime);
+}
+
 .lunar-inside-panel .lunar-task-inline-action {
   border-color: rgba(69, 221, 210, 0.65);
   background: rgba(25, 132, 130, 0.24);
