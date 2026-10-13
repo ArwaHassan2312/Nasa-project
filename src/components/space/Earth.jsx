@@ -1,27 +1,33 @@
-import { useEffect, useMemo } from 'react';
-import { useTexture } from '@react-three/drei';
+import { useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
+import { getDownscaledTexture } from '../../utils/textureUtils';
 import { EARTH_RADIUS, EARTH_ROTATION } from './launchConfig';
 
 const EARTH_TEXTURES = [
-  '/Textures/8k_earth_daymap.jpg',
-  '/Textures/8k_earth_nightmap.jpg',
-  '/Textures/8k_earth_clouds.jpg',
-  '/Textures/8k_earth_specular.jpeg',
+  { path: '/Textures/8k_earth_daymap.jpg', colorSpace: THREE.SRGBColorSpace, budget: 4096 },
+  { path: '/Textures/8k_earth_nightmap.jpg', colorSpace: THREE.SRGBColorSpace, budget: 4096 },
+  { path: '/Textures/8k_earth_clouds.jpg', colorSpace: THREE.SRGBColorSpace, budget: 2048 },
+  { path: '/Textures/8k_earth_specular.jpeg', colorSpace: THREE.NoColorSpace, budget: 2048 },
 ];
 
 export default function Earth() {
-  const [dayMap, nightMap, cloudMap, specularMap] = useTexture(EARTH_TEXTURES);
+  const [textures, setTextures] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(EARTH_TEXTURES.map(entry => getDownscaledTexture(entry.path, entry.budget, entry.colorSpace)))
+      .then(maps => { if (!cancelled) setTextures(maps); })
+      .catch(error => console.warn('Could not load Earth textures.', error));
+    return () => { cancelled = true; };
+  }, []);
 
   const { surfaceMaterial, cloudMaterial } = useMemo(() => {
-    dayMap.colorSpace = THREE.SRGBColorSpace;
-    nightMap.colorSpace = THREE.SRGBColorSpace;
-    cloudMap.colorSpace = THREE.SRGBColorSpace;
-    specularMap.colorSpace = THREE.NoColorSpace;
+    if (!textures) return {};
+    const [dayMap, nightMap, cloudMap, specularMap] = textures;
 
-    for (const texture of [dayMap, nightMap, cloudMap, specularMap]) {
+    for (const texture of textures) {
       texture.wrapS = THREE.RepeatWrapping;
-      texture.anisotropy = 8;
+      texture.anisotropy = 4;
       texture.needsUpdate = true;
     }
 
@@ -46,20 +52,22 @@ export default function Earth() {
         shininess: 8,
       }),
     };
-  }, [dayMap, nightMap, cloudMap, specularMap]);
+  }, [textures]);
 
   useEffect(() => () => {
-    surfaceMaterial.dispose();
-    cloudMaterial.dispose();
+    surfaceMaterial?.dispose();
+    cloudMaterial?.dispose();
   }, [surfaceMaterial, cloudMaterial]);
+
+  if (!surfaceMaterial) return null;
 
   return (
     <group rotation={EARTH_ROTATION}>
       <mesh material={surfaceMaterial}>
-        <sphereGeometry args={[EARTH_RADIUS, 128, 96]} />
+        <sphereGeometry args={[EARTH_RADIUS, 96, 64]} />
       </mesh>
       <mesh material={cloudMaterial} scale={1.003} renderOrder={1}>
-        <sphereGeometry args={[EARTH_RADIUS, 128, 96]} />
+        <sphereGeometry args={[EARTH_RADIUS, 96, 64]} />
       </mesh>
     </group>
   );

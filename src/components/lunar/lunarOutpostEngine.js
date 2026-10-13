@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { DAILY_CHALLENGES } from '../../data/dailyChallenges';
+import { loadDownscaledTexture } from '../../utils/textureUtils';
 
 // Module-level caches: raw asset buffers loaded once to prevent memory leaks and repeated downloads
 const ASSET_CACHE = {
@@ -13,9 +15,12 @@ const ASSET_CACHE = {
   gltfs: new Map(), // path -> gltf.scene clone source
 };
 
-const sharedGltfLoader = new GLTFLoader();
+// sci-fi_lab.glb uses KHR_draco_mesh_compression. Keep these decoder assets in
+// public/draco so their URLs are stable in both Vite development and production.
+const sharedDracoLoader = new DRACOLoader();
+sharedDracoLoader.setDecoderPath('/draco/');
+const sharedGltfLoader = new GLTFLoader().setDRACOLoader(sharedDracoLoader);
 const sharedStlLoader = new STLLoader();
-const sharedTexLoader = new THREE.TextureLoader();
 
 const OUTPOST_COMPONENT_NAMES = {
   '000': 'TUNNEL JUNCTION',
@@ -52,12 +57,42 @@ function loadCachedGLTF(path, onLoad, onProgress, onError) {
   sharedGltfLoader.load(
     path,
     gltf => {
+      registerCachedScene(gltf.scene);
       ASSET_CACHE.gltfs.set(path, gltf.scene);
       onLoad(gltf.scene.clone(true));
     },
     onProgress,
     onError
   );
+}
+
+// GPU resources owned by the persistent GLTF cache must survive engine
+// destroy() — disposing them would force expensive re-uploads next session.
+const cachedGeometries = new WeakSet();
+const cachedMaterials = new WeakSet();
+const cachedTextureImages = new WeakSet();
+
+function registerCachedScene(sceneRoot) {
+  sceneRoot.traverse(object => {
+    if (object.geometry) cachedGeometries.add(object.geometry);
+    if (object.material) {
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        cachedMaterials.add(material);
+        for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'alphaMap', 'specularMap']) {
+          if (material[key]?.image) cachedTextureImages.add(material[key].image);
+        }
+      }
+    }
+  });
+}
+
+function scheduleIdle(task) {
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(task, { timeout: 20000 });
+  } else {
+    window.setTimeout(task, 2500);
+  }
 }
 
 export function createLunarEngine(canvas, callbacks = {}) {
@@ -712,15 +747,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
     startEventReturn(onReturned);
   }
 
-  // Milky Way Skybox: Cached & mipmap-free to save ~45MB VRAM and eliminate hitching
+  // Milky Way Skybox: cached, mipmap-free, downscaled to 4K at decode time
+  // (the 8K source would cost ~45MB VRAM and a long first-upload stall).
   if (ASSET_CACHE.skyTexture) {
     scene.background = ASSET_CACHE.skyTexture;
     scene.backgroundIntensity = 0.8;
   } else {
-    sharedTexLoader.load(
-      '/lunar/textures/8k_stars_milky_way.jpg',
-      texture => {
-        texture.colorSpace = THREE.SRGBColorSpace;
+    loadDownscaledTexture('/lunar/textures/8k_stars_milky_way.jpg', { maxWidth: 4096, maxHeight: 2048 })
+      .then(texture => {
         texture.mapping = THREE.EquirectangularReflectionMapping;
         texture.generateMipmaps = false;
         texture.minFilter = THREE.LinearFilter;
@@ -730,10 +764,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
           scene.background = texture;
           scene.backgroundIntensity = 0.8;
         }
-      },
-      undefined,
-      () => console.warn('Could not load Milky Way texture.')
-    );
+      })
+      .catch(() => console.warn('Could not load Milky Way texture.'));
   }
 
   // Earth
@@ -751,25 +783,24 @@ export function createLunarEngine(canvas, callbacks = {}) {
   ).normalize();
 
   const earthTexturePaths = [
-    '/Textures/8k_earth_daymap.jpg',
-    '/Textures/8k_earth_nightmap.jpg',
-    '/Textures/8k_earth_clouds.jpg',
-    '/Textures/8k_earth_specular.jpeg',
+    { path: '/Textures/8k_earth_daymap.jpg', colorSpace: THREE.SRGBColorSpace, budget: 4096 },
+    { path: '/Textures/8k_earth_nightmap.jpg', colorSpace: THREE.SRGBColorSpace, budget: 4096 },
+    { path: '/Textures/8k_earth_clouds.jpg', colorSpace: THREE.SRGBColorSpace, budget: 2048 },
+    { path: '/Textures/8k_earth_specular.jpeg', colorSpace: THREE.NoColorSpace, budget: 2048 },
   ];
   const setupEarth = ([dayMap, nightMap, cloudMap, specularMap]) => {
     if (isDestroyed) return;
-    dayMap.colorSpace = THREE.SRGBColorSpace;
-    nightMap.colorSpace = THREE.SRGBColorSpace;
-    cloudMap.colorSpace = THREE.SRGBColorSpace;
-    specularMap.colorSpace = THREE.NoColorSpace;
+    // Full 8K maps would allocate ~134MB of VRAM each; the budgeted decode
+    // keeps the visible quality at a fraction of the memory and upload cost.
+    const maxAnisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
     for (const texture of [dayMap, nightMap, cloudMap, specularMap]) {
       texture.wrapS = THREE.RepeatWrapping;
-      texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      texture.anisotropy = maxAnisotropy;
       texture.needsUpdate = true;
     }
 
     const earthSurface = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 128, 96),
+      new THREE.SphereGeometry(1, 96, 64),
       new THREE.MeshPhongMaterial({
         map: dayMap,
         emissiveMap: nightMap,
@@ -781,7 +812,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       })
     );
     const earthClouds = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 128, 96),
+      new THREE.SphereGeometry(1, 96, 64),
       new THREE.MeshPhongMaterial({
         map: cloudMap,
         alphaMap: cloudMap,
@@ -805,8 +836,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
   if (ASSET_CACHE.earthTextures) {
     setupEarth(ASSET_CACHE.earthTextures);
   } else {
-    Promise.all(earthTexturePaths.map(path => new Promise((resolve, reject) => {
-      sharedTexLoader.load(path, resolve, undefined, reject);
+    Promise.all(earthTexturePaths.map(entry => loadDownscaledTexture(entry.path, {
+      maxWidth: entry.budget,
+      maxHeight: Math.round(entry.budget / 2),
+      colorSpace: entry.colorSpace,
     }))).then(textures => {
       ASSET_CACHE.earthTextures = textures;
       setupEarth(textures);
@@ -972,6 +1005,18 @@ export function createLunarEngine(canvas, callbacks = {}) {
           airlockTriggerRadius = AIRLOCK_PROMPT_DISTANCE;
 
           onLoading({ active: false, text: 'SURFACE RECON READY', progress: 100 });
+
+          // Warm up GL programs and pull the interior models in while the GPU
+          // and network are idle, so entering the airlock/modules never hitches.
+          precompileShaders();
+          scheduleIdle(() => {
+            if (isDestroyed) return;
+            loadCachedGLTF('/lunar/airlock.glb', () => { }, undefined, () => { });
+            loadCachedGLTF('/lunar/greenhouse.glb', () => { }, undefined, () => { });
+            loadCachedGLTF('/lunar/tomato_plant.glb', () => { }, undefined, () => { });
+            loadCachedGLTF('/lunar/outpost_interior_kit.glb', () => { }, undefined, () => { });
+            loadCachedGLTF('/lunar/sci-fi_lab.glb', () => { }, undefined, () => { });
+          });
         },
         event => {
           if (event.total) {
@@ -1030,6 +1075,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
   horizon.rotation.x = -Math.PI / 2;
   horizon.position.y = -1.2;
   scene.add(horizon);
+
+  // Static scenery never moves again after placement: stop recomposing its
+  // matrices every frame (saves per-frame CPU across hundreds of outpost nodes).
+  function precompileShaders() {
+    // Compiles scene programs in a background worker so the first frame after
+    // a large model appears doesn't stall on shader compilation.
+    renderer.compileAsync?.(scene, camera);
+  }
 
   function addOutpostPartLabels(outpost) {
     const partGroups = [];
@@ -2372,14 +2425,22 @@ export function createLunarEngine(canvas, callbacks = {}) {
       // Deep recursive disposal of un-cached mesh geometries & materials
       scene.traverse(obj => {
         if (obj.isMesh) {
-          if (obj.geometry && obj.geometry !== ASSET_CACHE.apollo12Geo && obj.geometry !== ASSET_CACHE.apollo16Geo) {
+          if (
+            obj.geometry
+            && !cachedGeometries.has(obj.geometry)
+            && obj.geometry !== ASSET_CACHE.apollo12Geo
+            && obj.geometry !== ASSET_CACHE.apollo16Geo
+          ) {
             obj.geometry.dispose();
           }
           if (obj.material) {
             const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
             for (let i = 0; i < mats.length; i++) {
               const m = mats[i];
-              const isCachedTexture = texture => texture === ASSET_CACHE.skyTexture || ASSET_CACHE.earthTextures?.includes(texture);
+              if (cachedMaterials.has(m)) continue;
+              const isCachedTexture = texture => texture === ASSET_CACHE.skyTexture
+                || ASSET_CACHE.earthTextures?.includes(texture)
+                || cachedTextureImages.has(texture.image);
               for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'alphaMap', 'specularMap']) {
                 if (m[key] && !isCachedTexture(m[key])) m[key].dispose();
               }

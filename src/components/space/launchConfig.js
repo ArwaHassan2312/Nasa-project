@@ -7,7 +7,7 @@ import introVideo from "../../assets/videos/11892851-hd_1280_720_24fps.mp4";
 export const ASSETS = {
   rocket: '/models/jupiter-c-rocket.glb',
   mars: '/models/24881_Mars_1_6792.glb',
-  moon: '/models/moon.glb',
+  moon: '/models/moon-v2.glb',
   background: backgroundUrl,
   // earthImage: earthImageUrl,
   introVideo: introVideo,
