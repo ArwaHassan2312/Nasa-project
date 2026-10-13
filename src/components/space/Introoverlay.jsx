@@ -7,12 +7,17 @@ const LINES = [
   'And the future of your outpost is in your hands.',
 ];
 
-export default function IntroOverlay({ visible, ready = false, onStart }) {
+export default function IntroOverlay({ visible, ready = false, onStart, onSkip }) {
   const [typed, setTyped] = useState(false);
   const showButton = ready && typed && visible;
 
   return (
     <div className={`intro-overlay ui-fade ${visible ? '' : 'ui-hidden'}`}>
+      {visible && onSkip && (
+        <button type="button" className="intro-skip-btn" onClick={onSkip}>
+          Skip intro →
+        </button>
+      )}
       <div className="intro-title">
         {ready && <NeonTypewriter lines={LINES} startDelay={600} onDone={() => setTyped(true)} />}
       </div>

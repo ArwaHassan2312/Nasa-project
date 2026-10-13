@@ -150,6 +150,34 @@ html, body, #root { height: 100%; margin: 0; }
 .mission-btn:active:not(:disabled) { transform: scale(0.98); }
 .mission-btn:focus-visible { outline: 2px solid #7ff0ff; outline-offset: 5px; }
 
+/* ---------- skip intro ---------- */
+.intro-skip-btn {
+  position: absolute;
+  top: clamp(12px, 3vh, 24px);
+  right: clamp(12px, 3vw, 28px);
+  pointer-events: auto;
+  padding: 8px 16px;
+  font-family: var(--neon-font);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #9fdcff;
+  background: rgba(8, 18, 30, 0.55);
+  border: 1px solid rgba(95, 227, 255, 0.4);
+  border-radius: 999px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+}
+.intro-skip-btn:hover {
+  color: #07141d;
+  background: #7ff0ff;
+  border-color: #7ff0ff;
+  box-shadow: 0 0 16px rgba(127, 240, 255, 0.6);
+}
+.intro-skip-btn:focus-visible { outline: 2px solid #7ff0ff; outline-offset: 3px; }
+
 /* =====================================================================
    Space scene fade-out + destination select
    ===================================================================== */

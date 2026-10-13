@@ -873,6 +873,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const LUNAR_OUTPOST_POSITION_X = 0;
   const LUNAR_OUTPOST_POSITION_Y = 2.9;
   const LUNAR_OUTPOST_POSITION_Z = 0;
+  const OUTPOST_SITE_MARGIN = 6;
+  const OUTPOST_GROUND_EPSILON = 0.05;
+  const FIRST_PERSON_EYE_HEIGHT = 3.2;
   const AIRLOCK_PROMPT_DISTANCE = 26;
   const AIRLOCK_INTERIOR_WIDTH = 25;
   const TOMATO_PLANT_Y_SCALE = 2;
@@ -954,26 +957,30 @@ export function createLunarEngine(canvas, callbacks = {}) {
           outpost.updateMatrixWorld(true);
 
           const bounds = new THREE.Box3().setFromObject(outpost);
-          const targetX = apollo16.terrain.position.x;
-          const targetZ = 0;
+          const flatSite = findFlattestOutpostSite(apollo16.terrain.position.x, 0);
+          const targetX = flatSite ? flatSite.x : apollo16.terrain.position.x;
+          const targetZ = flatSite ? flatSite.z : 0;
           outpost.position.x += targetX - (bounds.min.x + bounds.max.x) / 2;
           outpost.position.z += targetZ - (bounds.min.z + bounds.max.z) / 2;
           outpost.updateMatrixWorld(true);
 
-          // Fast terrain raycast
-          const raycaster = new THREE.Raycaster(
-            new THREE.Vector3(targetX, sharedRelief + sceneWidth, targetZ),
-            new THREE.Vector3(0, -1, 0),
-            0,
-            sceneWidth * 3
-          );
-          raycaster.firstHitOnly = true;
-          const terrainHits = raycaster.intersectObjects([apollo12.terrain, apollo16.terrain], false);
-          const surfaceY = terrainHits.length ? terrainHits[0].point.y : 0;
+          // Rest the outpost on the highest ground under its footprint so all
+          // components touch flat terrain instead of floating or sinking.
+          let surfaceY = flatSite && isFinite(flatSite.maxH) ? flatSite.maxH : null;
+          if (surfaceY === null) {
+            const raycaster = new THREE.Raycaster(
+              new THREE.Vector3(targetX, sharedRelief + sceneWidth, targetZ),
+              new THREE.Vector3(0, -1, 0),
+              0,
+              sceneWidth * 3
+            );
+            raycaster.firstHitOnly = true;
+            const terrainHits = raycaster.intersectObjects([apollo12.terrain, apollo16.terrain], false);
+            surfaceY = terrainHits.length ? terrainHits[0].point.y : 0;
+          }
           const scaledBounds = new THREE.Box3().setFromObject(outpost);
-          outpost.position.y += surfaceY - scaledBounds.min.y;
+          outpost.position.y += surfaceY - scaledBounds.min.y + OUTPOST_GROUND_EPSILON;
           outpost.position.x += LUNAR_OUTPOST_POSITION_X;
-          outpost.position.y += LUNAR_OUTPOST_POSITION_Y;
           outpost.position.z += LUNAR_OUTPOST_POSITION_Z;
           outpost.updateMatrixWorld(true);
 
@@ -983,7 +990,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           const viewOffset = Math.max(outpostSize.x, outpostSize.z) * 0.78;
           firstPersonStart.set(
             outpostCenter.x + viewOffset * 0.7,
-            surfaceY + LUNAR_OUTPOST_POSITION_Y + Math.max(2, outpostSize.y * 0.14),
+            surfaceY + FIRST_PERSON_EYE_HEIGHT,
             outpostCenter.z + viewOffset * 0.7
           );
           firstPersonLookAt.set(outpostCenter.x, outpostBounds.min.y + outpostSize.y * 0.45, outpostCenter.z);
@@ -1412,9 +1419,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
     activeModuleInterior = createModuleInterior(target.roomType, workshopModel);
     scene.add(activeModuleInterior);
     activeModuleInteriorBounds = new THREE.Box3().setFromObject(activeModuleInterior);
-    camera.position.set(0, 1.65, 2.55);
+    camera.position.set(0, FIRST_PERSON_EYE_HEIGHT, 2.55);
     camera.rotation.order = 'YXZ';
-    camera.lookAt(0, 1.65, -1.5);
+    camera.lookAt(0, FIRST_PERSON_EYE_HEIGHT, -1.5);
     firstPersonYaw = camera.rotation.y;
     firstPersonPitch = camera.rotation.x;
     activeModuleInteriorLight = new THREE.PointLight(0xe4edff, 14, 24);
@@ -1530,7 +1537,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     scene.add(airlockInterior);
 
     const roomSize = airlockInteriorBounds.getSize(new THREE.Vector3());
-    const cameraY = airlockInteriorBounds.min.y + roomSize.y * 0.5;
+    const cameraY = Math.min(
+      airlockInteriorBounds.min.y + FIRST_PERSON_EYE_HEIGHT,
+      airlockInteriorBounds.max.y - 0.3
+    );
     const entryInset = Math.max(0.8, Math.max(roomSize.x, roomSize.z) * 0.12);
     const lookTarget = airlockCenter.clone();
     airlockLongAxis = roomSize.x >= roomSize.z ? 'x' : 'z';
@@ -1694,7 +1704,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     scene.add(greenhouseInterior);
     if (airlockInteriorLight) scene.remove(airlockInteriorLight);
     const size = greenhouseInteriorBounds.getSize(new THREE.Vector3());
-    const y = greenhouseInteriorBounds.min.y + size.y * 0.5;
+    const y = Math.min(
+      greenhouseInteriorBounds.min.y + FIRST_PERSON_EYE_HEIGHT,
+      greenhouseInteriorBounds.max.y - 0.3
+    );
     const inset = Math.max(0.8, Math.max(size.x, size.z) * 0.12);
     const target = greenhouseCenter.clone();
     if (size.x >= size.z) {
@@ -2132,6 +2145,41 @@ export function createLunarEngine(canvas, callbacks = {}) {
     });
   }
 
+  // Find the flattest outpost-sized patch of terrain near the anchor point so the
+  // whole model can rest on level ground with every component touching it.
+  function findFlattestOutpostSite(anchorX, anchorZ) {
+    if (!heightGrid) return null;
+    const half = LUNAR_OUTPOST_WIDTH / 2 + OUTPOST_SITE_MARGIN;
+    const { minX, minZ, cols, rows, CELL } = heightGrid;
+    const maxGridX = minX + (cols - 1) * CELL;
+    const maxGridZ = minZ + (rows - 1) * CELL;
+    const step = 2;
+    let best = null;
+    for (let cx = minX + half; cx <= maxGridX - half; cx += step) {
+      for (let cz = minZ + half; cz <= maxGridZ - half; cz += step) {
+        let minH = Infinity;
+        let maxH = -Infinity;
+        let worse = false;
+        for (let sx = cx - half; sx <= cx + half && !worse; sx += step) {
+          for (let sz = cz - half; sz <= cz + half; sz += step) {
+            const h = sampleGroundHeight(sx, sz);
+            if (h === null || !isFinite(h)) { worse = true; break; }
+            if (h < minH) minH = h;
+            if (h > maxH) maxH = h;
+            // Score can only grow from here; prune windows that can't win.
+            if (best && (maxH - minH) > best.score) { worse = true; break; }
+          }
+        }
+        if (worse) continue;
+        const range = maxH - minH;
+        const dist = Math.hypot(cx - anchorX, cz - anchorZ);
+        const score = range + dist * 0.002;
+        if (!best || score < best.score) best = { x: cx, z: cz, minH, maxH, score };
+      }
+    }
+    return best;
+  }
+
   function buildHeightGrid() {
     const CELL = 1;
     const box = new THREE.Box3();
@@ -2193,12 +2241,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function keepCameraAboveSurface() {
     const h = sampleGroundHeight(camera.position.x, camera.position.z);
-    if (h !== null) camera.position.y = h + 1.65;
+    if (h !== null) camera.position.y = h + FIRST_PERSON_EYE_HEIGHT;
   }
 
   function keepCameraInsideVerticalBounds(bounds) {
     if (!bounds) return;
-    const floor = bounds.min.y + 1.65;
+    const floor = bounds.min.y + FIRST_PERSON_EYE_HEIGHT;
     const ceiling = bounds.max.y - 0.2;
     camera.position.y = floor <= ceiling
       ? THREE.MathUtils.clamp(camera.position.y, floor, ceiling)

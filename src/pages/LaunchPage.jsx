@@ -28,6 +28,10 @@ export default function LaunchPage({
       setPhase('lunar');
     }
   }, [onMissionStart]);
+  const handleSkipToOutpost = useCallback(() => {
+    onMissionStart?.();
+    setPhase('lunar');
+  }, [onMissionStart]);
 
   const handleExitToOrbit = useCallback(() => {
     onMissionPause?.();
@@ -59,7 +63,7 @@ export default function LaunchPage({
           )}
           <IntroBackdrop visible={phase === 'intro'} onFinish={handleVideoDone} />
           {phase !== 'select' && (
-            <IntroOverlay visible={phase === 'intro'} ready={videoDone} onStart={handleStart} />
+            <IntroOverlay visible={phase === 'intro'} ready={videoDone} onStart={handleStart} onSkip={handleSkipToOutpost} />
           )}
           {phase === 'select' && (
             <MissionSelect
