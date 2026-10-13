@@ -1,19 +1,28 @@
 import * as THREE from 'three';
-import backgroundUrl from '../../assets/images/1773008.png';
+import backgroundUrl from '../../assets/images/download.jpg';
 // import earthImageUrl from '../../assets/images/earth/download.jpg';
-import introVideo from "../../assets/videos/11892851-hd_1280_720_24fps.mp4";
+import introVideo from "../../assets/videos/69727-533374268_medium.mp4";
+import introVideoSecond from "../../assets/videos/15325344_3840_2160_24fps.mp4";
+import introVoiceover from "../../assets/audio/sound-30sec.mp3";
+import moonImage from '../../assets/images/mike-petrucci-uIf6H1or1nE-unsplash-removebg-preview.png';
+import marsImage from '../../assets/images/pexels-zelch-20337611-removebg-preview.png';
 
 // Files in /public are served from the site root (no "/public" prefix).
 export const ASSETS = {
   rocket: '/models/jupiter-c-rocket.glb',
   mars: '/models/24881_Mars_1_6792.glb',
-  moon: '/models/moon-v2.glb',
+  moon: '/models/moon.glb',
   background: backgroundUrl,
   // earthImage: earthImageUrl,
   introVideo: introVideo,
+  introVideoSecond,
+  introVoiceover,
+  moonImage,
+  marsImage,
 };
 
-export const INTRO_VIDEO_SECONDS = 1;
+export const INTRO_VIDEO_SECONDS = 30;
+export const INTRO_VIDEO_SECOND_SECONDS = 21;
 
 // Scene units. The rocket is exaggerated vs. the real Earth, otherwise it would be sub-pixel.
 export const EARTH_RADIUS = 10;

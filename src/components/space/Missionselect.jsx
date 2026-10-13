@@ -216,12 +216,16 @@ export default function MissionSelect({ selected, onSelect, onLaunchMission }) {
               onPointerEnter={() => setHover(p.id)}
               onPointerLeave={() => setHover(null)}
             >
-              <div className="dest-canvas">
-                <PlanetCanvas
-                  planet={p}
-                  hovered={hover === p.id && !selected}
-                  interactive={interactive}
-                />
+              <div className={`dest-canvas ${!selected ? 'dest-canvas--image' : ''}`}>
+                {selected ? (
+                  <PlanetCanvas
+                    planet={p}
+                    hovered={hover === p.id && !selected}
+                    interactive={interactive}
+                  />
+                ) : (
+                  <img className="dest-planet-image" src={p.id === 'moon' ? ASSETS.moonImage : ASSETS.marsImage} alt={`${p.name}`} />
+                )}
               </div>
               <div className="dest-meta">
                 <div className="planet-name">{p.name}</div>

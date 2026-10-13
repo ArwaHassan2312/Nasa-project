@@ -1,25 +1,35 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import NeonTypewriter from './NeonTypewriter';
 
-const LINES = [
-  'Every decision matters.',
-  'Every resource counts.',
-  'And the future of your outpost is in your hands.',
-];
+const FINAL_LINES = ['A new world. A new frontier. An extraordinary journey awaits.'];
 
-export default function IntroOverlay({ visible, ready = false, onStart, onSkip }) {
-  const [typed, setTyped] = useState(false);
-  const showButton = ready && typed && visible;
+export default function IntroOverlay({ visible, finished = false, onStart, onSkip }) {
+  const [textVisible, setTextVisible] = useState(false);
+  const [buttonVisible, setButtonVisible] = useState(false);
+
+  useEffect(() => {
+    if (!finished) return undefined;
+
+    const textFrame = requestAnimationFrame(() => {
+      setTextVisible(true);
+    });
+
+    return () => {
+      cancelAnimationFrame(textFrame);
+    };
+  }, [finished]);
+
+  const handleTextDone = () => {
+    setButtonVisible(true);
+  };
+
+  const showButton = finished && buttonVisible && visible;
 
   return (
-    <div className={`intro-overlay ui-fade ${visible ? '' : 'ui-hidden'}`}>
-      {visible && onSkip && (
-        <button type="button" className="intro-skip-btn" onClick={onSkip}>
-          Skip intro →
-        </button>
-      )}
-      <div className="intro-title">
-        {ready && <NeonTypewriter lines={LINES} startDelay={600} onDone={() => setTyped(true)} />}
+    <div className={`intro-overlay ui-fade ${visible ? '' : 'ui-hidden'} ${finished ? 'intro-overlay--finished' : ''}`}>
+      {!finished && <button type="button" className="intro-skip" onClick={onSkip}>SKIP</button>}
+      <div className={`intro-title intro-final-title ui-fade ${finished && textVisible ? '' : 'ui-hidden'}`}>
+        {finished && <NeonTypewriter lines={FINAL_LINES} startDelay={350} speed={11} lineDelay={110} punctDelay={50} onDone={handleTextDone} />}
       </div>
 
       <div className={`intro-action ui-fade ${showButton ? '' : 'ui-hidden'}`}>
