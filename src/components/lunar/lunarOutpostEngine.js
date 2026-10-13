@@ -219,6 +219,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let outsideCameraPitch = 0;
   let airlockPromptDismissed = false;
   let airlockLoading = false;
+  let heightGrid = null;
 
   // Track dynamic sprite textures and materials for leak-free disposal
   const labelTextures = [];
@@ -2122,8 +2123,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
       message: `You are near the ${nearest.name.toLowerCase()}. Enter to explore its interior.`
     });
   }
-
-  let heightGrid = null;
 
   function buildHeightGrid() {
     const CELL = 1;

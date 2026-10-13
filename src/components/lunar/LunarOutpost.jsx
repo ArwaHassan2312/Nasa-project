@@ -43,6 +43,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const [selectedMapTaskId, setSelectedMapTaskId] = useState(null);
   const [selectedMapComponentId, setSelectedMapComponentId] = useState(null);
   const [mapSnapshot, setMapSnapshot] = useState(null);
+  const [miniSnapshot, setMiniSnapshot] = useState(null);
   const {
     eventPhase,
     currentEvent,
@@ -64,24 +65,36 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
 
   useEffect(() => {
     if (!containerRef.current) return;
+    const container = containerRef.current;
 
     const canvas = document.createElement('canvas');
     canvas.className = 'lunar-canvas';
-    containerRef.current.prepend(canvas);
+    container.prepend(canvas);
 
-    const engine = createLunarEngine(canvas, {
-      onLoading: (state) => setIsLoading(state.active),
-      onModeChange: (mode) => setCameraMode(mode),
-      onPromptChange: (type, data) => setPrompt({ type, data }),
-      onInsidePanelChange: (panel) => setInsidePanel(panel)
-    });
+    let engine = null;
+    try {
+      engine = createLunarEngine(canvas, {
+        onLoading: (state) => setIsLoading(state.active),
+        onModeChange: (mode) => setCameraMode(mode),
+        onPromptChange: (type, data) => setPrompt({ type, data }),
+        onInsidePanelChange: (panel) => setInsidePanel(panel)
+      });
+    } catch (error) {
+      console.error('[LunarOutpost] Engine failed to start, retry on next mount.', error);
+      if (canvas.parentNode) canvas.remove();
+      return undefined;
+    }
 
     engineRef.current = engine;
 
     return () => {
-      engine?.destroy?.();
+      try {
+        engine?.destroy?.();
+      } catch (error) {
+        console.error('[LunarOutpost] Engine destroy failed.', error);
+      }
       engineRef.current = null;
-      canvas.remove();
+      if (canvas.parentNode) canvas.remove();
     };
   }, []);
 
@@ -109,6 +122,35 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [prompt.type, simulation.eventPhase]);
+
+  useEffect(() => {
+    if (isLoading || simulation.gameStatus !== 'playing') return undefined;
+
+    const updateMiniSnapshot = () => {
+      const nextSnapshot = engineRef.current?.getMapSnapshot() ?? null;
+      setMiniSnapshot((currentSnapshot) => {
+        if (!nextSnapshot) return currentSnapshot;
+        const samePlayer = currentSnapshot?.player === null && nextSnapshot.player === null
+          || currentSnapshot?.player && nextSnapshot.player
+            && Math.abs(currentSnapshot.player.x - nextSnapshot.player.x) < 0.3
+            && Math.abs(currentSnapshot.player.z - nextSnapshot.player.z) < 0.3
+            && Math.abs(currentSnapshot.player.yaw - nextSnapshot.player.yaw) < 0.05
+            && currentSnapshot.player.location === nextSnapshot.player.location;
+        if (
+          currentSnapshot?.components === nextSnapshot.components
+          && currentSnapshot.cameraMode === nextSnapshot.cameraMode
+          && samePlayer
+        ) {
+          return currentSnapshot;
+        }
+        return nextSnapshot;
+      });
+    };
+
+    updateMiniSnapshot();
+    const miniIntervalId = window.setInterval(updateMiniSnapshot, 250);
+    return () => window.clearInterval(miniIntervalId);
+  }, [isLoading, simulation.gameStatus]);
 
   useEffect(() => {
     if (
@@ -201,6 +243,21 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const mapViewBox = mapSnapshot
     ? `${mapSnapshot.bounds.minX - mapPadding} ${-mapSnapshot.bounds.maxZ - mapPadding} ${mapSnapshot.bounds.maxX - mapSnapshot.bounds.minX + mapPadding * 2} ${mapSnapshot.bounds.maxZ - mapSnapshot.bounds.minZ + mapPadding * 2}`
     : undefined;
+  const miniSpan = miniSnapshot
+    ? Math.max(
+      miniSnapshot.bounds.maxX - miniSnapshot.bounds.minX,
+      miniSnapshot.bounds.maxZ - miniSnapshot.bounds.minZ,
+    )
+    : 1;
+  const miniPadding = miniSpan * 0.12;
+  const miniViewBox = miniSnapshot
+    ? `${miniSnapshot.bounds.minX - miniPadding} ${-miniSnapshot.bounds.maxZ - miniPadding} ${miniSnapshot.bounds.maxX - miniSnapshot.bounds.minX + miniPadding * 2} ${miniSnapshot.bounds.maxZ - miniSnapshot.bounds.minZ + miniPadding * 2}`
+    : undefined;
+  const showMinimap = miniSnapshot && miniViewBox
+    && !isLoading
+    && !mapIsOpen
+    && simulation.gameStatus === 'playing'
+    && simulation.eventPhase === 'idle';
 
   return (
     <div className="lunar-root" ref={containerRef}>
@@ -316,6 +373,62 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
           )}
         </div>
       </div>
+
+      {/* Live opacity minimap - top-left under Mission Control, realtime player tracking */}
+      {showMinimap && (
+        <div className="lunar-minimap" aria-label="Live outpost minimap" role="img">
+          <div className="lunar-minimap-header">
+            <span>LIVE MAP</span>
+            <i className={miniSnapshot.player ? 'on' : 'off'} />
+          </div>
+          <svg className="lunar-minimap-svg" viewBox={miniViewBox} aria-hidden="true">
+            {miniSnapshot.components.map((component) => {
+              const x = (component.minX + component.maxX) / 2;
+              const y = -(component.minZ + component.maxZ) / 2;
+              const width = Math.max(component.maxX - component.minX, miniSpan * 0.012);
+              const height = Math.max(component.maxZ - component.minZ, miniSpan * 0.012);
+              const task = simulation.dailyChallenges.find(
+                (challenge) => challenge.targetComponentId === component.id && challenge.status === 'inProgress',
+              );
+              return (
+                <g key={component.id} className={`lunar-minimap-component lunar-minimap-${component.category}`}>
+                  {component.category === 'equipment' ? (
+                    <circle cx={x} cy={y} r={Math.max(miniSpan * 0.012, 0.7)} className="lunar-minimap-equipment" />
+                  ) : (
+                    <rect
+                      x={x - width / 2}
+                      y={y - height / 2}
+                      width={width}
+                      height={height}
+                      rx={Math.max(miniSpan * 0.006, 0.25)}
+                      className="lunar-minimap-footprint"
+                    />
+                  )}
+                  {task && (
+                    <circle cx={x} cy={y} r={miniSpan * 0.014} className="lunar-minimap-task-dot" />
+                  )}
+                </g>
+              );
+            })}
+            {miniSnapshot.player && (
+              <g
+                className="lunar-minimap-player"
+                transform={`translate(${miniSnapshot.player.x} ${-miniSnapshot.player.z})`}
+              >
+                <circle r={miniSpan * 0.055} className="lunar-minimap-player-halo" />
+                <path
+                  d="M 0 -1.8 L 1.25 1.15 L 0 0.55 L -1.25 1.15 Z"
+                  transform={`rotate(${miniSnapshot.player.yaw * 180 / Math.PI}) scale(${miniSpan * 0.026})`}
+                  className="lunar-minimap-player-arrow"
+                />
+              </g>
+            )}
+          </svg>
+          {!miniSnapshot.player && (
+            <div className="lunar-minimap-note">FREE CAM</div>
+          )}
+        </div>
+      )}
 
       {mapIsOpen && (
         <div className="lunar-map-backdrop" onClick={() => setMapOpen(false)}>
