@@ -202,6 +202,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let moduleReturnMode = 'exterior';
   let moduleInteriorLoading = false;
   let workshopInteriorLoading = false;
+  let kitWaiters = [];
+  let workshopWaiters = [];
   let greenhouseReturnMode = 'airlock';
   let airlockReturnPosition = null;
   let airlockReturnYaw = 0;
@@ -245,8 +247,21 @@ export function createLunarEngine(canvas, callbacks = {}) {
       currentPromptId = data?.id || null;
       currentPromptTitle = data?.title || null;
       onPromptChange(type, data);
-      if (type && document.pointerLockElement === canvas) {
-        document.exitPointerLock?.();
+      // Keep pointer lock while proximity prompts are visible so the player
+      // stays in moving/looking state and the cursor stays hidden.
+      // Entering is done via Enter/E, dismissing happens by walking away or N.
+    }
+  }
+
+  function ensurePointerLocked() {
+    // Best-effort: keep the player in moving/looking state when entering
+    // interiors. If lock was lost (e.g. Esc), try to re-acquire it.
+    if (document.pointerLockElement !== canvas) {
+      try {
+        const request = canvas.requestPointerLock?.();
+        if (request?.catch) request.catch(() => {});
+      } catch {
+        /* pointer lock unavailable - mouse look resumes on next click */
       }
     }
   }
@@ -1232,6 +1247,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function ensureComponentInteriorKit(onReady) {
     if (componentInteriorKit) { onReady(componentInteriorKit); return; }
+    kitWaiters.push(onReady);
     if (moduleInteriorLoading) return;
     moduleInteriorLoading = true;
     loadCachedGLTF(
@@ -1239,18 +1255,22 @@ export function createLunarEngine(canvas, callbacks = {}) {
       kit => {
         moduleInteriorLoading = false;
         componentInteriorKit = kit;
-        onReady(componentInteriorKit);
+        const waiters = kitWaiters;
+        kitWaiters = [];
+        waiters.forEach(cb => { try { cb(componentInteriorKit); } catch (err) { console.error(err); } });
       },
       undefined,
       error => {
         console.error('Unable to load modular outpost interior kit', error);
         moduleInteriorLoading = false;
+        kitWaiters = [];
       }
     );
   }
 
   function ensureWorkshopInterior(onReady) {
     if (workshopInteriorModel) { onReady(workshopInteriorModel); return; }
+    workshopWaiters.push(onReady);
     if (workshopInteriorLoading) return;
     workshopInteriorLoading = true;
     loadCachedGLTF(
@@ -1258,12 +1278,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
       model => {
         workshopInteriorLoading = false;
         workshopInteriorModel = model;
-        onReady(workshopInteriorModel);
+        const waiters = workshopWaiters;
+        workshopWaiters = [];
+        waiters.forEach(cb => { try { cb(workshopInteriorModel); } catch (err) { console.error(err); } });
       },
       undefined,
       error => {
         console.error('Unable to load workshop interior model', error);
         workshopInteriorLoading = false;
+        workshopWaiters = [];
       }
     );
   }
@@ -1371,6 +1394,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function enterModuleInterior(target, workshopModel) {
+    if (activeModuleInterior) return;
     outsideCameraPosition = camera.position.clone();
     outsideCameraYaw = firstPersonYaw;
     outsideCameraPitch = firstPersonPitch;
@@ -1393,7 +1417,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     cameraMode = 'interior';
     onModeChange(cameraMode);
     controls.enabled = false;
-    if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+    ensurePointerLocked();
     setPrompt(null);
     onInsidePanelChange({
       visible: true,
@@ -1443,7 +1467,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function enterNearbyComponent() {
-    if (!activeComponentTarget) return;
+    if (cameraMode !== 'first-person' || !activeComponentTarget) return;
     const target = activeComponentTarget;
     moduleReturnMode = 'exterior';
     if (target.roomType === 'greenhouse') {
@@ -1520,7 +1544,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     cameraMode = 'interior';
     onModeChange(cameraMode);
     controls.enabled = false;
-    if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+    ensurePointerLocked();
     setPrompt(null);
     airlockEndPromptDismissed = false;
     onInsidePanelChange({
@@ -1531,7 +1555,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function enterAirlock() {
-    if (airlockLoading) return;
+    if (cameraMode !== 'first-person' || airlockLoading) return;
     if (airlockInterior) {
       enterAirlockInterior();
       return;
@@ -1678,7 +1702,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     cameraMode = 'interior';
     onModeChange(cameraMode);
     controls.enabled = false;
-    if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+    ensurePointerLocked();
     greenhouseInteriorLight = new THREE.PointLight(0xe4ffd1, 12, Math.max(size.x, size.y, size.z) * 3);
     greenhouseInteriorLight.position.set(camera.position.x, y + size.y * 0.08, camera.position.z);
     scene.add(greenhouseInteriorLight);
@@ -1799,7 +1823,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     cameraMode = 'interior';
     onModeChange(cameraMode);
     controls.enabled = false;
-    if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+    ensurePointerLocked();
     outsideCameraPosition = camera.position.clone();
     outsideCameraYaw = firstPersonYaw;
     outsideCameraPitch = firstPersonPitch;
@@ -1905,16 +1929,21 @@ export function createLunarEngine(canvas, callbacks = {}) {
       event.preventDefault();
       return;
     }
-    const key = event.key.toLowerCase();
-    if (key === 'e' && cameraMode === 'interior') {
+    const rawKey = event.key || '';
+    const key = rawKey.toLowerCase();
+    const code = event.code || '';
+    const isEnter = key === 'enter' || code === 'Enter' || code === 'NumpadEnter';
+    const isConfirm = key === 'e' || isEnter;
+    if (isConfirm && cameraMode === 'interior') {
       event.preventDefault();
       if (currentPromptType === 'component') enterNearbyComponent();
+      else if (currentPromptType === 'greenhouseDoor') returnToAirlock();
       else if (activeModuleInterior?.visible) exitModuleInterior();
       else if (greenhouseInterior?.visible) returnToAirlock();
       else exitAirlock();
       return;
     }
-    if (key === 'e' && cameraMode === 'first-person' && currentPromptType === 'component') {
+    if (isConfirm && cameraMode === 'first-person' && currentPromptType === 'component') {
       event.preventDefault();
       enterNearbyComponent();
       return;
@@ -1944,7 +1973,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       greenhouseDoorPromptDismissed = true;
       return;
     }
-    if (key === 'e' && cameraMode === 'first-person' && currentPromptType === 'airlock') {
+    if (isConfirm && cameraMode === 'first-person' && currentPromptType === 'airlock') {
       event.preventDefault();
       enterAirlock();
       return;
@@ -1961,15 +1990,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
       dismissedComponentId = activeComponentTarget?.id ?? null;
       return;
     }
-    if (['first-person', 'interior'].includes(cameraMode) && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) {
+    if (['first-person', 'interior'].includes(cameraMode) && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'enter'].includes(key)) {
       event.preventDefault();
     }
-    keys.add(key);
+    if (key !== 'enter') keys.add(key);
   }
 
   function handleKeyUp(event) {
     if (eventCinematic) return;
-    keys.delete(event.key.toLowerCase());
+    keys.delete((event.key || '').toLowerCase());
   }
 
   function handleResize() {

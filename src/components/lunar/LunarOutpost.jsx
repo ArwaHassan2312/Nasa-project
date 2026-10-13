@@ -93,6 +93,23 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     engineRef.current?.setChallengeFlags(simulation.flags);
   }, [simulation.flags]);
 
+  // Fallback: guarantee Enter works while a proximity prompt is visible,
+  // even if the engine key handler missed it (e.g. focus quirks).
+  useEffect(() => {
+    if (!prompt.type || simulation.eventPhase !== 'idle') return undefined;
+    const onKey = (event) => {
+      const key = (event.key || '').toLowerCase();
+      const code = event.code || '';
+      if (key !== 'enter' && code !== 'Enter' && code !== 'NumpadEnter') return;
+      event.preventDefault();
+      if (prompt.type === 'component') engineRef.current?.enterNearbyComponent();
+      else if (prompt.type === 'airlock') engineRef.current?.enterAirlock();
+      else if (prompt.type === 'greenhouseDoor') engineRef.current?.leaveGreenhouse();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [prompt.type, simulation.eventPhase]);
+
   useEffect(() => {
     if (
       !mapOpen
@@ -201,8 +218,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </div>
       )}
 
-      {/* Crosshair in First Person */}
-      {simulation.eventPhase === 'idle' && cameraMode !== 'free' && !insidePanel.visible && !prompt.type && (
+      {/* Crosshair in First Person - stays visible while proximity prompt shows */}
+      {simulation.eventPhase === 'idle' && cameraMode !== 'free' && !insidePanel.visible && (
         <div className="lunar-crosshair" />
       )}
 
@@ -663,112 +680,81 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </div>
       )}
 
-      {/* Interactive Modal Prompts */}
+      {/* Proximity prompts - small bottom toast, pointer lock stays active */}
       {simulation.eventPhase === 'idle' && prompt.type === 'airlock' && (
-        <div className="lunar-modal" role="dialog" aria-labelledby="airlock-title">
-          <div className="lunar-modal-kicker">HABITAT ACCESS</div>
-          <h2 id="airlock-title">{prompt.data?.title || 'Enter the airlock?'}</h2>
-          <p>{prompt.data?.message || 'You are at the habitat entrance.'}</p>
-          <div className="lunar-modal-actions">
-            <button
-              type="button"
-              className="lunar-action-primary"
-              onClick={() => engineRef.current?.enterAirlock()}
-            >
-              YES · ENTER
-            </button>
-            <button
-              type="button"
-              className="lunar-action-secondary"
-              onClick={() => engineRef.current?.dismissAirlock()}
-            >
-              NO · STAY OUTSIDE
-            </button>
+        <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Airlock prompt">
+          <span className="lunar-proximity-dot" aria-hidden="true" />
+          <div className="lunar-proximity-text">
+            <strong>{prompt.data?.title || 'Enter the airlock?'}</strong>
+            <small>Press <kbd>Enter</kbd> to enter · <kbd>N</kbd> to dismiss</small>
           </div>
-          <div className="lunar-modal-hint">Press E to enter · Esc to dismiss</div>
+          <button
+            type="button"
+            className="lunar-proximity-enter"
+            onClick={() => engineRef.current?.enterAirlock()}
+          >
+            ENTER ⏎
+          </button>
         </div>
       )}
 
       {simulation.eventPhase === 'idle' && prompt.type === 'airlockEnd' && (
-        <div className="lunar-modal" role="dialog" aria-labelledby="airlock-end-title">
-          <div className="lunar-modal-kicker">AIRLOCK TRANSIT</div>
-          <h2 id="airlock-end-title">{prompt.data?.title || 'Choose a direction'}</h2>
-          <p>{prompt.data?.message || 'Choose a side: the greenhouse or the workshop.'}</p>
-          <div className="lunar-modal-actions">
+        <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Airlock direction prompt">
+          <span className="lunar-proximity-dot" aria-hidden="true" />
+          <div className="lunar-proximity-text">
+            <strong>{prompt.data?.title || 'Choose a direction'}</strong>
+            <small><kbd>A</kbd>/<kbd>←</kbd> greenhouse · <kbd>D</kbd>/<kbd>→</kbd> workshop</small>
+          </div>
+          <div className="lunar-proximity-split">
             <button
               type="button"
-              className="lunar-action-primary"
+              className="lunar-proximity-enter"
               onClick={() => engineRef.current?.enterGreenhouse()}
             >
-              LEFT · GREENHOUSE
+              ◀ GREEN
             </button>
             <button
               type="button"
-              className="lunar-action-secondary"
+              className="lunar-proximity-enter"
               onClick={() => engineRef.current?.enterWorkshop()}
             >
-              RIGHT · WORKSHOP
+              WORK ▶
             </button>
           </div>
-          <div className="lunar-modal-hint">A or ← for greenhouse · D or → for workshop</div>
         </div>
       )}
 
       {simulation.eventPhase === 'idle' && prompt.type === 'greenhouseDoor' && (
-        <div className="lunar-modal" role="dialog" aria-labelledby="greenhouse-door-title">
-          <div className="lunar-modal-kicker">GREENHOUSE EXIT</div>
-          <h2 id="greenhouse-door-title">{prompt.data?.title || 'Return to the airlock?'}</h2>
-          <p>{prompt.data?.message || 'You are at the greenhouse door. Leave the crop bay and go back to the airlock?'}</p>
-          <div className="lunar-modal-actions">
-            <button
-              type="button"
-              className="lunar-action-primary"
-              onClick={() => engineRef.current?.leaveGreenhouse()}
-            >
-              YES · AIRLOCK
-            </button>
-            <button
-              type="button"
-              className="lunar-action-secondary"
-              onClick={() => engineRef.current?.stayGreenhouse()}
-            >
-              NO · STAY HERE
-            </button>
+        <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Greenhouse door prompt">
+          <span className="lunar-proximity-dot" aria-hidden="true" />
+          <div className="lunar-proximity-text">
+            <strong>{prompt.data?.title || 'Return to the airlock?'}</strong>
+            <small>Press <kbd>Enter</kbd> to return · <kbd>N</kbd> to stay</small>
           </div>
-          <div className="lunar-modal-hint">Press E to return · Esc to stay</div>
+          <button
+            type="button"
+            className="lunar-proximity-enter"
+            onClick={() => engineRef.current?.leaveGreenhouse()}
+          >
+            ENTER ⏎
+          </button>
         </div>
       )}
 
       {simulation.eventPhase === 'idle' && prompt.type === 'component' && (
-        <div className="lunar-modal" role="dialog" aria-labelledby="component-title">
-          <div className="lunar-modal-kicker">
-            {promptedChallenge ? 'DAILY TASK COMPONENT' : 'OUTPOST MODULE'}
+        <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Component prompt">
+          <span className="lunar-proximity-dot" aria-hidden="true" />
+          <div className="lunar-proximity-text">
+            <strong>{prompt.data?.title || 'Enter this module?'}{promptedChallenge ? ' ★' : ''}</strong>
+            <small>Press <kbd>Enter</kbd> to enter · <kbd>N</kbd> to dismiss{promptedChallenge ? ` · Task: ${promptedChallenge.actionLabel}` : ''}</small>
           </div>
-          <h2 id="component-title">{prompt.data?.title || 'Enter this module?'}</h2>
-          <p>{prompt.data?.message || 'You are close to an outpost component.'}</p>
-          {promptedChallenge && (
-            <div className="lunar-context-task">
-              <strong>Daily task target</strong>
-              <span>Enter this component to perform: {promptedChallenge.actionLabel}.</span>
-            </div>
-          )}
-          <div className="lunar-modal-actions">
-            <button
-              type="button"
-              className="lunar-action-primary"
-              onClick={() => engineRef.current?.enterNearbyComponent()}
-            >
-              YES · ENTER
-            </button>
-            <button
-              type="button"
-              className="lunar-action-secondary"
-              onClick={() => engineRef.current?.dismissComponent()}
-            >
-              NO · STAY OUTSIDE
-            </button>
-          </div>
-          <div className="lunar-modal-hint">Press E to enter · Esc to dismiss</div>
+          <button
+            type="button"
+            className="lunar-proximity-enter"
+            onClick={() => engineRef.current?.enterNearbyComponent()}
+          >
+            ENTER ⏎
+          </button>
         </div>
       )}
 

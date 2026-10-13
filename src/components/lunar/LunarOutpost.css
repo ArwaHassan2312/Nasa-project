@@ -1162,6 +1162,112 @@
   letter-spacing: 0.06em;
 }
 
+/* ---------- PROXIMITY PROMPT (small bottom toast, vision-safe) ---------- */
+.lunar-proximity-prompt {
+  position: absolute;
+  z-index: 6;
+  bottom: clamp(14px, 4vh, 28px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: min(380px, calc(100vw - 24px));
+  padding: 8px 10px 8px 12px;
+  border: 1px solid rgba(200, 237, 139, 0.35);
+  border-radius: 999px;
+  background: rgba(8, 13, 20, 0.72);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+  animation: lunarProximityIn 0.18s ease-out;
+  white-space: nowrap;
+}
+
+.lunar-proximity-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lunar-lime);
+  box-shadow: 0 0 10px rgba(200, 237, 139, 0.9);
+  animation: lunarProximityPulse 1.6s ease-in-out infinite;
+}
+
+.lunar-proximity-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  text-align: left;
+}
+
+.lunar-proximity-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #eef6f0;
+  font-family: var(--lunar-font-tech);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.lunar-proximity-text small {
+  color: #9fb2ba;
+  font-size: 0.58rem;
+  letter-spacing: 0.02em;
+}
+
+.lunar-proximity-text kbd {
+  padding: 0 4px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  font-family: inherit;
+  font-size: 0.55rem;
+}
+
+.lunar-proximity-enter {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border: 1px solid var(--lunar-lime);
+  border-radius: 999px;
+  background: var(--lunar-lime);
+  color: #080d14;
+  font-family: var(--lunar-font-mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.lunar-proximity-enter:hover {
+  box-shadow: 0 0 14px rgba(200, 237, 139, 0.55);
+  transform: translateY(-1px);
+}
+
+.lunar-proximity-split {
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.lunar-proximity-split .lunar-proximity-enter {
+  padding: 7px 9px;
+}
+
+@keyframes lunarProximityIn {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes lunarProximityPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
 @media (max-width: 768px) {
   .lunar-map-backdrop {
     padding: 10px;
