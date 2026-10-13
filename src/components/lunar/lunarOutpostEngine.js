@@ -217,6 +217,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let outsideCameraPosition = null;
   let outsideCameraYaw = 0;
   let outsideCameraPitch = 0;
+  let airlockEntryExteriorPosition = null;
+  let airlockEntryExteriorYaw = 0;
+  let airlockEntryExteriorPitch = 0;
   let airlockPromptDismissed = false;
   let airlockLoading = false;
   let heightGrid = null;
@@ -1396,10 +1399,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function enterModuleInterior(target, workshopModel) {
     if (activeModuleInterior) return;
-    outsideCameraPosition = camera.position.clone();
-    outsideCameraYaw = firstPersonYaw;
-    outsideCameraPitch = firstPersonPitch;
-    outsideBackground = scene.background;
+    if (moduleReturnMode !== 'airlock') {
+      outsideCameraPosition = camera.position.clone();
+      outsideCameraYaw = firstPersonYaw;
+      outsideCameraPitch = firstPersonPitch;
+      outsideBackground = scene.background;
+    }
     moonTerrainMeshes.forEach(terrain => { terrain.visible = false; });
     horizon.visible = false;
     if (outpostRoot) outpostRoot.visible = false;
@@ -1514,6 +1519,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
     outsideCameraPosition = camera.position.clone();
     outsideCameraYaw = firstPersonYaw;
     outsideCameraPitch = firstPersonPitch;
+    airlockEntryExteriorPosition = camera.position.clone();
+    airlockEntryExteriorYaw = firstPersonYaw;
+    airlockEntryExteriorPitch = firstPersonPitch;
     outsideBackground = scene.background;
     moonTerrainMeshes.forEach(terrain => { terrain.visible = false; });
     horizon.visible = false;
@@ -1592,9 +1600,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
     horizon.visible = true;
     if (outpostRoot) outpostRoot.visible = true;
     scene.background = outsideBackground;
-    camera.position.copy(outsideCameraPosition);
-    firstPersonYaw = outsideCameraYaw;
-    firstPersonPitch = outsideCameraPitch;
+    camera.position.copy(airlockEntryExteriorPosition ?? outsideCameraPosition);
+    firstPersonYaw = airlockEntryExteriorPosition ? airlockEntryExteriorYaw : outsideCameraYaw;
+    firstPersonPitch = airlockEntryExteriorPosition ? airlockEntryExteriorPitch : outsideCameraPitch;
     camera.rotation.order = 'YXZ';
     camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
     cameraMode = 'first-person';

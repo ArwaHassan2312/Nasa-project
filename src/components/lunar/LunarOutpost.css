@@ -103,7 +103,9 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  row-gap: 8px;
+  column-gap: 10px;
   pointer-events: none;
 }
 
@@ -113,21 +115,26 @@
   z-index: 5;
   top: clamp(62px, 10vh, 82px);
   left: clamp(12px, 3vw, 28px);
-  width: 172px;
-  padding: 8px 8px 6px;
+  width: 264px;
+  padding: 10px 10px 8px;
   border: 1px solid rgba(127, 240, 255, 0.3);
   border-radius: 8px;
   background: rgba(5, 12, 20, 0.55);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(8px);
   opacity: 0.82;
-  transition: opacity 0.2s ease;
-  pointer-events: none;
+  transition: opacity 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  pointer-events: auto;
+  cursor: pointer;
   user-select: none;
 }
 
-.lunar-minimap:hover {
+.lunar-minimap:hover,
+.lunar-minimap:focus-visible {
   opacity: 1;
+  border-color: rgba(200, 237, 139, 0.65);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4), 0 0 14px rgba(200, 237, 139, 0.25);
+  outline: none;
 }
 
 .lunar-minimap-header {
@@ -157,7 +164,8 @@
 .lunar-minimap-svg {
   display: block;
   width: 100%;
-  height: 132px;
+  height: 200px;
+  overflow: visible;
   border-radius: 4px;
   background:
     linear-gradient(rgba(127, 240, 255, 0.05) 1px, transparent 1px),
@@ -167,9 +175,9 @@
 }
 
 .lunar-minimap-footprint {
-  fill: rgba(37, 104, 120, 0.35);
-  stroke: rgba(118, 219, 229, 0.7);
-  stroke-width: 0.35;
+  fill: rgba(37, 104, 120, 0.42);
+  stroke: rgba(118, 219, 229, 0.85);
+  stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
@@ -177,17 +185,28 @@
   stroke-dasharray: 2 1;
 }
 
+.lunar-minimap-room-label {
+  fill: #eefbfb;
+  font-family: var(--lunar-font-mono);
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: rgba(4, 12, 18, 0.95);
+  stroke-width: 0.7;
+  user-select: none;
+  pointer-events: none;
+}
+
 .lunar-minimap-equipment {
-  fill: rgba(200, 237, 139, 0.8);
+  fill: rgba(200, 237, 139, 0.85);
   stroke: #e6ffc0;
-  stroke-width: 0.25;
+  stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
 .lunar-minimap-task-dot {
   fill: #57efda;
   stroke: #e5f7ff;
-  stroke-width: 0.35;
+  stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
@@ -214,14 +233,18 @@
 }
 
 .lunar-mission-status {
-  position: absolute;
-  top: 50%;
-  left: 50%;
+  position: static;
+  transform: none;
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   gap: 9px;
+  margin: 0 auto;
   padding: 10px 15px;
-  transform: translate(-50%, -50%);
   border: 1px solid rgba(160, 220, 226, 0.2);
   border-radius: 999px;
   color: #e7f3f5;
@@ -232,7 +255,15 @@
   backdrop-filter: blur(10px);
 }
 
+.lunar-mission-status > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
 .lunar-status-dot {
+  flex: 0 0 auto;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -241,17 +272,13 @@
 }
 
 .lunar-status-divider {
+  flex: 0 0 auto;
   color: rgba(200, 237, 139, 0.6);
 }
 
 .lunar-status-toggle {
   border-color: rgba(127, 240, 255, 0.46);
   color: var(--lunar-cyan);
-}
-
-.lunar-map-toggle {
-  border-color: rgba(200, 237, 139, 0.58);
-  color: var(--lunar-lime);
 }
 
 .lunar-map-backdrop {
@@ -993,6 +1020,7 @@
 }
 
 .lunar-orbit-btn {
+  flex: 0 0 auto;
   pointer-events: auto;
   padding: clamp(7px, 1.6vh, 10px) clamp(11px, 2.5vw, 18px);
   font-family: var(--lunar-font-tech);
@@ -1022,7 +1050,11 @@
 .lunar-actions-group {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   gap: 8px;
+  margin-left: auto;
 }
 
 .lunar-btn {
@@ -1399,9 +1431,9 @@
   }
 
   .lunar-mission-status {
-    top: 58px;
-    left: 14px;
-    transform: none;
+    order: 3;
+    flex: 1 1 100%;
+    justify-content: flex-start;
     gap: 6px;
     padding: 8px 10px;
     font-size: 0.52rem;
@@ -1414,11 +1446,11 @@
   .lunar-minimap {
     top: 106px;
     left: 14px;
-    width: 148px;
+    width: 210px;
   }
 
   .lunar-minimap-svg {
-    height: 110px;
+    height: 160px;
   }
 }
 
@@ -1459,8 +1491,9 @@
     gap: 6px;
   }
   .lunar-mission-status {
-    top: 54px;
-    left: 10px;
+    order: 3;
+    flex: 1 1 100%;
+    justify-content: flex-start;
     padding: 7px 10px;
     gap: 5px;
     font-size: 0.47rem;
