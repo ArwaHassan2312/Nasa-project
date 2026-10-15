@@ -137,6 +137,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
   controls.target.set(180, 0, 0);
   controls.update();
 
+  // The establishing shot should only be replaced by the outpost framing if
+  // the player hasn't taken over the camera while the base was loading.
+  let freeCameraAdjusted = false;
+  controls.addEventListener('start', () => { freeCameraAdjusted = true; });
+
   let earthMesh = null;
   let closeupEarthMesh = null;
   let earthViewActive = false;
@@ -147,6 +152,17 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const savedEarthViewTarget = new THREE.Vector3();
 
   const keys = new Set();
+  // Physical-key aliases: keyboard layout switches (including the Shift combos
+  // that flip layouts) can make event.key differ between a press and its
+  // release, which used to leave movement keys stuck "held" and the camera
+  // gliding after the player stopped. event.code always names the same
+  // physical key, so presses and releases stay paired in any layout.
+  const KEY_CODE_ALIASES = {
+    KeyW: 'w', KeyA: 'a', KeyS: 's', KeyD: 'd',
+    ArrowUp: 'arrowup', ArrowDown: 'arrowdown', ArrowLeft: 'arrowleft', ArrowRight: 'arrowright',
+    ShiftLeft: 'shift', ShiftRight: 'shift',
+  };
+  const releaseAllKeys = () => keys.clear();
   const firstPersonStart = new THREE.Vector3();
   const firstPersonLookAt = new THREE.Vector3();
   const savedFreePosition = new THREE.Vector3();
@@ -286,6 +302,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let airlockPromptDismissed = false;
   let airlockLoading = false;
   let heightGrid = null;
+  // Scanned-terrain bounds; everything outside of this rect is procedural mare.
+  const outerRect = { minX: 0, minZ: 0, maxX: 0, maxZ: 0 };
+  let outerCraters = [];
+  let outerTerrainGroup = null;
 
   // Track dynamic sprite textures and materials for leak-free disposal
   const labelTextures = [];
@@ -850,19 +870,26 @@ export function createLunarEngine(canvas, callbacks = {}) {
       .catch(() => console.warn('Could not load Milky Way texture.'));
   }
 
-  // Earth
+  // Open-world scale: the two scanned landing sites are stretched by this
+  // multiplier, and the procedural mare around them reaches thousands of
+  // units further, so the moon reads as an endless open world.
+  const WORLD_SCALE = 8;
+
+  // Earth — anchored to the player rather than the map so it keeps its place
+  // on the horizon (and can never be reached) no matter how far you roam.
   const EARTH_DISTANCE = 120;
   const EARTH_CLOSEUP_DISTANCE = 1500;
   const EARTH_CLOSEUP_RADIUS = 1420;
   const EARTH_FIRST_PERSON_RADIUS = 85;
   const EARTH_ELEVATION_DEGREES = 72;
   const EARTH_AZIMUTH_DEGREES = 300;
-  const earthAnchor = new THREE.Vector3(850, -100, 0);
+  const earthAnchor = new THREE.Vector3(630, -100, 0); // offset from the player
   const earthDirection = new THREE.Vector3(
     Math.sin(THREE.MathUtils.degToRad(EARTH_AZIMUTH_DEGREES)) * Math.cos(THREE.MathUtils.degToRad(EARTH_ELEVATION_DEGREES)),
     Math.sin(THREE.MathUtils.degToRad(EARTH_ELEVATION_DEGREES)),
     Math.cos(THREE.MathUtils.degToRad(EARTH_AZIMUTH_DEGREES)) * Math.cos(THREE.MathUtils.degToRad(EARTH_ELEVATION_DEGREES))
   ).normalize();
+  const earthSkyOffset = earthAnchor.clone().addScaledVector(earthDirection, EARTH_DISTANCE);
 
   const earthTexturePaths = [
     { path: '/Textures/8k_earth_daymap.jpg', colorSpace: THREE.SRGBColorSpace, budget: 4096 },
@@ -891,6 +918,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
         specularMap,
         specular: new THREE.Color(0x454545),
         shininess: 18,
+        // DoubleSide keeps the close-up Earth dome rendering from inside too.
+        side: THREE.DoubleSide,
       })
     );
     const earthClouds = new THREE.Mesh(
@@ -903,6 +932,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         depthWrite: false,
         specular: new THREE.Color(0x111111),
         shininess: 8,
+        side: THREE.DoubleSide,
       })
     );
     earthClouds.scale.setScalar(1.003);
@@ -910,7 +940,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     earthMesh = new THREE.Group();
     earthMesh.add(earthSurface, earthClouds);
     earthMesh.scale.setScalar(EARTH_FIRST_PERSON_RADIUS);
-    earthMesh.position.copy(earthAnchor).addScaledVector(earthDirection, EARTH_DISTANCE);
+    earthMesh.position.copy(earthSkyOffset);
     earthMesh.name = 'Earth';
     scene.add(earthMesh);
   };
@@ -929,8 +959,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   // Terrain scans: Apollo 12 & Apollo 16
+  // Each landing-site scan spans TERRAIN_SPAN units (~1520 units combined),
+  // and the procedural mare keeps going far past them in every direction.
+  const TERRAIN_SPAN = 190 * WORLD_SCALE;
   const APOLLO_12_POSITION_X = 0;
-  const APOLLO_12_POSITION_Y = -2.75;
+  const APOLLO_12_POSITION_Y = -2.75 * WORLD_SCALE;
   const APOLLO_12_SCALE = 1;
   const LUNAR_OUTPOST_WIDTH = 72;
   const LUNAR_OUTPOST_POSITION_X = 0;
@@ -939,6 +972,25 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const OUTPOST_SITE_MARGIN = 6;
   const OUTPOST_GROUND_EPSILON = 0.05;
   const FIRST_PERSON_EYE_HEIGHT = 3.2;
+  // The two scans overlap slightly so the seam between them disappears.
+  const SEAM_OVERLAP = 4 * WORLD_SCALE;
+  // Default free-camera framing distance, sized to the outpost (not the map).
+  const OUTPOST_VIEW_DISTANCE = LUNAR_OUTPOST_WIDTH * 3.6;
+
+  // Endless mare: a procedural cratered plain rings the scans so the moon has
+  // no ending. A fine skirt blends the scanned borders into the plain, a
+  // coarse field carries craters far out, then everything fades into the far
+  // backdrop plane well beyond the reach of the walker.
+  const PLAIN_LEVEL = -1.2 * WORLD_SCALE;
+  const OUTER_BLEND_DISTANCE = 480; // scan border -> open mare transition
+  const OUTER_SKIRT_SPACING = 8; // fine mesh over the transition band
+  const OUTER_FIELD_DEPTH = 3200; // crater field reach around the scans
+  const OUTER_FIELD_SPACING = 22; // coarse mesh grid for the big field
+  const OUTER_FIELD_TAPER_START = OUTER_FIELD_DEPTH - 900;
+  const OUTER_FIELD_TAPER_END = OUTER_FIELD_DEPTH - 100;
+  const OUTER_WALK_LIMIT = 8000; // very distant soft limit for the walker
+  const OUTER_CRATER_COUNT = 26;
+  const HORIZON_PLANE_SIZE = 30000;
 
   // Task console tuning: position + size for both console variants.
   // Wall console appears in workshop / sci-fi interiors, pedestal in the rest.
@@ -983,8 +1035,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const terrain = new THREE.Mesh(geometry, terrainMaterial);
     terrain.rotation.x = -Math.PI / 2;
     const horizontalSpan = Math.max(size.x, size.y) || 1;
-    const horizontalScale = 190 / horizontalSpan;
-    const nominalHeight = size.z * (190 / Math.max(size.x, size.y, size.z));
+    const horizontalScale = TERRAIN_SPAN / horizontalSpan;
+    const nominalHeight = size.z * (TERRAIN_SPAN / Math.max(size.x, size.y, size.z));
     terrain.scale.set(horizontalScale, horizontalScale, horizontalScale);
     terrain.position.set(0, 0, 0);
     terrain.castShadow = false;
@@ -1012,15 +1064,22 @@ export function createLunarEngine(canvas, callbacks = {}) {
       apollo12.width *= APOLLO_12_SCALE;
       apollo12.terrain.position.x = APOLLO_12_POSITION_X;
       apollo12.terrain.position.y += APOLLO_12_POSITION_Y;
-      apollo16.terrain.position.x = (apollo12.width + apollo16.width) / 2 - 4;
-      const sceneCenterX = (apollo12.terrain.position.x + apollo16.terrain.position.x) / 2;
+      apollo16.terrain.position.x = (apollo12.width + apollo16.width) / 2 - SEAM_OVERLAP;
       const sceneWidth = apollo12.width + apollo16.width;
-      controls.target.set(sceneCenterX, sharedRelief * 0.18, 0);
-      camera.position.set(sceneCenterX + sceneWidth * 0.3, sharedRelief + sceneWidth * 0.48, sceneWidth * 0.72);
-      controls.minDistance = sceneWidth * 0.12;
-      controls.maxDistance = sceneWidth * 2.5;
+      // Aerial establishing shot over the Apollo 16 valley (where the outpost
+      // site is chosen); the outpost gets framed precisely once it lands.
+      const outpostFocusX = apollo16.terrain.position.x;
+      controls.target.set(outpostFocusX, sharedRelief * 0.18, 0);
+      camera.position.set(
+        outpostFocusX + OUTPOST_VIEW_DISTANCE * 0.5,
+        sharedRelief + OUTPOST_VIEW_DISTANCE * 0.65,
+        OUTPOST_VIEW_DISTANCE * 0.9
+      );
+      controls.minDistance = LUNAR_OUTPOST_WIDTH * 0.75;
+      controls.maxDistance = sceneWidth * 4;
       controls.update();
       buildHeightGrid();
+      buildOuterTerrain();
 
       onLoading({ active: true, text: 'DEPLOYING LUNAR OUTPOST', progress: 75 });
       loadCachedGLTF(
@@ -1073,6 +1132,18 @@ export function createLunarEngine(canvas, callbacks = {}) {
             outpostCenter.z + viewOffset * 0.7
           );
           firstPersonLookAt.set(outpostCenter.x, outpostBounds.min.y + outpostSize.y * 0.45, outpostCenter.z);
+
+          // Frame the landed outpost for the free camera so the base stays the
+          // visual anchor of the much larger world.
+          if (cameraMode === 'free' && !earthViewActive && !freeCameraAdjusted) {
+            controls.target.set(outpostCenter.x, outpostBounds.min.y + outpostSize.y * 0.4, outpostCenter.z);
+            camera.position.set(
+              outpostCenter.x + OUTPOST_VIEW_DISTANCE * 0.55,
+              surfaceY + OUTPOST_VIEW_DISTANCE * 0.75,
+              outpostCenter.z + OUTPOST_VIEW_DISTANCE * 0.95
+            );
+            controls.update();
+          }
 
           outpost.traverse(object => {
             if (object.isMesh) {
@@ -1173,12 +1244,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
     }
   }
 
-  // Horizon Plane
-  const horizonGeo = new THREE.PlaneGeometry(1200, 1200);
+  // Horizon Plane (larger than the camera's far plane, so the ground always
+  // meets the sky at the horizon line — the world shows no visible edge)
+  const horizonGeo = new THREE.PlaneGeometry(HORIZON_PLANE_SIZE, HORIZON_PLANE_SIZE);
   const horizonMat = new THREE.MeshStandardMaterial({ color: 0x4b4947, roughness: 1 });
   const horizon = new THREE.Mesh(horizonGeo, horizonMat);
   horizon.rotation.x = -Math.PI / 2;
-  horizon.position.y = -1.2;
+  horizon.position.y = PLAIN_LEVEL - 0.15;
   scene.add(horizon);
 
   // Static scenery never moves again after placement: stop recomposing its
@@ -2319,7 +2391,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     earthMesh.visible = false;
     closeupEarthMesh = earthMesh.clone();
     closeupEarthMesh.visible = true;
-    closeupEarthMesh.position.copy(earthAnchor).addScaledVector(closeupDirection, EARTH_CLOSEUP_DISTANCE);
+    closeupEarthMesh.position.copy(camera.position).add(earthAnchor).addScaledVector(closeupDirection, EARTH_CLOSEUP_DISTANCE);
     closeupEarthMesh.scale.setScalar(EARTH_CLOSEUP_RADIUS);
     scene.add(closeupEarthMesh);
 
@@ -2540,12 +2612,23 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (['first-person', 'interior'].includes(cameraMode) && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'enter'].includes(key)) {
       event.preventDefault();
     }
-    if (key !== 'enter') keys.add(key);
+    if (key !== 'enter') {
+      keys.add(key);
+      const alias = KEY_CODE_ALIASES[code];
+      if (alias) keys.add(alias);
+    }
   }
 
   function handleKeyUp(event) {
-    if (eventCinematic) return;
+    // Always pair the release: keys are cleared when a cinematic starts, but
+    // a stray release must never be able to leave a key stuck afterwards.
     keys.delete((event.key || '').toLowerCase());
+    const alias = KEY_CODE_ALIASES[event.code];
+    if (alias) keys.delete(alias);
+  }
+
+  function handleVisibilityChange() {
+    if (document.hidden) releaseAllKeys();
   }
 
   function handleResize() {
@@ -2562,6 +2645,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
   document.addEventListener('mousemove', handleMouseMove);
   document.addEventListener('keydown', handleKeyDown);
   document.addEventListener('keyup', handleKeyUp);
+  // Releases that happen while the window is unfocused (alt-tab, OS popups,
+  // clicking outside) are never delivered, so drop every held key the moment
+  // focus leaves — the camera stops immediately instead of gliding on.
+  window.addEventListener('blur', releaseAllKeys);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('resize', handleResize);
 
   // Prompt checks (zero per-frame Vector3 allocations)
@@ -2683,9 +2771,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const maxGridX = minX + (cols - 1) * CELL;
     const maxGridZ = minZ + (rows - 1) * CELL;
     const step = 2;
+    // The world is large now: search a window around the anchor instead of
+    // the whole grid so placement stays fast and near the Apollo 16 site.
+    const searchRadius = TERRAIN_SPAN * 0.4;
+    const startX = Math.max(minX + half, anchorX - searchRadius);
+    const endX = Math.min(maxGridX - half, anchorX + searchRadius);
+    const startZ = Math.max(minZ + half, anchorZ - searchRadius);
+    const endZ = Math.min(maxGridZ - half, anchorZ + searchRadius);
     let best = null;
-    for (let cx = minX + half; cx <= maxGridX - half; cx += step) {
-      for (let cz = minZ + half; cz <= maxGridZ - half; cz += step) {
+    for (let cx = startX; cx <= endX; cx += step) {
+      for (let cz = startZ; cz <= endZ; cz += step) {
         let minH = Infinity;
         let maxH = -Infinity;
         let worse = false;
@@ -2752,6 +2847,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
       }
     }
     heightGrid = { data, cols, rows, minX: box.min.x, minZ: box.min.z, CELL };
+    outerRect.minX = box.min.x;
+    outerRect.maxX = box.max.x;
+    outerRect.minZ = box.min.z;
+    outerRect.maxZ = box.max.z;
   }
 
   function sampleGroundHeight(x, z) {
@@ -2768,9 +2867,194 @@ export function createLunarEngine(canvas, callbacks = {}) {
     return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
   }
 
+  // ——— Endless mare ———
+  // Outside the two scanned landing sites the ground continues as a much
+  // larger procedural plain dotted with craters, so walking never runs out
+  // of moon: the detail fades, the world doesn't end.
+  function rectDistanceOutside(x, z) {
+    const dx = Math.max(outerRect.minX - x, 0, x - outerRect.maxX);
+    const dz = Math.max(outerRect.minZ - z, 0, z - outerRect.maxZ);
+    return Math.hypot(dx, dz);
+  }
+
+  function buildOuterCraters() {
+    // Deterministic pseudo-random crater field ringing the landing sites.
+    let seed = 987654321;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const spanX = outerRect.maxX - outerRect.minX;
+    const spanZ = outerRect.maxZ - outerRect.minZ;
+    const margin = OUTER_FIELD_DEPTH - 200;
+    const craters = [];
+    let guard = 0;
+    while (craters.length < OUTER_CRATER_COUNT && guard++ < 4000) {
+      const x = outerRect.minX - margin + rand() * (spanX + margin * 2);
+      const z = outerRect.minZ - margin + rand() * (spanZ + margin * 2);
+      if (rectDistanceOutside(x, z) < OUTER_BLEND_DISTANCE + 120) continue;
+      craters.push({
+        x,
+        z,
+        radius: 90 + rand() * 310,
+        depth: 1.2 + rand() * 4.3,
+        rim: 0.5 + rand() * 1.7,
+      });
+    }
+    return craters;
+  }
+
+  function craterReliefAt(x, z) {
+    let relief = 0;
+    for (const crater of outerCraters) {
+      const t = Math.hypot(x - crater.x, z - crater.z) / crater.radius;
+      if (t > 2.4) continue;
+      if (t < 1) {
+        relief += crater.depth * (t * t - 1); // saucer floor
+        continue;
+      }
+      const rim = crater.rim * Math.exp(-((t - 1) * (t - 1)) / 0.045);
+      const ejecta = crater.rim * 0.5 * Math.exp(-(t - 1) / 0.9);
+      relief += rim + ejecta;
+    }
+    return relief;
+  }
+
+  function plainHeight(x, z) {
+    const d = rectDistanceOutside(x, z);
+    // Fade the relief out near the mesh rim so it melts into the backdrop
+    // plane without a seam.
+    const taper = 1 - THREE.MathUtils.smoothstep(d, OUTER_FIELD_TAPER_START, OUTER_FIELD_TAPER_END);
+    const undulation =
+      Math.sin(x * 0.0043 + 1.7) * Math.cos(z * 0.0037 - 0.6) * 1.6
+      + Math.sin(x * 0.0151 - z * 0.0113) * 0.3;
+    return PLAIN_LEVEL + taper * (undulation + craterReliefAt(x, z));
+  }
+
+  function sampleOuterHeight(x, z) {
+    // Blends the scanned border down into the open mare so walking past the
+    // edge of the detailed terrain keeps the feet on the rendered ground.
+    const d = rectDistanceOutside(x, z);
+    const blend = THREE.MathUtils.smoothstep(d, 0, OUTER_BLEND_DISTANCE);
+    let borderHeight = PLAIN_LEVEL;
+    if (heightGrid) {
+      const { cols, rows, minX, minZ, CELL } = heightGrid;
+      const borderX = THREE.MathUtils.clamp(x, minX + CELL, minX + (cols - 1) * CELL - CELL);
+      const borderZ = THREE.MathUtils.clamp(z, minZ + CELL, minZ + (rows - 1) * CELL - CELL);
+      const sampled = sampleGroundHeight(borderX, borderZ);
+      if (sampled !== null) borderHeight = sampled;
+    }
+    return borderHeight * (1 - blend) + plainHeight(x, z) * blend;
+  }
+
+  function buildOuterTerrain() {
+    if (outerTerrainGroup) {
+      scene.remove(outerTerrainGroup);
+      outerTerrainGroup.traverse(object => {
+        object.geometry?.dispose();
+        object.material?.dispose();
+      });
+      outerTerrainGroup = null;
+    }
+    outerCraters = buildOuterCraters();
+
+    const scanTone = new THREE.Color(0xb7b3ab);
+    const mareTone = new THREE.Color(0x4b4947);
+    const tone = new THREE.Color();
+
+    // Rectangular ring meshes: the fine skirt stitches the scanned borders
+    // into the plain, the coarse field carries the craters further out.
+    const buildRing = (depth, spacing, skipExpand, skipMode, useVertexColors) => {
+      const minX = outerRect.minX - depth;
+      const maxX = outerRect.maxX + depth;
+      const minZ = outerRect.minZ - depth;
+      const maxZ = outerRect.maxZ + depth;
+      const cols = Math.ceil((maxX - minX) / spacing) + 1;
+      const rows = Math.ceil((maxZ - minZ) / spacing) + 1;
+      const stepX = (maxX - minX) / (cols - 1);
+      const stepZ = (maxZ - minZ) / (rows - 1);
+      const innerMinX = outerRect.minX - skipExpand;
+      const innerMaxX = outerRect.maxX + skipExpand;
+      const innerMinZ = outerRect.minZ - skipExpand;
+      const innerMaxZ = outerRect.maxZ + skipExpand;
+
+      const positions = new Float32Array(cols * rows * 3);
+      const colors = useVertexColors ? new Float32Array(cols * rows * 3) : null;
+      let p = 0;
+      for (let row = 0; row < rows; row++) {
+        const z = minZ + row * stepZ;
+        for (let col = 0; col < cols; col++) {
+          const x = minX + col * stepX;
+          const d = rectDistanceOutside(x, z);
+          positions[p] = x;
+          // Tuck the rim that runs under the scans just below their surface
+          // so the two meshes never fight over the same pixels.
+          positions[p + 1] = sampleOuterHeight(x, z) - (d <= 0 ? 0.2 : 0);
+          positions[p + 2] = z;
+          if (colors) {
+            tone.copy(scanTone).lerp(mareTone, THREE.MathUtils.smoothstep(d, 0, OUTER_BLEND_DISTANCE));
+            colors[p] = tone.r;
+            colors[p + 1] = tone.g;
+            colors[p + 2] = tone.b;
+          }
+          p += 3;
+        }
+      }
+
+      const indices = [];
+      for (let row = 0; row < rows - 1; row++) {
+        const za = minZ + row * stepZ;
+        const zb = za + stepZ;
+        for (let col = 0; col < cols - 1; col++) {
+          const xa = minX + col * stepX;
+          const xb = xa + stepX;
+          const overlaps = xa < innerMaxX && xb > innerMinX && za < innerMaxZ && zb > innerMinZ;
+          const inside = xa >= innerMinX && xb <= innerMaxX && za >= innerMinZ && zb <= innerMaxZ;
+          if (skipMode === 'crossing' ? overlaps : inside) continue;
+          const a = row * cols + col;
+          const c = a + cols;
+          indices.push(a, c, a + 1, a + 1, c, c + 1);
+        }
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      if (colors) geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
+      geometry.computeVertexNormals();
+      const material = useVertexColors
+        ? new THREE.MeshStandardMaterial({ vertexColors: true, color: 0xffffff, roughness: 1, metalness: 0 })
+        : new THREE.MeshStandardMaterial({ color: 0x4b4947, roughness: 1, metalness: 0 });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = useVertexColors ? 'OuterMareSkirt' : 'OuterMareField';
+      mesh.receiveShadow = true;
+      return mesh;
+    };
+
+    outerTerrainGroup = new THREE.Group();
+    outerTerrainGroup.name = 'OuterMare';
+    outerTerrainGroup.add(buildRing(OUTER_BLEND_DISTANCE, OUTER_SKIRT_SPACING, 0, 'inside', true));
+    outerTerrainGroup.add(buildRing(OUTER_FIELD_DEPTH, OUTER_FIELD_SPACING, OUTER_BLEND_DISTANCE, 'crossing', false));
+    scene.add(outerTerrainGroup);
+  }
+
   function keepCameraAboveSurface() {
+    if (!heightGrid) return;
+    // The walkable world runs far past the scans; only a very distant soft
+    // limit ends the trek, long after all terrain detail has faded out.
+    camera.position.x = THREE.MathUtils.clamp(
+      camera.position.x,
+      outerRect.minX - OUTER_WALK_LIMIT,
+      outerRect.maxX + OUTER_WALK_LIMIT
+    );
+    camera.position.z = THREE.MathUtils.clamp(
+      camera.position.z,
+      outerRect.minZ - OUTER_WALK_LIMIT,
+      outerRect.maxZ + OUTER_WALK_LIMIT
+    );
     const h = sampleGroundHeight(camera.position.x, camera.position.z);
-    if (h !== null) camera.position.y = h + FIRST_PERSON_EYE_HEIGHT;
+    const ground = h === null ? sampleOuterHeight(camera.position.x, camera.position.z) : h;
+    camera.position.y = ground + FIRST_PERSON_EYE_HEIGHT;
   }
 
   function keepCameraInsideVerticalBounds(bounds) {
@@ -2876,7 +3160,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
       firstPersonRight.set(Math.cos(firstPersonYaw), 0, Math.sin(firstPersonYaw));
       firstPersonDirection.copy(firstPersonForward).multiplyScalar(forward).addScaledVector(firstPersonRight, side);
       if (firstPersonDirection.lengthSq()) {
-        camera.position.addScaledVector(firstPersonDirection.normalize(), dt * 18);
+        // Shift sprints so the much bigger terrain stays quick to cross.
+        const moveSpeed = keys.has('shift') ? 42 : 18;
+        camera.position.addScaledVector(firstPersonDirection.normalize(), dt * moveSpeed);
       }
       if (greenhouseInterior?.visible && greenhouseInteriorBounds) {
         const wallInset = 0.8;
@@ -2926,6 +3212,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (taskConsoleArrow && taskConsoleActive) {
       taskConsoleArrow.position.y = taskConsoleArrowBaseY + Math.sin(pulseNow * 0.004) * 0.12;
       taskConsoleArrow.rotation.y += dt * 1.5;
+    }
+
+    if (earthMesh) {
+      // The Earth rides with the player, never with the map, so it stays
+      // pinned to the horizon of the endless world.
+      earthMesh.position.copy(camera.position).add(earthSkyOffset);
     }
 
     renderer.render(scene, camera);
@@ -3018,6 +3310,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', releaseAllKeys);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('resize', handleResize);
       if (document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
