@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { buildOutpostHeightField, isOutpostBlocked, sampleOutpostTop } from './outpostCollision.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { DAILY_CHALLENGES } from '../../data/dailyChallenges';
@@ -172,6 +173,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const firstPersonRight = new THREE.Vector3();
 
   let outpostRoot = null;
+  let outpostHeightField = null; // walker collision rasterized from the outpost meshes
+  let jumpVelocity = 0; // vertical speed while the walker is airborne
+  let airborne = false;
   let mapComponents = [];
   let mapBounds = null;
   let currentEventEffect = null;
@@ -877,10 +881,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   // Earth — anchored to the player rather than the map so it keeps its place
   // on the horizon (and can never be reached) no matter how far you roam.
-  const EARTH_DISTANCE = 120;
+  // Close-up "view Earth" staging: player-relative base + approach direction.
   const EARTH_CLOSEUP_DISTANCE = 1500;
   const EARTH_CLOSEUP_RADIUS = 1420;
-  const EARTH_FIRST_PERSON_RADIUS = 85;
   const EARTH_ELEVATION_DEGREES = 72;
   const EARTH_AZIMUTH_DEGREES = 300;
   const earthAnchor = new THREE.Vector3(630, -100, 0); // offset from the player
@@ -889,7 +892,18 @@ export function createLunarEngine(canvas, callbacks = {}) {
     Math.sin(THREE.MathUtils.degToRad(EARTH_ELEVATION_DEGREES)),
     Math.cos(THREE.MathUtils.degToRad(EARTH_AZIMUTH_DEGREES)) * Math.cos(THREE.MathUtils.degToRad(EARTH_ELEVATION_DEGREES))
   ).normalize();
-  const earthSkyOffset = earthAnchor.clone().addScaledVector(earthDirection, EARTH_DISTANCE);
+
+  // Sky Earth: far enough to behave like a true celestial body (zero parallax
+  // as you roam) while keeping its size and height on the horizon.
+  const EARTH_SKY_DISTANCE = 6000;
+  const EARTH_SKY_RADIUS = 950;
+  const EARTH_SKY_ELEVATION_DEGREES = 1.35;
+  const EARTH_SKY_BEARING_DEGREES = 1.8; // a hair north of due east
+  const earthSkyOffset = new THREE.Vector3(
+    Math.cos(THREE.MathUtils.degToRad(EARTH_SKY_ELEVATION_DEGREES)) * Math.cos(THREE.MathUtils.degToRad(EARTH_SKY_BEARING_DEGREES)),
+    Math.sin(THREE.MathUtils.degToRad(EARTH_SKY_ELEVATION_DEGREES)),
+    Math.cos(THREE.MathUtils.degToRad(EARTH_SKY_ELEVATION_DEGREES)) * Math.sin(THREE.MathUtils.degToRad(EARTH_SKY_BEARING_DEGREES))
+  ).multiplyScalar(EARTH_SKY_DISTANCE);
 
   const earthTexturePaths = [
     { path: '/Textures/8k_earth_daymap.jpg', colorSpace: THREE.SRGBColorSpace, budget: 4096 },
@@ -914,7 +928,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         map: dayMap,
         emissiveMap: nightMap,
         emissive: new THREE.Color(0xffc777),
-        emissiveIntensity: 0.7,
+        emissiveIntensity: 0.85,
         specularMap,
         specular: new THREE.Color(0x454545),
         shininess: 18,
@@ -928,7 +942,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         map: cloudMap,
         alphaMap: cloudMap,
         transparent: true,
-        opacity: 0.38,
+        opacity: 0.42,
         depthWrite: false,
         specular: new THREE.Color(0x111111),
         shininess: 8,
@@ -939,7 +953,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     earthClouds.renderOrder = 1;
     earthMesh = new THREE.Group();
     earthMesh.add(earthSurface, earthClouds);
-    earthMesh.scale.setScalar(EARTH_FIRST_PERSON_RADIUS);
+    earthMesh.scale.setScalar(EARTH_SKY_RADIUS);
     earthMesh.position.copy(earthSkyOffset);
     earthMesh.name = 'Earth';
     scene.add(earthMesh);
@@ -972,6 +986,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const OUTPOST_SITE_MARGIN = 6;
   const OUTPOST_GROUND_EPSILON = 0.05;
   const FIRST_PERSON_EYE_HEIGHT = 3.2;
+  // A solid human hop in world units: its apex clears a single step (~1) so
+  // jumping feels useful, while taller walls stay walls.
+  const FIRST_PERSON_JUMP_SPEED = 5.2;
+  const FIRST_PERSON_GRAVITY = 14;
   // The two scans overlap slightly so the seam between them disappears.
   const SEAM_OVERLAP = 4 * WORLD_SCALE;
   // Default free-camera framing distance, sized to the outpost (not the map).
@@ -1159,6 +1177,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
           addOutpostPartLabels(outpost);
           componentTargets = buildComponentTargets(outpost);
           mapComponents = buildMapComponents(outpost);
+          // Rasterize the component surfaces into walker collision: their
+          // walls stop the walker, while ramps and low decks stay climbable.
+          outpostHeightField = buildOutpostHeightField(outpost);
           if (mapComponents.length) {
             mapBounds = {
               minX: Math.min(...mapComponents.map(component => component.minX)),
@@ -2552,6 +2573,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const key = rawKey.toLowerCase();
     const code = event.code || '';
     const isEnter = key === 'enter' || code === 'Enter' || code === 'NumpadEnter';
+    const isJump = key === ' ' || code === 'Space';
     const isConfirm = key === 'e' || isEnter;
     if (isConfirm && cameraMode === 'interior') {
       event.preventDefault();
@@ -2607,6 +2629,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
       event.preventDefault();
       setPrompt(null);
       dismissedComponentId = activeComponentTarget?.id ?? null;
+      return;
+    }
+    if (isJump && cameraMode === 'first-person') {
+      event.preventDefault();
+      // A fresh press launches the hop; holding the key does not re-launch
+      // on landing, so jumps stay deliberate.
+      if (!event.repeat && !airborne) {
+        airborne = true;
+        jumpVelocity = FIRST_PERSON_JUMP_SPEED;
+      }
       return;
     }
     if (['first-person', 'interior'].includes(cameraMode) && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'enter'].includes(key)) {
@@ -3038,7 +3070,48 @@ export function createLunarEngine(canvas, callbacks = {}) {
     scene.add(outerTerrainGroup);
   }
 
-  function keepCameraAboveSurface() {
+  // Height of whatever the walker stands on: terrain, or a walkable outpost
+  // surface (apron, ramp, low deck).
+  function supportHeightAt(x, z) {
+    const h = sampleGroundHeight(x, z);
+    const terrain = h === null ? sampleOuterHeight(x, z) : h;
+    const outpostTop = sampleOutpostTop(outpostHeightField, x, z);
+    return outpostTop === null ? terrain : Math.max(terrain, outpostTop);
+  }
+
+  function moveFirstPersonWithCollisions(stepX, stepZ) {
+    if (!outpostHeightField) {
+      camera.position.x += stepX;
+      camera.position.z += stepZ;
+      return;
+    }
+    // Collision is measured from the surface underfoot (not the smoothed
+    // camera height) so climbing never fights the camera easing. Airborne,
+    // the walker's real body height counts instead, so a hop can carry over
+    // low obstacles instead of snagging on the ground far below.
+    const feetY = airborne
+      ? camera.position.y - FIRST_PERSON_EYE_HEIGHT
+      : supportHeightAt(camera.position.x, camera.position.z);
+    const startX = camera.position.x;
+    const startZ = camera.position.z;
+    // If the walker already overlaps a wall (e.g. right after exiting a
+    // module), never trap them: let the step through so they can walk free.
+    if (!isOutpostBlocked(outpostHeightField, startX, startZ, feetY)
+      && isOutpostBlocked(outpostHeightField, startX + stepX, startZ + stepZ, feetY)) {
+      // A component stands in the way: slide along its face, axis by axis.
+      if (!isOutpostBlocked(outpostHeightField, startX + stepX, startZ, feetY)) {
+        camera.position.x = startX + stepX;
+      }
+      if (!isOutpostBlocked(outpostHeightField, camera.position.x, startZ + stepZ, feetY)) {
+        camera.position.z = startZ + stepZ;
+      }
+      return;
+    }
+    camera.position.x = startX + stepX;
+    camera.position.z = startZ + stepZ;
+  }
+
+  function keepCameraAboveSurface(dt) {
     if (!heightGrid) return;
     // The walkable world runs far past the scans; only a very distant soft
     // limit ends the trek, long after all terrain detail has faded out.
@@ -3052,9 +3125,23 @@ export function createLunarEngine(canvas, callbacks = {}) {
       outerRect.minZ - OUTER_WALK_LIMIT,
       outerRect.maxZ + OUTER_WALK_LIMIT
     );
-    const h = sampleGroundHeight(camera.position.x, camera.position.z);
-    const ground = h === null ? sampleOuterHeight(camera.position.x, camera.position.z) : h;
-    camera.position.y = ground + FIRST_PERSON_EYE_HEIGHT;
+    const targetY = supportHeightAt(camera.position.x, camera.position.z) + FIRST_PERSON_EYE_HEIGHT;
+    if (airborne) {
+      // Ballistic hop: gravity pulls the walker back down, and whatever
+      // surface (terrain, ramp or ledge top) catches up first is the landing.
+      jumpVelocity -= FIRST_PERSON_GRAVITY * dt;
+      camera.position.y += jumpVelocity * dt;
+      if (camera.position.y <= targetY) {
+        camera.position.y = targetY;
+        airborne = false;
+        jumpVelocity = 0;
+      }
+      return;
+    }
+    // Smooth the ride so pads and the airlock ramp read as climbing steps
+    // instead of teleporting the camera: quick uphill, gentle downhill.
+    const rate = targetY > camera.position.y ? 20 : 9;
+    camera.position.y += (targetY - camera.position.y) * Math.min(1, Math.max(dt, 0) * rate);
   }
 
   function keepCameraInsideVerticalBounds(bounds) {
@@ -3162,7 +3249,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
       if (firstPersonDirection.lengthSq()) {
         // Shift sprints so the much bigger terrain stays quick to cross.
         const moveSpeed = keys.has('shift') ? 42 : 18;
-        camera.position.addScaledVector(firstPersonDirection.normalize(), dt * moveSpeed);
+        firstPersonDirection.normalize();
+        if (cameraMode === 'first-person') {
+          moveFirstPersonWithCollisions(firstPersonDirection.x * moveSpeed * dt, firstPersonDirection.z * moveSpeed * dt);
+        } else {
+          camera.position.addScaledVector(firstPersonDirection, dt * moveSpeed);
+        }
       }
       if (greenhouseInterior?.visible && greenhouseInteriorBounds) {
         const wallInset = 0.8;
@@ -3195,7 +3287,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       if (cameraMode === 'interior' && airlockInterior && !greenhouseInterior?.visible && !activeModuleInterior?.visible) {
         keepCameraInsideVerticalBounds(airlockInteriorBounds);
       } else if (cameraMode === 'first-person') {
-        keepCameraAboveSurface();
+        keepCameraAboveSurface(dt);
       }
     }
 
@@ -3216,8 +3308,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
     if (earthMesh) {
       // The Earth rides with the player, never with the map, so it stays
-      // pinned to the horizon of the endless world.
+      // pinned to the horizon of the endless world. A slow axial spin keeps
+      // the day/night terminator and city lights alive in the sky.
       earthMesh.position.copy(camera.position).add(earthSkyOffset);
+      earthMesh.rotation.y += dt * 0.006;
     }
 
     renderer.render(scene, camera);
@@ -3319,6 +3413,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
       queuedEventPresentation = null;
       eventCinematic = null;
+      outpostHeightField = null;
       clearEventVisualization();
       if (challengeMarkerGroup) {
         outpostRoot?.remove(challengeMarkerGroup);

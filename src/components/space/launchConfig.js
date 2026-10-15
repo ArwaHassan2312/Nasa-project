@@ -11,7 +11,7 @@ import marsImage from '../../assets/images/pexels-zelch-20337611-removebg-previe
 export const ASSETS = {
   rocket: '/models/jupiter-c-rocket.glb',
   mars: '/models/24881_Mars_1_6792.glb',
-  moon: '/models/moon.glb',
+  moon: '/models/moon-v2.glb',
   background: backgroundUrl,
   // earthImage: earthImageUrl,
   introVideo: introVideo,

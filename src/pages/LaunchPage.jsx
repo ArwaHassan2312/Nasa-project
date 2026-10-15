@@ -104,6 +104,11 @@ export default function LaunchPage({
     }
   }, [onMissionStart]);
 
+  // Skip the whole intro flow: jump straight into the lunar outpost.
+  const handleSkip = useCallback(() => {
+    handleLaunchMission('moon');
+  }, [handleLaunchMission]);
+
   const handleExitToOrbit = useCallback(() => {
     onMissionPause?.();
     setPhase('select');
@@ -130,7 +135,7 @@ export default function LaunchPage({
             <IntroOverlay
               visible={phase === 'intro'}
               finished={introFinished}
-              onSkip={finishIntro}
+              onSkip={handleSkip}
               onStart={handleStart}
             />
           )}
