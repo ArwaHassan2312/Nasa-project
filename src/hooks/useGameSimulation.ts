@@ -401,17 +401,21 @@ export function useGameSimulation({
       const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
       if (
         !challenge ||
-        challenge.status !== 'inProgress' ||
+        challenge.status === 'completed' ||
         challenge.targetComponentId !== componentId
       ) {
         return currentState;
       }
 
+      // The dedicated button inside the task's component runs the task in one
+      // action, even when it was never pinned from the tasks drawer first.
+      const startedDay = challenge.startedDay ?? currentState.day;
+
       return {
         ...currentState,
         dailyChallenges: currentState.dailyChallenges.map((task) =>
           task.id === challenge.id
-            ? { ...task, status: 'completed', completedDay: currentState.day }
+            ? { ...task, status: 'completed', startedDay, completedDay: currentState.day }
             : task,
         ),
         activeChallengeId: currentState.activeChallengeId === challenge.id

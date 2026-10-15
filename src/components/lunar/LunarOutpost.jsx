@@ -54,20 +54,28 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     completeDailyChallenge,
     dismissChallengeFeedback,
   } = simulation;
-  const insideChallenge = simulation.dailyChallenges.find(
-    (challenge) => challenge.status === 'inProgress'
-      && challenge.targetComponentId === insidePanel.componentId,
-  );
+  // Every daily task bound to the entered component gets its own dedicated
+  // button in the inside panel. Driven by the challenges data, so tasks added
+  // in the future automatically get their button here too.
+  const insideComponentTasks = insidePanel.componentId
+    ? simulation.dailyChallenges.filter(
+        (challenge) => challenge.targetComponentId === insidePanel.componentId,
+      )
+    : [];
   const promptedChallenge = simulation.dailyChallenges.find(
-    (challenge) => challenge.status === 'inProgress'
+    (challenge) => challenge.status !== 'completed'
       && challenge.targetComponentId === prompt.data?.id,
   );
   const taskActionRef = useRef(null);
-  taskActionRef.current = (componentId) => {
-    const challenge = simulation.dailyChallenges.find(
-      (entry) => entry.status === 'inProgress' && entry.targetComponentId === componentId,
-    );
-    if (challenge) completeDailyChallenge(challenge.id, componentId);
+  taskActionRef.current = (componentId, taskId) => {
+    const challenge = taskId
+      ? simulation.dailyChallenges.find((entry) => entry.id === taskId)
+      : simulation.dailyChallenges.find(
+          (entry) => entry.status !== 'completed' && entry.targetComponentId === componentId,
+        );
+    if (challenge && challenge.status !== 'completed') {
+      completeDailyChallenge(challenge.id, challenge.targetComponentId);
+    }
   };
   const [consoleEdit, setConsoleEdit] = useState(false);
   const [consoleInfo, setConsoleInfo] = useState(null);
@@ -87,7 +95,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         onModeChange: (mode) => setCameraMode(mode),
         onPromptChange: (type, data) => setPrompt({ type, data }),
         onInsidePanelChange: (panel) => setInsidePanel(panel),
-        onTaskAction: (componentId) => taskActionRef.current?.(componentId),
+        onTaskAction: (componentId, taskId) => taskActionRef.current?.(componentId, taskId),
         onConsoleEdit: (info) => setConsoleInfo(info)
       });
     } catch (error) {
@@ -119,9 +127,12 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
 
   useEffect(() => {
     engineRef.current?.setTaskTargets?.(
-      simulation.dailyChallenges
-        .filter((challenge) => challenge.status === 'inProgress')
-        .map((challenge) => ({ componentId: challenge.targetComponentId, label: challenge.actionLabel }))
+      simulation.dailyChallenges.map((challenge) => ({
+        componentId: challenge.targetComponentId,
+        taskId: challenge.id,
+        label: challenge.actionLabel,
+        status: challenge.status,
+      }))
     );
   }, [simulation.dailyChallenges]);
 
@@ -399,19 +410,33 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
           {insidePanel.visible ? (
             <div className="lunar-inside-panel">
               <span>{insidePanel.label}</span>
-              {insideChallenge && (
-                <div className="lunar-task-inline-action-wrap">
-                  <button
-                    type="button"
-                    className="lunar-task-inline-action"
-                    disabled={simulation.eventPhase !== 'idle' || simulation.gameStatus !== 'playing'}
-                    onClick={() => completeDailyChallenge(insideChallenge.id, insidePanel.componentId)}
-                  >
-                    {insideChallenge.actionLabel}
-                  </button>
-                  <small className="lunar-task-action-cost">No additional campaign time</small>
+              {insideComponentTasks.map((challenge) => (
+                <div className="lunar-task-inline-action-wrap" key={challenge.id}>
+                  {challenge.status === 'completed' ? (
+                    <span
+                      className="lunar-task-inline-done"
+                      title={`${challenge.title} verified on day ${challenge.completedDay}`}
+                    >
+                      ✓ {challenge.title} · Day {challenge.completedDay}
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="lunar-task-inline-action"
+                        title={`${challenge.title} — ${challenge.status === 'inProgress' ? 'verify this task now' : 'run this daily task now'}`}
+                        disabled={simulation.eventPhase !== 'idle' || simulation.gameStatus !== 'playing'}
+                        onClick={() => completeDailyChallenge(challenge.id, challenge.targetComponentId)}
+                      >
+                        {challenge.actionLabel}
+                      </button>
+                      <small className="lunar-task-action-cost">
+                        {challenge.status === 'inProgress' ? 'No additional campaign time' : 'Dedicated task button'}
+                      </small>
+                    </>
+                  )}
                 </div>
-              )}
+              ))}
               <button
                 type="button"
                 onClick={() => engineRef.current?.exitAirlock()}
@@ -791,7 +816,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             <button type="button" aria-label="Close daily tasks" onClick={() => setDailyTasksOpen(false)}>×</button>
           </div>
           <p className="lunar-task-intro">
-            Tasks persist until completed. Travel to the named component, enter it, then use its interior action. Travel uses the continuous clock; task actions add no extra time.
+            Every task has a dedicated button inside its component — enter the named location and press it there. Starting a task from this list only pins it for tracking and map guidance. Travel uses the continuous clock; task actions add no extra time.
           </p>
           <div className="lunar-task-list">
             {simulation.dailyChallenges.map((challenge) => {

@@ -1096,8 +1096,11 @@
 .lunar-inside-panel {
   pointer-events: auto;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 12px;
+  max-width: min(640px, calc(100vw - 40px));
   padding: 8px 14px;
   border: 1px solid rgba(200, 237, 139, 0.45);
   border-radius: 6px;
@@ -1220,6 +1223,17 @@
   display: grid;
   justify-items: start;
   gap: 3px;
+}
+
+.lunar-inside-panel .lunar-task-inline-done {
+  padding: 6px 10px;
+  border: 1px dashed rgba(148, 220, 158, 0.5);
+  border-radius: 4px;
+  color: #9cdfa4;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .lunar-inside-panel .lunar-task-action-cost {

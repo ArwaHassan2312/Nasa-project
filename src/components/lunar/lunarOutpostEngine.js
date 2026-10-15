@@ -205,18 +205,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let activeTaskTargets = [];
   let taskConsoleGroup = null;
   let taskConsoleInner = null;
-  let taskConsoleButton = null;
-  let taskConsoleScreen = null;
-  let taskConsoleLabel = null;
-  let taskConsoleLabelCanvas = null;
-  let taskConsoleLabelTexture = null;
+  // One dedicated button + label per daily task bound to the entered component.
+  let taskConsoleUnits = [];
+  let taskConsoleLayout = null;
+  let taskConsoleUnitSignature = null;
   let taskConsoleArrow = null;
   const TASK_CONSOLE_ARROW_Y = 2.6;
   let taskConsoleArrowBaseY = TASK_CONSOLE_ARROW_Y;
   let taskConsoleComponentId = null;
   let taskConsoleKind = null;
   let taskConsoleActive = false;
-  let taskConsoleLabelText = 'STANDBY';
   const taskRaycaster = new THREE.Raycaster();
   const taskScreenCenter = new THREE.Vector2(0, 0);
   // In-game console editor: drag to reposition, wheel to resize.
@@ -264,7 +262,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
       z: Math.round(world.z * 100) / 100,
       size: Math.round((taskConsoleInner?.scale.x ?? 1) * 100) / 100,
     });
-    if (taskConsoleLabel) drawTaskConsoleLabel(taskConsoleLabelText);
   }
   let moduleInteriorLoading = false;
   let workshopInteriorLoading = false;
@@ -1488,80 +1485,208 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function setTaskTargets(targets) {
     activeTaskTargets = Array.isArray(targets)
-      ? targets.map(target => ({ componentId: target.componentId, label: target.label || '' }))
+      ? targets.map(target => ({
+          componentId: target.componentId,
+          taskId: target.taskId ?? null,
+          label: target.label || '',
+          status: target.status || 'available',
+        }))
       : [];
-    console.log('[TaskConsole] active targets:', activeTaskTargets.map(entry => entry.componentId).join(', ') || '(none)');
+    console.log(
+      '[TaskConsole] active targets:',
+      activeTaskTargets
+        .map(entry => `${entry.componentId}:${entry.taskId ?? '-'}:${entry.status}`)
+        .join(', ') || '(none)'
+    );
     refreshTaskConsole();
   }
 
-  function drawTaskConsoleLabel(text) {
-    if (!taskConsoleLabelCanvas || !taskConsoleLabelTexture) return;
-    taskConsoleLabelText = text;
-    const context = taskConsoleLabelCanvas.getContext('2d');
-    context.clearRect(0, 0, taskConsoleLabelCanvas.width, taskConsoleLabelCanvas.height);
+  function drawTaskConsoleUnitLabel(unit) {
+    if (!unit.canvas || !unit.texture) return;
+    const context = unit.canvas.getContext('2d');
+    const palette = {
+      available: { border: 'rgba(127, 240, 255, 0.9)', text: '#c9f6ff' },
+      inProgress: { border: 'rgba(57, 255, 136, 0.95)', text: '#c9ffd9' },
+      completed: { border: 'rgba(148, 220, 158, 0.55)', text: '#9cdfa4' },
+      standby: { border: 'rgba(120, 150, 155, 0.6)', text: '#8fa3a8' },
+    }[unit.status] ?? { border: 'rgba(120, 150, 155, 0.6)', text: '#8fa3a8' };
+    context.clearRect(0, 0, unit.canvas.width, unit.canvas.height);
     context.fillStyle = 'rgba(6, 14, 18, 0.88)';
-    context.strokeStyle = taskConsoleActive ? 'rgba(57, 255, 136, 0.95)' : 'rgba(120, 150, 155, 0.6)';
+    context.strokeStyle = palette.border;
     context.lineWidth = 6;
     context.beginPath();
-    context.roundRect(4, 4, taskConsoleLabelCanvas.width - 8, taskConsoleLabelCanvas.height - 8, 18);
+    context.roundRect(4, 4, unit.canvas.width - 8, unit.canvas.height - 8, 18);
     context.fill();
     context.stroke();
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.fillStyle = taskConsoleActive ? '#c9ffd9' : '#8fa3a8';
+    context.fillStyle = palette.text;
     context.font = 'bold 34px monospace';
-    context.fillText(text, taskConsoleLabelCanvas.width / 2, taskConsoleLabelCanvas.height / 2 + 2, taskConsoleLabelCanvas.width - 40);
-    taskConsoleLabelTexture.needsUpdate = true;
+    const text = unit.status === 'completed'
+      ? `✓ ${unit.label || 'DONE'}`
+      : (unit.label || 'STANDBY');
+    context.fillText(text.toUpperCase().slice(0, 30), unit.canvas.width / 2, unit.canvas.height / 2 + 2, unit.canvas.width - 40);
+    unit.texture.needsUpdate = true;
+  }
+
+  function applyTaskConsoleUnitStyle(unit) {
+    const styles = {
+      standby: { emissive: 0x1e9e5c, intensity: 0.7 },
+      available: { emissive: 0x2bff88, intensity: 1.1 },
+      inProgress: { emissive: 0x2bff88, intensity: 1.6 },
+      completed: { emissive: 0x3a4a44, intensity: 0.35 },
+    }[unit.status] ?? { emissive: 0x1e9e5c, intensity: 0.7 };
+    unit.button.material.emissive.set(styles.emissive);
+    unit.button.material.emissiveIntensity = styles.intensity;
+    // Standby has nothing to do, so it only shows the button. Task units show
+    // their label above the button; completed units stay visible but dimmed.
+    unit.labelSprite.visible = unit.status !== 'standby';
+    drawTaskConsoleUnitLabel(unit);
+  }
+
+  function createTaskConsoleUnit(spec, index) {
+    const isWall = taskConsoleKind === 'wall';
+    const unit = {
+      taskId: spec.taskId ?? null,
+      label: spec.label || '',
+      status: spec.status || 'available',
+      canvas: document.createElement('canvas'),
+      texture: null,
+      button: null,
+      labelSprite: null,
+    };
+    unit.canvas.width = 512;
+    unit.canvas.height = 112;
+    unit.texture = new THREE.CanvasTexture(unit.canvas);
+    unit.texture.colorSpace = THREE.SRGBColorSpace;
+
+    unit.button = new THREE.Mesh(
+      isWall
+        ? new THREE.CylinderGeometry(0.15, 0.17, 0.12, 28)
+        : new THREE.CylinderGeometry(0.16, 0.19, 0.1, 24),
+      new THREE.MeshStandardMaterial({
+        color: 0x0d2b1a, emissive: 0x1e9e5c, emissiveIntensity: 0.7,
+        roughness: 0.3, metalness: 0.1
+      })
+    );
+    if (isWall) unit.button.rotation.z = Math.PI / 2;
+    else unit.button.rotation.x = 0.45;
+    unit.button.userData.taskConsoleTaskId = unit.taskId;
+
+    unit.labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: unit.texture, transparent: true, depthWrite: false
+    }));
+    unit.labelSprite.scale.set(1.7, 0.37, 1);
+    unit.labelSprite.name = `Label: Task Console ${index + 1}`;
+    unit.labelSprite.userData.taskConsoleTaskId = unit.taskId;
+    return unit;
+  }
+
+  function disposeTaskConsoleUnits() {
+    for (const unit of taskConsoleUnits) {
+      taskConsoleInner?.remove(unit.button, unit.labelSprite);
+      unit.button.geometry.dispose();
+      unit.button.material.dispose();
+      unit.labelSprite.material.dispose();
+      unit.texture.dispose();
+    }
+    taskConsoleUnits = [];
+    taskConsoleUnitSignature = null;
+  }
+
+  function createTaskConsoleArrow() {
+    const arrow = new THREE.Group();
+    arrow.name = 'Task Console Arrow';
+    const arrowMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1a2b12, emissive: 0xc8ff4d, emissiveIntensity: 1.8,
+      roughness: 0.4, metalness: 0.1
+    });
+    const arrowHead = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.32, 20), arrowMaterial);
+    arrowHead.rotation.x = Math.PI;
+    arrowHead.position.y = -0.12;
+    const arrowTail = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.3, 12), arrowMaterial);
+    arrowTail.position.y = 0.18;
+    arrow.add(arrowHead, arrowTail);
+    return arrow;
+  }
+
+  // Build one dedicated button + label for every daily task bound to the
+  // entered component. Fully data-driven: any task added to DAILY_CHALLENGES
+  // later automatically gets its button here, with no code changes.
+  function rebuildTaskConsoleUnits() {
+    disposeTaskConsoleUnits();
+    if (!taskConsoleInner || !taskConsoleLayout) return;
+
+    const targets = activeTaskTargets.filter(entry => entry.componentId === taskConsoleComponentId);
+    const specs = targets.length
+      ? targets.map(target => ({
+          taskId: target.taskId ?? null,
+          label: target.label || '',
+          status: target.status || 'available',
+        }))
+      : [{ taskId: null, label: '', status: 'standby' }];
+    const count = specs.length;
+
+    specs.forEach((spec, index) => {
+      const unit = createTaskConsoleUnit(spec, index);
+      unit.button.position.copy(taskConsoleLayout.button(index, count));
+      unit.labelSprite.position.copy(taskConsoleLayout.label(index, count));
+      taskConsoleInner.add(unit.button, unit.labelSprite);
+      taskConsoleUnits.push(unit);
+      applyTaskConsoleUnitStyle(unit);
+    });
+
+    if (taskConsoleArrow) {
+      taskConsoleArrow.position.copy(taskConsoleLayout.arrow(count));
+      taskConsoleArrowBaseY = taskConsoleArrow.position.y;
+    }
+    taskConsoleUnitSignature = specs.map(spec => spec.taskId ?? 'standby').join('|');
   }
 
   function refreshTaskConsole() {
-    if (!taskConsoleButton) {
+    if (!taskConsoleGroup || !taskConsoleInner) {
       taskConsoleActive = false;
       return;
     }
-    const target = activeTaskTargets.find(entry => entry.componentId === taskConsoleComponentId);
-    taskConsoleActive = Boolean(target);
-    taskConsoleButton.material.emissive.set(taskConsoleActive ? 0x2bff88 : 0x1e9e5c);
-    taskConsoleButton.material.emissiveIntensity = taskConsoleActive ? 1.6 : 0.7;
-    if (taskConsoleScreen) {
-      taskConsoleScreen.material.emissive.set(taskConsoleActive ? 0x18e08a : 0x0e3a32);
-      taskConsoleScreen.material.emissiveIntensity = taskConsoleActive ? 0.9 : 0.35;
+    const targets = activeTaskTargets.filter(entry => entry.componentId === taskConsoleComponentId);
+    const signature = targets.map(target => target.taskId ?? 'standby').join('|') || 'standby';
+    if (signature !== taskConsoleUnitSignature) {
+      rebuildTaskConsoleUnits();
+    } else {
+      for (const unit of taskConsoleUnits) {
+        const target = targets.find(entry => (entry.taskId ?? null) === unit.taskId);
+        unit.status = target?.status || 'standby';
+        unit.label = target?.label || '';
+        applyTaskConsoleUnitStyle(unit);
+      }
     }
-    // Button only when idle; label joins it while a task is active.
-    if (taskConsoleLabel) taskConsoleLabel.visible = taskConsoleActive;
-    drawTaskConsoleLabel(
-      target && target.label ? target.label.toUpperCase().slice(0, 28) : 'STANDBY'
+    taskConsoleActive = taskConsoleUnits.some(
+      unit => unit.status === 'available' || unit.status === 'inProgress',
     );
+    if (taskConsoleArrow) taskConsoleArrow.visible = taskConsoleActive;
   }
 
   function unmountTaskConsole() {
+    disposeTaskConsoleUnits();
     if (taskConsoleGroup?.parent) taskConsoleGroup.parent.remove(taskConsoleGroup);
     taskConsoleGroup?.traverse(object => {
       object.geometry?.dispose();
       if (object.material) {
         const materials = Array.isArray(object.material) ? object.material : [object.material];
-        materials.forEach(material => {
-          if (material.map && material.map !== taskConsoleLabelTexture) material.map?.dispose();
-          material.dispose();
-        });
+        materials.forEach(material => material.dispose());
       }
     });
-    taskConsoleLabelTexture?.dispose();
     taskConsoleGroup = null;
     taskConsoleInner = null;
-    taskConsoleButton = null;
-    taskConsoleScreen = null;
-    taskConsoleLabel = null;
     taskConsoleArrow = null;
-    taskConsoleLabelCanvas = null;
-    taskConsoleLabelTexture = null;
+    taskConsoleLayout = null;
     taskConsoleArrowBaseY = TASK_CONSOLE_ARROW_Y;
     taskConsoleComponentId = null;
     taskConsoleKind = null;
     taskConsoleActive = false;
   }
 
-  // Mount the task button centered on the room's right wall (world +x face).
+  // Mount the task buttons centered on the room's right wall (world +x face).
   // Returns true when wall-mounted, false to use the pedestal fallback.
   function mountWallConsole() {
     if (!activeModuleInteriorBounds) return false;
@@ -1588,62 +1713,34 @@ export function createLunarEngine(canvas, callbacks = {}) {
     group.position.copy(toLocal(placement.pos));
     const rel = (world) => toLocal(world).sub(anchorLocal);
 
-    taskConsoleButton = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15, 0.17, 0.12, 28),
-      new THREE.MeshStandardMaterial({
-        color: 0x0d2b1a, emissive: 0x2bff88, emissiveIntensity: 1.6,
-        roughness: 0.3, metalness: 0.1
-      })
-    );
-    taskConsoleButton.rotation.z = Math.PI / 2;
-    taskConsoleButton.position.copy(rel(anchor.clone().add(new THREE.Vector3(-0.1, 0, 0))));
-    taskConsoleButton.userData.taskButton = true;
-    taskConsoleScreen = null;
+    // Stack one unit per task vertically, centered on the anchor height.
+    const spacing = 1.15;
+    const lift = 0.78;
+    const offsetY = (index, count) => (index - (count - 1) / 2) * spacing;
+    taskConsoleLayout = {
+      button: (index, count) => rel(anchor.clone().add(new THREE.Vector3(-0.1, offsetY(index, count), 0))),
+      label: (index, count) => rel(anchor.clone().add(new THREE.Vector3(-0.05, offsetY(index, count) + lift, 0))),
+      arrow: (count) => rel(anchor.clone().add(new THREE.Vector3(-0.05, offsetY(count - 1, count) + lift + 0.72, 0))),
+    };
 
-    taskConsoleLabelCanvas = document.createElement('canvas');
-    taskConsoleLabelCanvas.width = 512;
-    taskConsoleLabelCanvas.height = 112;
-    taskConsoleLabelTexture = new THREE.CanvasTexture(taskConsoleLabelCanvas);
-    taskConsoleLabelTexture.colorSpace = THREE.SRGBColorSpace;
-    taskConsoleLabel = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: taskConsoleLabelTexture, transparent: true, depthWrite: false
-    }));
-    taskConsoleLabel.scale.set(1.7, 0.37, 1);
-    taskConsoleLabel.position.copy(rel(anchor.clone().add(new THREE.Vector3(-0.05, 0.9, 0))));
-    taskConsoleLabel.name = 'Label: Task Console';
+    taskConsoleArrow = createTaskConsoleArrow();
+    inner.add(taskConsoleArrow);
 
-    taskConsoleArrow = new THREE.Group();
-    taskConsoleArrow.name = 'Task Console Arrow';
-    const arrowMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1a2b12, emissive: 0xc8ff4d, emissiveIntensity: 1.8,
-      roughness: 0.4, metalness: 0.1
-    });
-    const arrowHead = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.32, 20), arrowMaterial);
-    arrowHead.rotation.x = Math.PI;
-    arrowHead.position.y = -0.12;
-    const arrowTail = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.3, 12), arrowMaterial);
-    arrowTail.position.y = 0.18;
-    taskConsoleArrow.add(arrowHead, arrowTail);
-    taskConsoleArrowBaseY = 1.5;
-    taskConsoleArrow.position.copy(rel(anchor.clone().add(new THREE.Vector3(-0.05, 1.5, 0))));
-
-    group.add(inner);
-    inner.add(taskConsoleButton, taskConsoleLabel, taskConsoleArrow);
     activeModuleInterior.add(group);
     taskConsoleGroup = group;
     taskConsoleInner = inner;
     pushConsoleInfo();
+    refreshTaskConsole();
     return true;
   }
 
-  // Physical task console inside module interiors: walk up to the glowing
-  // button and click it to run the component's active daily task.
+  // Physical task console inside module interiors: one dedicated button per
+  // daily task bound to the component. Walk up and click a button to run it.
   function mountTaskConsole(componentId, isWorkshop) {
     unmountTaskConsole();
     if (!activeModuleInterior) return;
     taskConsoleComponentId = componentId;
     if (isWorkshop && mountWallConsole()) {
-      refreshTaskConsole();
       const worldPos = new THREE.Vector3();
       taskConsoleGroup.getWorldPosition(worldPos);
       console.log(
@@ -1661,45 +1758,19 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const spot = new THREE.Vector3(TASK_CONSOLE_CONFIG.pedestal.x, 0, TASK_CONSOLE_CONFIG.pedestal.z);
     const placement = getConsolePlacement('pedestal', spot, TASK_CONSOLE_CONFIG.pedestal.size);
     inner.scale.setScalar(placement.size);
-    taskConsoleScreen = null;
 
-    taskConsoleButton = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.16, 0.19, 0.1, 24),
-      new THREE.MeshStandardMaterial({
-        color: 0x0d2b1a, emissive: 0x2bff88, emissiveIntensity: 1.6,
-        roughness: 0.3, metalness: 0.1
-      })
-    );
-    taskConsoleButton.position.set(0, 1.1, 0.2);
-    taskConsoleButton.rotation.x = 0.45;
-    taskConsoleButton.userData.taskButton = true;
+    // Stack one unit per task vertically on the floating panel.
+    const baseY = 1.1;
+    const spacing = 1.15;
+    const lift = 0.85;
+    taskConsoleLayout = {
+      button: (index) => new THREE.Vector3(0, baseY + index * spacing, 0.2),
+      label: (index) => new THREE.Vector3(0, baseY + index * spacing + lift, 0.08),
+      arrow: (count) => new THREE.Vector3(0, baseY + (count - 1) * spacing + lift + 0.72, 0),
+    };
 
-    taskConsoleLabelCanvas = document.createElement('canvas');
-    taskConsoleLabelCanvas.width = 512;
-    taskConsoleLabelCanvas.height = 112;
-    taskConsoleLabelTexture = new THREE.CanvasTexture(taskConsoleLabelCanvas);
-    taskConsoleLabelTexture.colorSpace = THREE.SRGBColorSpace;
-    const labelMaterial = new THREE.SpriteMaterial({ map: taskConsoleLabelTexture, transparent: true, depthWrite: false });
-    taskConsoleLabel = new THREE.Sprite(labelMaterial);
-    taskConsoleLabel.scale.set(1.7, 0.37, 1);
-    taskConsoleLabel.position.set(0, 2.05, 0);
-    taskConsoleLabel.name = 'Label: Task Console';
-
-    taskConsoleArrow = new THREE.Group();
-    taskConsoleArrow.name = 'Task Console Arrow';
-    const arrowMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1a2b12, emissive: 0xc8ff4d, emissiveIntensity: 1.8,
-      roughness: 0.4, metalness: 0.1
-    });
-    const arrowHead = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.32, 20), arrowMaterial);
-    arrowHead.rotation.x = Math.PI;
-    arrowHead.position.y = -0.12;
-    const arrowTail = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.3, 12), arrowMaterial);
-    arrowTail.position.y = 0.18;
-    taskConsoleArrow.add(arrowHead, arrowTail);
-    taskConsoleArrow.position.set(0, TASK_CONSOLE_ARROW_Y, 0);
-
-    inner.add(taskConsoleButton, taskConsoleLabel, taskConsoleArrow);
+    taskConsoleArrow = createTaskConsoleArrow();
+    inner.add(taskConsoleArrow);
     // Place beside the entrance in world space: room groups (e.g. the loaded
     // workshop) can carry their own centering offset, so local placement would
     // land behind walls. The entrance spawn is always (0, *, 2.55) facing -z.
@@ -1785,7 +1856,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
       cameraMode = 'interior';
       onModeChange(cameraMode);
-      onInsidePanelChange({ visible: true, label: 'INSIDE AIRLOCK · E TO EXIT', buttonText: 'EXIT AIRLOCK' });
+      onInsidePanelChange({ visible: true, label: 'INSIDE AIRLOCK · E TO EXIT', buttonText: 'EXIT AIRLOCK', componentId: '005' });
       airlockEndPromptDismissed = true;
     } else {
       moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
@@ -1896,7 +1967,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
     onInsidePanelChange({
       visible: true,
       label: 'INSIDE AIRLOCK · E TO EXIT',
-      buttonText: 'EXIT AIRLOCK'
+      buttonText: 'EXIT AIRLOCK',
+      componentId: '005'
     });
   }
 
@@ -2062,7 +2134,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
         : 'INSIDE GREENHOUSE · E TO RETURN',
       buttonText: greenhouseReturnMode === 'exterior'
         ? 'RETURN OUTSIDE'
-        : 'RETURN TO AIRLOCK'
+        : 'RETURN TO AIRLOCK',
+      componentId: '008'
     });
     setPrompt(null);
     greenhouseDoorPromptDismissed = false;
@@ -2371,14 +2444,23 @@ export function createLunarEngine(canvas, callbacks = {}) {
       canvas.requestPointerLock?.();
       return;
     }
-    // Click the physical task console while inside a module interior.
-    if (cameraMode === 'interior' && document.pointerLockElement === canvas && activeModuleInterior?.visible && taskConsoleGroup) {
+    // Click a task console button while inside a module interior. Each button
+    // runs one specific daily task bound to the component.
+    if (cameraMode === 'interior' && document.pointerLockElement === canvas && taskConsoleGroup) {
       taskRaycaster.setFromCamera(taskScreenCenter, camera);
       const hits = taskRaycaster.intersectObjects(taskConsoleGroup.children, true);
       if (hits.length > 0 && hits[0].distance < 8) {
-        const active = activeTaskTargets.find(entry => entry.componentId === taskConsoleComponentId);
-        console.log('[TaskConsole] clicked, component:', taskConsoleComponentId, 'active:', Boolean(active));
-        if (active) onTaskAction(taskConsoleComponentId);
+        let node = hits[0].object;
+        while (node && node.userData.taskConsoleTaskId === undefined) node = node.parent;
+        const taskId = node?.userData?.taskConsoleTaskId ?? null;
+        const unit = taskConsoleUnits.find(entry => entry.taskId === taskId);
+        console.log(
+          '[TaskConsole] clicked, component:', taskConsoleComponentId,
+          'task:', taskId, 'status:', unit?.status ?? 'unknown'
+        );
+        if (taskId && unit && (unit.status === 'available' || unit.status === 'inProgress')) {
+          onTaskAction(taskConsoleComponentId, taskId);
+        }
       }
     }
   }
@@ -2835,15 +2917,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
       animateEvent(clock.elapsedTime, dt);
     }
 
-    if (taskConsoleButton && taskConsoleActive) {
-      taskConsoleButton.material.emissiveIntensity = 1.3 + Math.sin(performance.now() * 0.006) * 0.6;
-    }
-    if (taskConsoleArrow) {
-      taskConsoleArrow.visible = taskConsoleActive;
-      if (taskConsoleActive) {
-        taskConsoleArrow.position.y = taskConsoleArrowBaseY + Math.sin(performance.now() * 0.004) * 0.12;
-        taskConsoleArrow.rotation.y += dt * 1.5;
+    const pulseNow = performance.now();
+    for (const unit of taskConsoleUnits) {
+      if (unit.status === 'inProgress') {
+        unit.button.material.emissiveIntensity = 1.3 + Math.sin(pulseNow * 0.006) * 0.6;
       }
+    }
+    if (taskConsoleArrow && taskConsoleActive) {
+      taskConsoleArrow.position.y = taskConsoleArrowBaseY + Math.sin(pulseNow * 0.004) * 0.12;
+      taskConsoleArrow.rotation.y += dt * 1.5;
     }
 
     renderer.render(scene, camera);
@@ -2955,6 +3037,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
         });
         challengeMarkerGroup = null;
       }
+
+      unmountTaskConsole();
 
       // Dispose label sprites
       for (let i = 0; i < labelTextures.length; i++) labelTextures[i].dispose();
