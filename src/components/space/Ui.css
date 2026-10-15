@@ -80,6 +80,29 @@ html, body, #root { height: 100%; margin: 0; }
   /* reserves 3 lines so nothing jumps when the typing starts */
   min-height: calc(3 * 1.45 * clamp(0.95rem, min(3.1vh, 3.2vw), 2rem));
 }
+.intro-overlay--finished {
+  justify-content: center;
+  padding: 0 4vw;
+}
+.intro-overlay--finished .intro-final-title { min-height: 0; }
+
+.intro-skip {
+  position: absolute;
+  top: 3.2vh;
+  right: 3vw;
+  z-index: 2;
+  padding: 0.55rem 1.1rem;
+  font-family: var(--neon-font);
+  font-size: 0.68rem;
+  letter-spacing: 0.24em;
+  color: #eafcff;
+  background: rgba(10, 30, 60, 0.35);
+  border: 1px solid rgba(95, 227, 255, 0.45);
+  border-radius: 999px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.intro-skip:hover { box-shadow: 0 0 18px rgba(34, 184, 255, 0.5); }
 
 /* ---------- intro image ---------- */
 .intro-backdrop {
@@ -95,7 +118,11 @@ html, body, #root { height: 100%; margin: 0; }
   transition: opacity 2.4s ease 0.4s;
 }
 .intro-backdrop--gone { opacity: 0; }
-
+.intro-media { position: absolute; inset: 0; z-index: 2; transition: opacity 0.9s ease; }
+.intro-media--gone { opacity: 0; pointer-events: none; }
+.intro-media--skipped { opacity: 0; pointer-events: none; }
+.intro-media .intro-backdrop { z-index: 0; transition: opacity 0.2s linear; }
+.intro-media .intro-backdrop--inactive { opacity: 0; }
 /* ---------- start button ---------- */
 .mission-btn-wrap { position: relative; pointer-events: auto; }
 .mission-btn-ring {
@@ -149,34 +176,6 @@ html, body, #root { height: 100%; margin: 0; }
 .mission-btn:hover:not(:disabled)::before { left: 130%; }
 .mission-btn:active:not(:disabled) { transform: scale(0.98); }
 .mission-btn:focus-visible { outline: 2px solid #7ff0ff; outline-offset: 5px; }
-
-/* ---------- skip intro ---------- */
-.intro-skip-btn {
-  position: absolute;
-  top: clamp(12px, 3vh, 24px);
-  right: clamp(12px, 3vw, 28px);
-  pointer-events: auto;
-  padding: 8px 16px;
-  font-family: var(--neon-font);
-  font-size: 0.72rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: #9fdcff;
-  background: rgba(8, 18, 30, 0.55);
-  border: 1px solid rgba(95, 227, 255, 0.4);
-  border-radius: 999px;
-  cursor: pointer;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  transition: all 0.2s ease;
-}
-.intro-skip-btn:hover {
-  color: #07141d;
-  background: #7ff0ff;
-  border-color: #7ff0ff;
-  box-shadow: 0 0 16px rgba(127, 240, 255, 0.6);
-}
-.intro-skip-btn:focus-visible { outline: 2px solid #7ff0ff; outline-offset: 3px; }
 
 /* =====================================================================
    Space scene fade-out + destination select
@@ -353,6 +352,21 @@ html, body, #root { height: 100%; margin: 0; }
   background: radial-gradient(circle at 50% 50%, rgba(70, 170, 255, 0.1), transparent 62%);
 }
 .dest-canvas > div { position: absolute !important; inset: 0; }
+.dest-canvas--image { display: grid; place-items: center; }
+.dest-planet-image {
+  display: block;
+  width: min(72%, 38vh, 330px);
+  aspect-ratio: 1;
+  object-fit: contain;
+  border-radius: 50%;
+  filter: drop-shadow(0 0 22px rgba(78, 181, 255, 0.22));
+  transition: filter 0.35s ease, transform 0.35s ease;
+}
+.dest-card:not(.selected):not(.dismissed):hover .dest-planet-image,
+.dest-card:not(.selected):not(.dismissed):focus-visible .dest-planet-image {
+  transform: scale(1.035);
+  filter: drop-shadow(0 0 30px rgba(78, 205, 255, 0.5));
+}
 .dest-card.is-interactive .dest-canvas { pointer-events: auto; cursor: grab; }
 .dest-card.is-interactive .dest-canvas:active { cursor: grabbing; }
 
@@ -605,4 +619,3 @@ html, body, #root { height: 100%; margin: 0; }
   background: rgba(10, 25, 45, 0.4);
   box-shadow: none;
 }
-
