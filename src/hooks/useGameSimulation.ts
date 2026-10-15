@@ -401,14 +401,14 @@ export function useGameSimulation({
       const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
       if (
         !challenge ||
-        challenge.status === 'completed' ||
+        challenge.status !== 'inProgress' ||
         challenge.targetComponentId !== componentId
       ) {
         return currentState;
       }
 
-      // The dedicated button inside the task's component runs the task in one
-      // action, even when it was never pinned from the tasks drawer first.
+      // Only tasks activated from the Daily Tasks list (status 'inProgress')
+      // can be completed; component buttons never auto-activate a task.
       const startedDay = challenge.startedDay ?? currentState.day;
 
       return {

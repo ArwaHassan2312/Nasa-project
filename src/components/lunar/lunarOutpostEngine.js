@@ -171,6 +171,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const firstPersonDirection = new THREE.Vector3();
   const firstPersonForward = new THREE.Vector3();
   const firstPersonRight = new THREE.Vector3();
+  // Horizontal walking momentum, so the walker accelerates and glides on the
+  // low-gravity surface instead of snapping between speeds.
+  const firstPersonVelocity = new THREE.Vector3();
 
   let outpostRoot = null;
   let outpostHeightField = null; // walker collision rasterized from the outpost meshes
@@ -986,10 +989,18 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const OUTPOST_SITE_MARGIN = 6;
   const OUTPOST_GROUND_EPSILON = 0.05;
   const FIRST_PERSON_EYE_HEIGHT = 3.2;
-  // A solid human hop in world units: its apex clears a single step (~1) so
-  // jumping feels useful, while taller walls stay walls.
-  const FIRST_PERSON_JUMP_SPEED = 5.2;
-  const FIRST_PERSON_GRAVITY = 14;
+  // Lunar motion: gravity is about a sixth of Earth's, so the walker shuffles
+  // slowly and jumps arc high and float for a couple of seconds instead of
+  // snapping back down. Scale: eye height 3.2 units ~ 1.7 m, so one unit is
+  // roughly half a metre.
+  const FIRST_PERSON_GRAVITY = 3.1; // ~1.6 m/s^2 — the Moon's surface gravity
+  const FIRST_PERSON_JUMP_SPEED = 3.6; // apex ~2 units (~1 m), ~2.3 s of air
+  const FIRST_PERSON_WALK_SPEED = 2; // slow, deliberate ~1 m/s lunar shuffle
+  const FIRST_PERSON_SPRINT_SPEED = 10; // shift run, about lunar-rover pace
+  // Suit and regolith inertia: speed eases in and glides out instead of
+  // snapping, and momentum carries through jumps.
+  const FIRST_PERSON_ACCELERATION = 8;
+  const FIRST_PERSON_DECELERATION = 6;
   // The two scans overlap slightly so the seam between them disappears.
   const SEAM_OVERLAP = 4 * WORLD_SCALE;
   // Default free-camera framing distance, sized to the outpost (not the map).
@@ -1598,7 +1609,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (!unit.canvas || !unit.texture) return;
     const context = unit.canvas.getContext('2d');
     const palette = {
-      available: { border: 'rgba(127, 240, 255, 0.9)', text: '#c9f6ff' },
       inProgress: { border: 'rgba(57, 255, 136, 0.95)', text: '#c9ffd9' },
       completed: { border: 'rgba(148, 220, 158, 0.55)', text: '#9cdfa4' },
       standby: { border: 'rgba(120, 150, 155, 0.6)', text: '#8fa3a8' },
@@ -1625,14 +1635,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
   function applyTaskConsoleUnitStyle(unit) {
     const styles = {
       standby: { emissive: 0x1e9e5c, intensity: 0.7 },
-      available: { emissive: 0x2bff88, intensity: 1.1 },
       inProgress: { emissive: 0x2bff88, intensity: 1.6 },
       completed: { emissive: 0x3a4a44, intensity: 0.35 },
     }[unit.status] ?? { emissive: 0x1e9e5c, intensity: 0.7 };
     unit.button.material.emissive.set(styles.emissive);
     unit.button.material.emissiveIntensity = styles.intensity;
-    // Standby has nothing to do, so it only shows the button. Task units show
-    // their label above the button; completed units stay visible but dimmed.
+    // Only activated tasks get units here. The label sits above the button;
+    // completed units never appear because they are removed on completion.
     unit.labelSprite.visible = unit.status !== 'standby';
     drawTaskConsoleUnitLabel(unit);
   }
@@ -1703,21 +1712,22 @@ export function createLunarEngine(canvas, callbacks = {}) {
     return arrow;
   }
 
-  // Build one dedicated button + label for every daily task bound to the
-  // entered component. Fully data-driven: any task added to DAILY_CHALLENGES
-  // later automatically gets its button here, with no code changes.
+  // Build one dedicated button + label for each activated task bound to the
+  // entered component. Data-driven: tasks added to DAILY_CHALLENGES later get
+  // their button here automatically once activated from the Daily Tasks list.
+  // Available or completed tasks add no interior UI at all.
   function rebuildTaskConsoleUnits() {
     disposeTaskConsoleUnits();
     if (!taskConsoleInner || !taskConsoleLayout) return;
 
-    const targets = activeTaskTargets.filter(entry => entry.componentId === taskConsoleComponentId);
-    const specs = targets.length
-      ? targets.map(target => ({
-          taskId: target.taskId ?? null,
-          label: target.label || '',
-          status: target.status || 'available',
-        }))
-      : [{ taskId: null, label: '', status: 'standby' }];
+    const targets = activeTaskTargets.filter(
+      entry => entry.componentId === taskConsoleComponentId && entry.status === 'inProgress',
+    );
+    const specs = targets.map(target => ({
+      taskId: target.taskId ?? null,
+      label: target.label || '',
+      status: target.status || 'inProgress',
+    }));
     const count = specs.length;
 
     specs.forEach((spec, index) => {
@@ -1741,8 +1751,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
       taskConsoleActive = false;
       return;
     }
-    const targets = activeTaskTargets.filter(entry => entry.componentId === taskConsoleComponentId);
-    const signature = targets.map(target => target.taskId ?? 'standby').join('|') || 'standby';
+    const targets = activeTaskTargets.filter(
+      entry => entry.componentId === taskConsoleComponentId && entry.status === 'inProgress',
+    );
+    const signature = targets.map(target => target.taskId ?? 'standby').join('|');
     if (signature !== taskConsoleUnitSignature) {
       rebuildTaskConsoleUnits();
     } else {
@@ -1753,8 +1765,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
         applyTaskConsoleUnitStyle(unit);
       }
     }
+    // The task console only appears for tasks activated from the Daily Tasks
+    // list; available tasks add no interior UI.
     taskConsoleActive = taskConsoleUnits.some(
-      unit => unit.status === 'available' || unit.status === 'inProgress',
+      unit => unit.status === 'inProgress',
     );
     if (taskConsoleArrow) taskConsoleArrow.visible = taskConsoleActive;
   }
@@ -2538,7 +2552,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
       return;
     }
     // Click a task console button while inside a module interior. Each button
-    // runs one specific daily task bound to the component.
+    // runs one specific daily task bound to the component, but only after the
+    // task was activated from the Daily Tasks list.
     if (cameraMode === 'interior' && document.pointerLockElement === canvas && taskConsoleGroup) {
       taskRaycaster.setFromCamera(taskScreenCenter, camera);
       const hits = taskRaycaster.intersectObjects(taskConsoleGroup.children, true);
@@ -2551,7 +2566,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           '[TaskConsole] clicked, component:', taskConsoleComponentId,
           'task:', taskId, 'status:', unit?.status ?? 'unknown'
         );
-        if (taskId && unit && (unit.status === 'available' || unit.status === 'inProgress')) {
+        if (taskId && unit && unit.status === 'inProgress') {
           onTaskAction(taskConsoleComponentId, taskId);
         }
       }
@@ -3246,15 +3261,34 @@ export function createLunarEngine(canvas, callbacks = {}) {
       camera.getWorldDirection(firstPersonForward).normalize();
       firstPersonRight.set(Math.cos(firstPersonYaw), 0, Math.sin(firstPersonYaw));
       firstPersonDirection.copy(firstPersonForward).multiplyScalar(forward).addScaledVector(firstPersonRight, side);
-      if (firstPersonDirection.lengthSq()) {
-        // Shift sprints so the much bigger terrain stays quick to cross.
-        const moveSpeed = keys.has('shift') ? 42 : 18;
-        firstPersonDirection.normalize();
-        if (cameraMode === 'first-person') {
-          moveFirstPersonWithCollisions(firstPersonDirection.x * moveSpeed * dt, firstPersonDirection.z * moveSpeed * dt);
-        } else {
-          camera.position.addScaledVector(firstPersonDirection, dt * moveSpeed);
+      const wantsMove = firstPersonDirection.lengthSq() > 0;
+      if (wantsMove) firstPersonDirection.normalize();
+      // Shift runs so the much bigger terrain stays crossable; the default
+      // pace is the slow lunar shuffle.
+      const moveSpeed = keys.has('shift') ? FIRST_PERSON_SPRINT_SPEED : FIRST_PERSON_WALK_SPEED;
+      if (cameraMode === 'first-person') {
+        // Moon gait: ease into the target speed and glide to a stop, so the
+        // walker carries momentum like a suit on regolith. While airborne the
+        // same horizontal momentum keeps travelling with the hop.
+        const desiredX = wantsMove ? firstPersonDirection.x * moveSpeed : 0;
+        const desiredZ = wantsMove ? firstPersonDirection.z * moveSpeed : 0;
+        const rateStep = (wantsMove ? FIRST_PERSON_ACCELERATION : FIRST_PERSON_DECELERATION) * dt;
+        firstPersonVelocity.x = THREE.MathUtils.clamp(
+          desiredX,
+          firstPersonVelocity.x - rateStep,
+          firstPersonVelocity.x + rateStep,
+        );
+        firstPersonVelocity.z = THREE.MathUtils.clamp(
+          desiredZ,
+          firstPersonVelocity.z - rateStep,
+          firstPersonVelocity.z + rateStep,
+        );
+        if (firstPersonVelocity.x !== 0 || firstPersonVelocity.z !== 0) {
+          moveFirstPersonWithCollisions(firstPersonVelocity.x * dt, firstPersonVelocity.z * dt);
         }
+      } else if (wantsMove) {
+        // Inside modules the walker has full traction: direct, tight control.
+        camera.position.addScaledVector(firstPersonDirection, dt * moveSpeed);
       }
       if (greenhouseInterior?.visible && greenhouseInteriorBounds) {
         const wallInset = 0.8;
@@ -3289,6 +3323,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
       } else if (cameraMode === 'first-person') {
         keepCameraAboveSurface(dt);
       }
+    }
+
+    // Horizontal momentum only belongs to the walking first-person view; every
+    // other mode (free camera, interiors, event cinematics) resets it so the
+    // walker never glides off after switching.
+    if (cameraMode !== 'first-person' || eventCinematic) {
+      firstPersonVelocity.set(0, 0, 0);
     }
 
     for (const animateEvent of eventAnimations) {

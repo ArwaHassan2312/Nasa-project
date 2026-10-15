@@ -54,16 +54,16 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     completeDailyChallenge,
     dismissChallengeFeedback,
   } = simulation;
-  // Every daily task bound to the entered component gets its own dedicated
-  // button in the inside panel. Driven by the challenges data, so tasks added
-  // in the future automatically get their button here too.
+  // Only tasks activated from the Daily Tasks list show a button in the inside
+  // panel; available or completed tasks add no interior UI at all.
   const insideComponentTasks = insidePanel.componentId
     ? simulation.dailyChallenges.filter(
-        (challenge) => challenge.targetComponentId === insidePanel.componentId,
+        (challenge) => challenge.targetComponentId === insidePanel.componentId
+          && challenge.status === 'inProgress',
       )
     : [];
   const promptedChallenge = simulation.dailyChallenges.find(
-    (challenge) => challenge.status !== 'completed'
+    (challenge) => challenge.status === 'inProgress'
       && challenge.targetComponentId === prompt.data?.id,
   );
   const taskActionRef = useRef(null);
@@ -71,9 +71,10 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     const challenge = taskId
       ? simulation.dailyChallenges.find((entry) => entry.id === taskId)
       : simulation.dailyChallenges.find(
-          (entry) => entry.status !== 'completed' && entry.targetComponentId === componentId,
+          (entry) => entry.status === 'inProgress' && entry.targetComponentId === componentId,
         );
-    if (challenge && challenge.status !== 'completed') {
+    // Only tasks activated from the Daily Tasks list can be executed here.
+    if (challenge && challenge.status === 'inProgress') {
       completeDailyChallenge(challenge.id, challenge.targetComponentId);
     }
   };
@@ -140,9 +141,18 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     engineRef.current?.setConsoleEditMode?.(consoleEdit);
   }, [consoleEdit]);
 
-  useEffect(() => {
-    if (!insidePanel.visible) setConsoleEdit(false);
-  }, [insidePanel.visible]);
+  // Keep interiors clean: entering a component closes the drawers, leaving
+  // only the inside label, EXIT and MOVE buttons. Leaving resets console edit.
+  const [prevInsidePanelVisible, setPrevInsidePanelVisible] = useState(false);
+  if (prevInsidePanelVisible !== insidePanel.visible) {
+    setPrevInsidePanelVisible(insidePanel.visible);
+    if (insidePanel.visible) {
+      setDailyTasksOpen(false);
+      setStatusOpen(false);
+    } else {
+      setConsoleEdit(false);
+    }
+  }
 
   // Fallback: guarantee Enter works while a proximity prompt is visible,
   // even if the engine key handler missed it (e.g. focus quirks).
@@ -387,54 +397,44 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </div>
 
         <div className="lunar-actions-group">
-          <button
-            type="button"
-            className="lunar-btn lunar-status-toggle"
-            aria-expanded={dailyTasksOpen}
-            aria-controls="lunar-daily-tasks"
-            disabled={simulation.eventPhase !== 'idle' || simulation.gameStatus !== 'playing'}
-            onClick={() => setDailyTasksOpen((open) => !open)}
-          >
-            DAILY TASKS
-          </button>
-          <button
-            type="button"
-            className="lunar-btn lunar-status-toggle"
-            aria-expanded={statusOpen}
-            aria-controls="lunar-status-drawer"
-            disabled={simulation.eventPhase !== 'idle'}
-            onClick={() => setStatusOpen((open) => !open)}
-          >
-             OUTPOST STATUS
-          </button>
+          {!insidePanel.visible && (
+            <>
+              <button
+                type="button"
+                className="lunar-btn lunar-status-toggle"
+                aria-expanded={dailyTasksOpen}
+                aria-controls="lunar-daily-tasks"
+                disabled={simulation.eventPhase !== 'idle' || simulation.gameStatus !== 'playing'}
+                onClick={() => setDailyTasksOpen((open) => !open)}
+              >
+                DAILY TASKS
+              </button>
+              <button
+                type="button"
+                className="lunar-btn lunar-status-toggle"
+                aria-expanded={statusOpen}
+                aria-controls="lunar-status-drawer"
+                disabled={simulation.eventPhase !== 'idle'}
+                onClick={() => setStatusOpen((open) => !open)}
+              >
+                 OUTPOST STATUS
+              </button>
+            </>
+          )}
           {insidePanel.visible ? (
             <div className="lunar-inside-panel">
               <span>{insidePanel.label}</span>
               {insideComponentTasks.map((challenge) => (
                 <div className="lunar-task-inline-action-wrap" key={challenge.id}>
-                  {challenge.status === 'completed' ? (
-                    <span
-                      className="lunar-task-inline-done"
-                      title={`${challenge.title} verified on day ${challenge.completedDay}`}
-                    >
-                      ✓ {challenge.title} · Day {challenge.completedDay}
-                    </span>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="lunar-task-inline-action"
-                        title={`${challenge.title} — ${challenge.status === 'inProgress' ? 'verify this task now' : 'run this daily task now'}`}
-                        disabled={simulation.eventPhase !== 'idle' || simulation.gameStatus !== 'playing'}
-                        onClick={() => completeDailyChallenge(challenge.id, challenge.targetComponentId)}
-                      >
-                        {challenge.actionLabel}
-                      </button>
-                      <small className="lunar-task-action-cost">
-                        {challenge.status === 'inProgress' ? 'No additional campaign time' : 'Dedicated task button'}
-                      </small>
-                    </>
-                  )}
+                  <button
+                    type="button"
+                    className="lunar-task-inline-action"
+                    title={`${challenge.title} — verify this task now`}
+                    disabled={simulation.eventPhase !== 'idle' || simulation.gameStatus !== 'playing'}
+                    onClick={() => completeDailyChallenge(challenge.id, challenge.targetComponentId)}
+                  >
+                    {challenge.actionLabel}
+                  </button>
                 </div>
               ))}
               <button
@@ -816,7 +816,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             <button type="button" aria-label="Close daily tasks" onClick={() => setDailyTasksOpen(false)}>×</button>
           </div>
           <p className="lunar-task-intro">
-            Every task has a dedicated button inside its component — enter the named location and press it there. Starting a task from this list only pins it for tracking and map guidance. Travel uses the continuous clock; task actions add no extra time.
+            Start a task from this list to activate it — only activated tasks can be completed inside their component. Once activated, enter the named location and press its dedicated button there. Travel uses the continuous clock; task actions add no extra time.
           </p>
           <div className="lunar-task-list">
             {simulation.dailyChallenges.map((challenge) => {
