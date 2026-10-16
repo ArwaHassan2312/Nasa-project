@@ -57,6 +57,8 @@ const MAX_RESOURCE_LEVEL = 100;
 export const MISSION_LENGTH_DAYS = 30;
 export const LUNAR_DAY_DURATION_MS = 1 * 60 * 1000;
 const CLOCK_UPDATE_INTERVAL_MS = 1000;
+// Task completion toast stays on screen for this long before auto-dismissing.
+const CHALLENGE_FEEDBACK_DURATION_MS = 3000;
 
 const VITAL_RESOURCES: ResourceKey[] = ['oxygen', 'water', 'power'];
 
@@ -446,6 +448,17 @@ export function useGameSimulation({
         : currentState
     ));
   }, []);
+
+  // Completion feedback is transient: it clears itself after a few seconds so
+  // the toast never lingers on screen until the player dismisses it.
+  useEffect(() => {
+    if (!state.challengeFeedback) return undefined;
+    const timerId = window.setTimeout(
+      () => dismissChallengeFeedback(),
+      CHALLENGE_FEEDBACK_DURATION_MS,
+    );
+    return () => window.clearTimeout(timerId);
+  }, [state.challengeFeedback, dismissChallengeFeedback]);
 
   return {
     ...state,

@@ -240,13 +240,30 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let taskConsoleActive = false;
   const taskRaycaster = new THREE.Raycaster();
   const taskScreenCenter = new THREE.Vector2(0, 0);
-  // In-game console editor: drag to reposition, wheel to resize.
+  // In-game console editor: drag to reposition, wheel to resize. Placements
+  // are stored per component, so every daily task's button keeps its own
+  // position instead of sharing one with other rooms of the same console kind.
   const CONSOLE_STORE_KEY = 'lunar-task-console:v1';
   let consoleOverrides = {};
   try {
     consoleOverrides = JSON.parse(localStorage.getItem(CONSOLE_STORE_KEY) || '{}') || {};
   } catch (error) {
     consoleOverrides = {};
+  }
+  // Migrate v1 entries, which were shared per console kind: the wall placement
+  // belonged to the Workshop (010) and the pedestal placement to the Cylinder
+  // Habitat (001). Every other component now starts from its default console
+  // position — e.g. the Battery Container no longer mirrors the Workshop.
+  if (consoleOverrides.wall && !consoleOverrides['wall:010']) {
+    consoleOverrides['wall:010'] = consoleOverrides.wall;
+  }
+  if (consoleOverrides.pedestal && !consoleOverrides['pedestal:001']) {
+    consoleOverrides['pedestal:001'] = consoleOverrides.pedestal;
+  }
+  if (consoleOverrides.wall || consoleOverrides.pedestal) {
+    delete consoleOverrides.wall;
+    delete consoleOverrides.pedestal;
+    saveConsoleOverrides();
   }
   let consoleEditMode = false;
   let consoleDragging = false;
@@ -260,8 +277,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
       /* storage unavailable - customization lasts for this session only */
     }
   }
-  function getConsolePlacement(kind, fallbackPos, fallbackSize) {
-    const saved = consoleOverrides[kind];
+  function consolePlacementKey(kind, componentId) {
+    return `${kind}:${componentId ?? 'default'}`;
+  }
+  function getConsolePlacement(kind, componentId, fallbackPos, fallbackSize) {
+    const saved = consoleOverrides[consolePlacementKey(kind, componentId)];
     if (saved && Array.isArray(saved.pos) && saved.pos.length === 3) {
       return {
         pos: new THREE.Vector3(saved.pos[0], saved.pos[1], saved.pos[2]),
@@ -1807,7 +1827,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       (bounds.min.z + bounds.max.z) / 2 + cfg.zOffset
     );
     if (!(anchor.y > bounds.min.y + 0.3)) return false;
-    const placement = getConsolePlacement('wall', anchor, cfg.size);
+    const placement = getConsolePlacement('wall', taskConsoleComponentId, anchor, cfg.size);
     taskConsoleKind = 'wall';
 
     const group = new THREE.Group();
@@ -1863,7 +1883,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     inner.name = 'Task Console Inner';
     group.add(inner);
     const spot = new THREE.Vector3(TASK_CONSOLE_CONFIG.pedestal.x, 0, TASK_CONSOLE_CONFIG.pedestal.z);
-    const placement = getConsolePlacement('pedestal', spot, TASK_CONSOLE_CONFIG.pedestal.size);
+    const placement = getConsolePlacement('pedestal', taskConsoleComponentId, spot, TASK_CONSOLE_CONFIG.pedestal.size);
     inner.scale.setScalar(placement.size);
 
     // Stack one unit per task vertically on the floating panel.
@@ -2455,7 +2475,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function resetConsolePlacement() {
     if (!taskConsoleKind) return;
-    delete consoleOverrides[taskConsoleKind];
+    delete consoleOverrides[consolePlacementKey(taskConsoleKind, taskConsoleComponentId)];
     saveConsoleOverrides();
     const componentId = taskConsoleComponentId;
     const isWorkshop = taskConsoleKind === 'wall';
@@ -2467,7 +2487,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (!taskConsoleGroup || !taskConsoleKind || !taskConsoleInner) return;
     taskConsoleGroup.updateWorldMatrix(true, false);
     const world = new THREE.Vector3().setFromMatrixPosition(taskConsoleGroup.matrixWorld);
-    consoleOverrides[taskConsoleKind] = {
+    consoleOverrides[consolePlacementKey(taskConsoleKind, taskConsoleComponentId)] = {
       pos: [Math.round(world.x * 100) / 100, Math.round(world.y * 100) / 100, Math.round(world.z * 100) / 100],
       size: Math.round(taskConsoleInner.scale.x * 100) / 100,
     };
