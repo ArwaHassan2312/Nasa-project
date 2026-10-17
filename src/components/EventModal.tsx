@@ -16,7 +16,7 @@ export default function EventModal({ event, onSelectDecision }: EventModalProps)
         aria-modal="true"
         aria-labelledby="event-title"
       >
-        <div className="simulation-eyebrow">Mission event · Lunar day {event.day}</div>
+        <div className="simulation-eyebrow">Mission event · Lunar day {event.day ?? '—'}</div>
         <div className="simulation-event-heading">
           <h2 id="event-title">{event.name}</h2>
           <span className={`severity-badge severity-${event.severity}`}>

@@ -1741,7 +1741,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (!taskConsoleInner || !taskConsoleLayout) return;
 
     const targets = activeTaskTargets.filter(
-      entry => entry.componentId === taskConsoleComponentId && entry.status === 'inProgress',
+      entry => entry.componentId === taskConsoleComponentId
+        && (entry.status === 'inProgress' || entry.status === 'overdue'),
     );
     const specs = targets.map(target => ({
       taskId: target.taskId ?? null,
@@ -1772,7 +1773,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
       return;
     }
     const targets = activeTaskTargets.filter(
-      entry => entry.componentId === taskConsoleComponentId && entry.status === 'inProgress',
+      entry => entry.componentId === taskConsoleComponentId
+        && (entry.status === 'inProgress' || entry.status === 'overdue'),
     );
     const signature = targets.map(target => target.taskId ?? 'standby').join('|');
     if (signature !== taskConsoleUnitSignature) {
@@ -1788,7 +1790,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     // The task console only appears for tasks activated from the Daily Tasks
     // list; available tasks add no interior UI.
     taskConsoleActive = taskConsoleUnits.some(
-      unit => unit.status === 'inProgress',
+      unit => unit.status === 'inProgress' || unit.status === 'overdue',
     );
     if (taskConsoleArrow) taskConsoleArrow.visible = taskConsoleActive;
   }
@@ -2586,7 +2588,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           '[TaskConsole] clicked, component:', taskConsoleComponentId,
           'task:', taskId, 'status:', unit?.status ?? 'unknown'
         );
-        if (taskId && unit && unit.status === 'inProgress') {
+        if (taskId && unit && (unit.status === 'inProgress' || unit.status === 'overdue')) {
           onTaskAction(taskConsoleComponentId, taskId);
         }
       }
@@ -3358,7 +3360,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
     const pulseNow = performance.now();
     for (const unit of taskConsoleUnits) {
-      if (unit.status === 'inProgress') {
+      if (unit.status === 'inProgress' || unit.status === 'overdue') {
         unit.button.material.emissiveIntensity = 1.3 + Math.sin(pulseNow * 0.006) * 0.6;
       }
     }

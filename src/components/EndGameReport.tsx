@@ -3,8 +3,13 @@ import type {
   DecisionRecord,
   GameStatus,
   ResourceLevels,
+  SystemConditions,
+  SystemFaultRecord,
+  PostponementRecord,
 } from '../hooks/useGameSimulation';
+import { MOON_EVENTS } from '../data/moonEvents';
 import type { ResourceKey } from '../data/moonEvents';
+import type { EventOccurrence } from '../hooks/eventScheduler';
 
 interface EndGameReportProps {
   status: Exclude<GameStatus, 'playing'>;
@@ -14,17 +19,21 @@ interface EndGameReportProps {
   failureReason: ResourceKey | null;
   decisionHistory: DecisionRecord[];
   dailyChallenges: DailyChallenge[];
+  systemConditions: SystemConditions;
+  faultHistory: SystemFaultRecord[];
+  postponementHistory: PostponementRecord[];
+  eventHistory: EventOccurrence[];
   onRestart: () => void;
 }
 
 const RESOURCE_LABELS: Record<ResourceKey, string> = {
-  power: 'Power',
+  power: 'Power reserve',
   battery: 'Battery',
   oxygen: 'Oxygen',
-  water: 'Water',
+  water: 'Water reserve',
   food: 'Food',
   habitat: 'Habitat',
-  equipment: 'Equipment',
+  equipment: 'Equipment stock',
   health: 'Crew health',
   radProtection: 'Radiation protection',
   comms: 'Communications',
@@ -41,13 +50,35 @@ export default function EndGameReport({
   failureReason,
   decisionHistory,
   dailyChallenges,
+  systemConditions,
+  faultHistory,
+  postponementHistory,
+  eventHistory,
   onRestart,
 }: EndGameReportProps) {
   const isSuccess = status === 'success';
-  const lowestResources = (Object.entries(resources) as [ResourceKey, number][])
-    .filter(([resource]) => resource !== 'science' && resource !== 'potentialWater')
-    .sort(([, first], [, second]) => first - second)
-    .slice(0, 3);
+  const finalResources = (Object.entries(resources) as [ResourceKey, number][])
+    .sort(([, first], [, second]) => first - second);
+  const completedTasks = dailyChallenges.filter((task) => task.status === 'completed');
+  const overdueTasks = dailyChallenges.filter((task) => task.status === 'overdue');
+  const unfinishedTasks = dailyChallenges.filter((task) => task.status !== 'completed');
+  const completedOnTime = completedTasks.filter((task) => task.completedAfterDeadline === false).length;
+  const completedLate = completedTasks.filter((task) => task.completedAfterDeadline === true).length;
+  const criticalResponseTimes = completedTasks
+    .filter((task) => task.emergency && task.responseTimeMs !== null)
+    .map((task) => task.responseTimeMs ?? 0);
+  const averageCriticalResponseMs = criticalResponseTimes.length > 0
+    ? criticalResponseTimes.reduce((total, responseTime) => total + responseTime, 0)
+      / criticalResponseTimes.length
+    : null;
+  const preventedEmergencies = dailyChallenges.filter((task) => task.emergencyPrevented).length;
+  const escalatedEmergencies = dailyChallenges.filter((task) => task.escalationApplied).length;
+  const systemLabels: Record<keyof SystemConditions, string> = {
+    power: 'Power system',
+    lifeSupport: 'Life support',
+    water: 'Water system',
+    equipment: 'Equipment',
+  };
 
   return (
     <div className="simulation-modal-backdrop">
@@ -63,7 +94,7 @@ export default function EndGameReport({
         </h2>
         <p className="report-intro">
           {isSuccess
-            ? 'Your crew reached the end of the mission with its vital systems still operating.'
+            ? 'Your crew reached the end of the 30-day mission with its vital resources still operating.'
             : `The mission ended when ${failureReason ? RESOURCE_LABELS[failureReason].toLowerCase() : 'a vital resource'} ran out. A resource reaching zero means the crew can no longer safely continue.`}
         </p>
 
@@ -82,15 +113,89 @@ export default function EndGameReport({
         </div>
 
         <div className="report-resources">
-          <h3>Lowest remaining reserves</h3>
+          <h3>Final resource status</h3>
           <ul>
-            {lowestResources.map(([resource, amount]) => (
+            {finalResources.map(([resource, amount]) => (
               <li key={resource}>
                 <span>{RESOURCE_LABELS[resource]}</span>
                 <strong>{amount}%</strong>
               </li>
             ))}
           </ul>
+        </div>
+
+        <div className="report-decisions">
+          <h3>Mission record</h3>
+          <p className="report-stat-line">
+            {completedTasks.length} of {dailyChallenges.length} tasks completed ·{' '}
+            {unfinishedTasks.length} unfinished · {overdueTasks.length} overdue ·{' '}
+            {eventHistory.length} major events encountered
+          </p>
+          <p className="report-stat-line">
+            {completedOnTime} completed on time · {completedLate} completed after deadline ·{' '}
+            {unfinishedTasks.length} left incomplete
+          </p>
+          <p className="report-stat-line">
+            Average critical response: {averageCriticalResponseMs === null
+              ? 'not recorded'
+              : `${Math.round(averageCriticalResponseMs / 1000)} seconds`} ·{' '}
+            {preventedEmergencies} emergencies prevented · {escalatedEmergencies} escalated
+          </p>
+          <p className="report-stat-line">
+            Mission ended {isSuccess ? `at the end of Day ${day}` : `early on Day ${day}`}.
+          </p>
+        </div>
+
+        <div className="report-decisions">
+          <h3>Final system condition</h3>
+          <ul>
+            {(Object.entries(systemConditions) as [keyof SystemConditions, number][]).map(([system, condition]) => (
+              <li key={system}>
+                <strong>{systemLabels[system]}</strong>
+                <span>{condition}/100</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="report-decisions">
+          <h3>Major events encountered</h3>
+          {eventHistory.length === 0 ? (
+            <p>No major events occurred during this mission.</p>
+          ) : (
+            <ul>
+              {eventHistory.map((event, index) => (
+                <li key={`${event.eventId}-${index}`}>
+                  <strong>
+                    Day {event.day}: {MOON_EVENTS.find((definition) => definition.id === event.eventId)?.name
+                      ?? event.eventId.replaceAll('_', ' ')}
+                  </strong>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="report-decisions">
+          <h3>Faults and postponements</h3>
+          {faultHistory.length === 0 && postponementHistory.length === 0 ? (
+            <p>No recorded system faults or task postponements.</p>
+          ) : (
+            <ul>
+              {faultHistory.map((fault, index) => (
+                <li key={`fault-${fault.day}-${fault.system}-${index}`}>
+                  <strong>Day {fault.day}: {systemLabels[fault.system]} · {fault.kind}</strong>
+                  <span>{fault.reason} ({fault.change > 0 ? '+' : ''}{fault.change} condition)</span>
+                </li>
+              ))}
+              {postponementHistory.map((record, index) => (
+                <li key={`postponement-${record.day}-${record.taskTitle}-${index}`}>
+                  <strong>Day {record.day}: postponed {record.taskTitle}</strong>
+                  <span>{systemLabels[record.system]} · {record.consequence}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div className="report-decisions">
@@ -103,6 +208,7 @@ export default function EndGameReport({
                 <li key={`${record.day}-${record.eventName}`}>
                   <strong>Day {record.day}: {record.decisionLabel}</strong>
                   <span>{record.eventName} — {record.lesson}</span>
+                  <span>Immediate outcome: {record.actualOutcome}</span>
                   <span>Later effect: {record.futureConsequence}</span>
                 </li>
               ))}
@@ -118,11 +224,24 @@ export default function EndGameReport({
                 <strong>
                   {challenge.title} · {challenge.status === 'completed'
                     ? 'Completed'
-                    : challenge.status === 'inProgress' ? 'In progress' : 'Unfinished'}
+                    : challenge.status === 'overdue' ? 'Overdue'
+                      : challenge.status === 'inProgress' ? 'In progress' : 'Unfinished'}
                 </strong>
-                <span>Location: {challenge.targetComponentName} · Priority: {challenge.priority}</span>
+                <span>
+                  Location: {challenge.targetComponentName} · Priority: {challenge.priority} ·
+                  Deadline: Day {challenge.deadlineDay}
+                </span>
                 {challenge.completedDay !== null && (
                   <span>Completed on day {challenge.completedDay}</span>
+                )}
+                {challenge.completedAfterDeadline === true && (
+                  <span>Completed after the response deadline · recovery still succeeded</span>
+                )}
+                {challenge.emergencyPrevented && (
+                  <span>Emergency prevented by a timely response</span>
+                )}
+                {challenge.escalationApplied && (
+                  <span>Emergency escalated and applied its second-stage consequence</span>
                 )}
               </li>
             ))}

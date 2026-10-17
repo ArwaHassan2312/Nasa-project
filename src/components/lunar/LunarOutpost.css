@@ -699,6 +699,112 @@
   animation: lunarDrawerIn 0.22s ease-out;
 }
 
+.lunar-readiness {
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid rgba(127, 240, 255, 0.22);
+  border-radius: 6px;
+  background: rgba(16, 29, 38, 0.76);
+}
+
+.lunar-readiness-at-risk {
+  border-color: rgba(240, 197, 132, 0.45);
+}
+
+.lunar-readiness-critical {
+  border-color: rgba(255, 143, 123, 0.58);
+  background: rgba(61, 33, 30, 0.42);
+}
+
+.lunar-readiness-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: #c3d3d8;
+  font-size: 0.62rem;
+}
+
+.lunar-readiness-summary strong {
+  color: #9cdfa4;
+  font-family: var(--lunar-font-tech);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.lunar-readiness-at-risk .lunar-readiness-summary strong { color: #f0c584; }
+.lunar-readiness-critical .lunar-readiness-summary strong { color: #ff9b87; }
+
+.lunar-readiness p,
+.lunar-readiness-overdue {
+  margin: 8px 0 0;
+  color: #a9bdc4;
+  font-size: 0.6rem;
+  line-height: 1.55;
+}
+
+.lunar-readiness p b {
+  color: #dbe8eb;
+}
+
+.lunar-readiness-task {
+  display: grid;
+  gap: 3px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(142, 177, 190, 0.14);
+  color: #93aab2;
+  font-size: 0.57rem;
+}
+
+.lunar-readiness-task strong {
+  color: #dcebed;
+  font-size: 0.62rem;
+}
+
+.lunar-readiness-task small {
+  color: #93aab2;
+}
+
+.lunar-readiness-overdue {
+  color: #ffad99;
+}
+
+.lunar-system-heading {
+  margin: 15px 0 8px;
+  color: #dcebed;
+  font-family: var(--lunar-font-tech);
+  font-size: 0.62rem;
+  font-weight: 500;
+}
+
+.lunar-system-condition-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lunar-system-condition {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border-radius: 4px;
+  background: rgba(16, 29, 38, 0.56);
+  color: #a9bdc4;
+  font-size: 0.59rem;
+}
+
+.lunar-system-condition strong {
+  color: #9cdfa4;
+  font-size: 0.57rem;
+  text-transform: uppercase;
+}
+
+.lunar-system-stable strong { color: #b9d88c; }
+.lunar-system-degraded strong { color: #f0c584; }
+.lunar-system-critical strong,
+.lunar-system-severe strong,
+.lunar-system-failed strong { color: #ff9b87; }
+
 .lunar-daily-tasks {
   position: absolute;
   z-index: 6;
@@ -774,7 +880,12 @@
   color: #f0c584;
 }
 
-.lunar-task-priority-standard {
+.lunar-task-priority-critical {
+  color: #ff8f7b;
+  font-weight: 700;
+}
+
+.lunar-task-priority-normal {
   color: #91cbd3;
 }
 
@@ -793,6 +904,44 @@
 
 .lunar-task-completed .lunar-task-title-row > span {
   color: #9cdfa4;
+}
+
+.lunar-task-overdue {
+  border-color: rgba(255, 143, 123, 0.55);
+  background: rgba(61, 33, 30, 0.56);
+}
+
+.lunar-task-overdue .lunar-task-title-row > span {
+  color: #ff9b87;
+}
+
+.lunar-task-countdown {
+  margin-top: 9px;
+  padding: 7px 8px;
+  border-left: 2px solid #f0c584;
+  color: #f0c584;
+  background: rgba(240, 197, 132, 0.08);
+  font-family: var(--lunar-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+}
+
+.lunar-task-countdown.is-imminent,
+.lunar-task-countdown.is-overdue {
+  border-color: #ff786f;
+  color: #ff9b87;
+  background: rgba(255, 120, 111, 0.12);
+  animation: lunar-task-warning 1.2s ease-in-out infinite alternate;
+}
+
+.lunar-task-risk {
+  margin-top: 6px;
+  color: #ffb49e !important;
+}
+
+@keyframes lunar-task-warning {
+  from { opacity: 0.72; }
+  to { opacity: 1; }
 }
 
 .lunar-task-card > p {
@@ -827,6 +976,27 @@
 }
 
 .lunar-task-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lunar-task-postpone {
+  margin: 9px 0 0 7px;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 166, 128, 0.35);
+  border-radius: 4px;
+  color: #ffb59a;
+  background: rgba(255, 166, 128, 0.06);
+  font-family: var(--lunar-font-mono);
+  font-size: 0.58rem;
+  cursor: pointer;
+}
+
+.lunar-task-postpone:hover:not(:disabled) {
+  background: rgba(255, 166, 128, 0.16);
+}
+
+.lunar-task-postpone:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
