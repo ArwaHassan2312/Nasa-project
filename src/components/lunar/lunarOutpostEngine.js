@@ -1116,7 +1116,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const TOMATO_PLANT_Y_SCALE = 2;
 
   const terrainMaterial = new THREE.MeshStandardMaterial({
-    color: 0xb7b3ab,
+    color: 0x77736d,
     roughness: 1,
     metalness: 0,
     flatShading: false,
