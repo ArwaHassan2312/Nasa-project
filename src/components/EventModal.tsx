@@ -3,9 +3,10 @@ import type { Decision, GameEvent } from '../data/moonEvents';
 interface EventModalProps {
   event: GameEvent | null;
   onSelectDecision: (decision: Decision) => void;
+  onClose: () => void;
 }
 
-export default function EventModal({ event, onSelectDecision }: EventModalProps) {
+export default function EventModal({ event, onSelectDecision, onClose }: EventModalProps) {
   if (!event) return null;
 
   return (
@@ -23,6 +24,9 @@ export default function EventModal({ event, onSelectDecision }: EventModalProps)
             {event.severity}
           </span>
         </div>
+        <button className="simulation-event-close" type="button" onClick={onClose}>
+          Close alert
+        </button>
         <p className="simulation-event-situation">{event.situation}</p>
         <p className="simulation-event-prompt">Choose how the crew should respond:</p>
         <div className="simulation-decision-list">

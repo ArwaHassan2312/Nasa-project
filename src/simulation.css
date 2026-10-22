@@ -106,6 +106,22 @@
   font-weight: 500;
 }
 
+.simulation-event-close {
+  margin-top: 14px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 102, 102, 0.45);
+  border-radius: 4px;
+  color: #ffd2d2;
+  background: rgba(120, 24, 30, 0.22);
+  font: inherit;
+  font-size: 0.65rem;
+  cursor: pointer;
+}
+
+.simulation-event-close:hover {
+  background: rgba(160, 32, 40, 0.38);
+}
+
 .severity-badge {
   flex: 0 0 auto;
   padding: 5px 9px;

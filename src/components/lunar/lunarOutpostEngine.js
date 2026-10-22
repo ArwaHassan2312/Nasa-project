@@ -3217,18 +3217,18 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (cinematic.stage === 'hold') {
       cinematic.elapsed += delta;
       if (cinematic.elapsed >= 3.8) {
-        cinematic.stage = 'awaitingDecision';
-        const callback = cinematic.onPresented;
+        cinematic.stage = 'return';
+        cinematic.elapsed = 0;
+        cinematic.returnFromPosition = camera.position.clone();
+        cinematic.returnFromQuaternion = camera.quaternion.clone();
+        cinematic.onReturned = cinematic.onPresented;
         cinematic.onPresented = null;
-        callback?.();
       }
       return;
     }
 
-    if (cinematic.stage === 'awaitingDecision') return;
-
     cinematic.elapsed += delta;
-    const progress = Math.min(cinematic.elapsed / 1.35, 1);
+    const progress = Math.min(cinematic.elapsed / 1.8, 1);
     const eased = progress * progress * (3 - 2 * progress);
     camera.position.lerpVectors(
       cinematic.returnFromPosition,

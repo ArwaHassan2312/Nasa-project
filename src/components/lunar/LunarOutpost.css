@@ -109,6 +109,42 @@
   pointer-events: none;
 }
 
+.lunar-event-alert-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  max-width: min(52vw, 420px);
+  padding: 8px 13px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 75, 75, 0.9);
+  border-radius: 5px;
+  color: #fff1f1;
+  background: rgba(118, 13, 19, 0.92);
+  box-shadow: 0 0 20px rgba(255, 32, 43, 0.28);
+  font: 600 0.68rem var(--lunar-font-tech);
+  letter-spacing: 0.07em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  animation: lunarAlertFlash 1.4s ease-in-out infinite alternate;
+  pointer-events: auto;
+}
+
+.lunar-event-alert-pulse {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #ff3c48;
+  box-shadow: 0 0 10px #ff3c48;
+}
+
+@keyframes lunarAlertFlash {
+  from { background-color: rgba(92, 12, 18, 0.9); }
+  to { background-color: rgba(158, 20, 27, 0.96); }
+}
+
 /* ---------- LIVE MINIMAP (top-left, under Mission Control) ---------- */
 .lunar-minimap {
   position: absolute;

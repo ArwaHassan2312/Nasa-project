@@ -88,6 +88,7 @@ interface GameState {
   dayElapsedMs: number;
   campaignElapsedMs: number;
   schedulerElapsedMs: number;
+  eventDrainElapsedMs: number;
   rngState: number;
   resources: ResourceLevels;
   systemConditions: SystemConditions;
@@ -110,8 +111,9 @@ interface GameState {
 
 
 const MAX_RESOURCE_LEVEL = 100;
+export const MISSION_FAILURE_RESOURCE_THRESHOLD = 10;
 export const MISSION_LENGTH_DAYS = 30;
-export const LUNAR_DAY_DURATION_MS = 2 * 60 * 1000;
+export const LUNAR_DAY_DURATION_MS = .30 * 60 * 1000;
 const CLOCK_UPDATE_INTERVAL_MS = 1000;
 // Task completion toast stays on screen for this long before auto-dismissing.
 const CHALLENGE_FEEDBACK_DURATION_MS = 3000;
@@ -170,6 +172,7 @@ function createInitialState(seed: number): GameState {
     dayElapsedMs: 0,
     campaignElapsedMs: 0,
     schedulerElapsedMs: 0,
+    eventDrainElapsedMs: 0,
     rngState: seed >>> 0,
     resources: { ...INITIAL_RESOURCES },
     systemConditions: {
@@ -334,7 +337,9 @@ function applyEffects(
 }
 
 function findFailedVital(resources: ResourceLevels): ResourceKey | null {
-  return VITAL_RESOURCES.find((resource) => resources[resource] <= 0) ?? null;
+  return VITAL_RESOURCES.find(
+    (resource) => resources[resource] <= MISSION_FAILURE_RESOURCE_THRESHOLD,
+  ) ?? null;
 }
 
 function changeSystemCondition(
@@ -596,7 +601,6 @@ function advanceClockState(
   while (
     remainingMs > 0
     && nextState.gameStatus === 'playing'
-    && !nextState.currentEvent
     && !nextState.warningTaskId
   ) {
     const untilDayEnd = dayDurationMs - nextState.dayElapsedMs;
@@ -621,6 +625,33 @@ function advanceClockState(
       schedulerElapsedMs: nextState.schedulerElapsedMs + step,
     };
     remainingMs -= step;
+
+    // Accumulate event time and apply damage in visible half point steps while
+    // preserving the overall drain rate of one point per lunar day.
+    if (nextState.currentEvent && nextState.eventPhase !== 'resolving') {
+      const halfDayMs = dayDurationMs / 2;
+      const totalElapsedMs = nextState.eventDrainElapsedMs + step;
+      const halfPointSteps = Math.floor(totalElapsedMs / halfDayMs);
+      const drain = halfPointSteps * 0.5;
+      nextState = {
+        ...nextState,
+        eventDrainElapsedMs: totalElapsedMs - halfPointSteps * halfDayMs,
+      };
+      if (drain > 0) {
+        const eventDrain = Object.fromEntries(
+          nextState.currentEvent.riskResources.map((resource) => [resource, -drain]),
+        ) as Partial<Record<ResourceKey, number>>;
+        const resources = applyEffects(nextState.resources, eventDrain);
+        const failedVital = findFailedVital(resources);
+        nextState = {
+          ...nextState,
+          resources,
+          ...(failedVital ? { gameStatus: 'failed' as const, failureReason: failedVital } : {}),
+        };
+        if (nextState.gameStatus !== 'playing') return nextState;
+      }
+    }
+
     nextState = applyTimedTaskConsequences(nextState);
     if (nextState.gameStatus !== 'playing') return nextState;
 
@@ -667,7 +698,10 @@ function advanceClockState(
       if (nextState.gameStatus !== 'playing') return nextState;
     }
 
-    if (nextState.schedulerElapsedMs >= EVENT_SCHEDULER_CONFIG.checkIntervalMs) {
+    if (
+      !nextState.currentEvent
+      && nextState.schedulerElapsedMs >= EVENT_SCHEDULER_CONFIG.checkIntervalMs
+    ) {
       nextState = { ...nextState, schedulerElapsedMs: 0 };
       const selection = selectMajorEvent({
         events: MOON_EVENTS,
@@ -692,6 +726,7 @@ function advanceClockState(
           ...nextState,
           currentEvent: event,
           eventPhase: 'pending',
+          eventDrainElapsedMs: 0,
           eventEffectId: event.id,
           eventHistory: [
             ...nextState.eventHistory,
@@ -704,6 +739,13 @@ function advanceClockState(
         };
         return nextState;
       }
+    } else if (
+      nextState.currentEvent
+      && nextState.schedulerElapsedMs >= EVENT_SCHEDULER_CONFIG.checkIntervalMs
+    ) {
+      // Keep the clock stepping while an alert is active without accumulating
+      // a scheduler interval that would otherwise reduce the next step to 0.
+      nextState = { ...nextState, schedulerElapsedMs: 0 };
     }
   }
 
@@ -723,7 +765,6 @@ export function useGameSimulation({
     setState((currentState) => {
       if (
         currentState.gameStatus !== 'playing' ||
-        currentState.currentEvent ||
         currentState.warningTaskId ||
         !Number.isFinite(dayDurationMs) ||
         dayDurationMs <= 0
@@ -738,7 +779,6 @@ export function useGameSimulation({
     if (
       !enabled ||
       state.gameStatus !== 'playing' ||
-      state.currentEvent ||
       state.warningTaskId ||
       !Number.isFinite(dayDurationMs) ||
       dayDurationMs <= 0
@@ -767,7 +807,6 @@ export function useGameSimulation({
     advanceClock,
     dayDurationMs,
     enabled,
-    state.currentEvent,
     state.gameStatus,
     state.warningTaskId,
   ]);
@@ -904,6 +943,7 @@ export function useGameSimulation({
         ...currentState,
         currentEvent: null,
         eventPhase: 'idle',
+        eventDrainElapsedMs: 0,
         eventEffectId: null,
       };
     });
@@ -913,8 +953,7 @@ export function useGameSimulation({
     setState((currentState) => {
       if (
         currentState.gameStatus !== 'playing' ||
-        currentState.eventPhase !== 'idle' ||
-        currentState.currentEvent ||
+        !['idle', 'awaitingDecision'].includes(currentState.eventPhase) ||
         currentState.warningTaskId
       ) {
         return currentState;
@@ -957,8 +996,7 @@ export function useGameSimulation({
     setState((currentState) => {
       if (
         currentState.gameStatus !== 'playing' ||
-        currentState.eventPhase !== 'idle' ||
-        currentState.currentEvent ||
+        !['idle', 'awaitingDecision'].includes(currentState.eventPhase) ||
         currentState.warningTaskId
       ) {
         return currentState;
@@ -1041,8 +1079,7 @@ export function useGameSimulation({
     setState((currentState) => {
       if (
         currentState.gameStatus !== 'playing'
-        || currentState.eventPhase !== 'idle'
-        || currentState.currentEvent
+        || !['idle', 'awaitingDecision'].includes(currentState.eventPhase)
         || currentState.warningTaskId
       ) return currentState;
 
@@ -1176,7 +1213,7 @@ export function useGameSimulation({
     remainingDays: state.gameStatus === 'playing'
       ? Math.max(0, state.maxDays - state.day + 1)
       : 0,
-    isPaused: state.eventPhase !== 'idle' || Boolean(state.warningTaskId),
+    isPaused: Boolean(state.warningTaskId),
     beginPresentation,
     completePresentation,
     completeResolution,

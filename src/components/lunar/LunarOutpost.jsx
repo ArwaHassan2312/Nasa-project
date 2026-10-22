@@ -54,6 +54,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   });
   const [statusOpen, setStatusOpen] = useState(false);
   const [dailyTasksOpen, setDailyTasksOpen] = useState(false);
+  const [eventOptionsOpen, setEventOptionsOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [mapOpenedAtDecisionCount, setMapOpenedAtDecisionCount] = useState(0);
   const [selectedMapTaskId, setSelectedMapTaskId] = useState(null);
@@ -73,6 +74,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     confirmDailyChallengePostponement,
     dismissChallengeFeedback,
   } = simulation;
+  const eventGameplayActive = eventPhase === 'idle' || eventPhase === 'awaitingDecision';
   // Only tasks activated from the Daily Tasks list show a button in the inside
   // panel; available or completed tasks add no interior UI at all.
   const insideComponentTasks = insidePanel.componentId
@@ -176,7 +178,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   // Fallback: guarantee Enter works while a proximity prompt is visible,
   // even if the engine key handler missed it (e.g. focus quirks).
   useEffect(() => {
-    if (!prompt.type || simulation.eventPhase !== 'idle' || simulation.warningTaskId) return undefined;
+    if (!prompt.type || !['idle', 'awaitingDecision'].includes(simulation.eventPhase) || simulation.warningTaskId) return undefined;
     const onKey = (event) => {
       const key = (event.key || '').toLowerCase();
       const code = event.code || '';
@@ -198,7 +200,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       const target = event.target;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
       if (
-        simulation.eventPhase !== 'idle'
+        !eventGameplayActive
         || simulation.gameStatus !== 'playing'
         || simulation.warningTaskId
       ) return;
@@ -215,7 +217,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   }, [
     mapOpen,
     simulation.decisionHistory.length,
-    simulation.eventPhase,
+    eventGameplayActive,
     simulation.gameStatus,
     simulation.warningTaskId,
   ]);
@@ -253,7 +255,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     if (
       !mapOpen
       || mapOpenedAtDecisionCount !== simulation.decisionHistory.length
-      || eventPhase !== 'idle'
+      || !eventGameplayActive
       || simulation.gameStatus !== 'playing'
     ) return undefined;
 
@@ -280,13 +282,14 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     updateMapSnapshot();
     const intervalId = window.setInterval(updateMapSnapshot, 200);
     return () => window.clearInterval(intervalId);
-  }, [eventPhase, mapOpen, mapOpenedAtDecisionCount, simulation.decisionHistory.length, simulation.gameStatus]);
+  }, [eventGameplayActive, eventPhase, mapOpen, mapOpenedAtDecisionCount, simulation.decisionHistory.length, simulation.gameStatus]);
 
   useEffect(() => {
     const event = currentEvent;
     if (!event) {
       presentedEventRef.current = null;
       returningEventRef.current = null;
+      setEventOptionsOpen(false);
       return;
     }
 
@@ -328,7 +331,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   );
   const mapIsOpen = mapOpen
     && mapOpenedAtDecisionCount === simulation.decisionHistory.length
-    && eventPhase === 'idle'
+    && eventGameplayActive
     && simulation.gameStatus === 'playing';
   const mapSpan = mapSnapshot
     ? Math.max(
@@ -378,7 +381,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     && !isLoading
     && !mapIsOpen
     && simulation.gameStatus === 'playing'
-    && simulation.eventPhase === 'idle';
+    && eventGameplayActive;
   const systemEntries = [
     ['power', 'Power System'],
     ['lifeSupport', 'Life Support'],
@@ -453,7 +456,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       )}
 
       {/* Crosshair in First Person / interior - needed to aim at the task console */}
-      {(cameraMode === 'interior' || (simulation.eventPhase === 'idle' && cameraMode !== 'free' && !insidePanel.visible)) && (
+      {(cameraMode === 'interior' || (eventGameplayActive && cameraMode !== 'free' && !insidePanel.visible)) && (
         <div className="lunar-crosshair" />
       )}
 
@@ -482,7 +485,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             {simulation.warningTaskId
               ? 'TASK DECISION PAUSED'
               : simulation.isPaused
-                ? 'EVENT PAUSED'
+                ? 'TASK DECISION PAUSED'
                 : simulation.gameStatus === 'playing'
                   ? `READINESS ${readinessLevel.toUpperCase()}`
                   : 'MISSION ENDED'}
@@ -490,6 +493,18 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </div>
 
         <div className="lunar-actions-group">
+          {simulation.eventPhase === 'awaitingDecision' && simulation.currentEvent && (
+            <button
+              type="button"
+              className="lunar-event-alert-button"
+              aria-expanded={eventOptionsOpen}
+              aria-controls="event-title"
+              onClick={() => setEventOptionsOpen(true)}
+            >
+              <span className="lunar-event-alert-pulse" aria-hidden="true" />
+              RED ALERT · {simulation.currentEvent.name}
+            </button>
+          )}
           {!insidePanel.visible && (
             <>
               <button
@@ -497,7 +512,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 className="lunar-btn lunar-status-toggle"
                 aria-expanded={dailyTasksOpen}
                 aria-controls="lunar-daily-tasks"
-                disabled={simulation.eventPhase !== 'idle' || simulation.gameStatus !== 'playing'}
+                disabled={!eventGameplayActive || simulation.gameStatus !== 'playing'}
                 onClick={() => setDailyTasksOpen((open) => !open)}
               >
                 DAILY TASKS
@@ -507,7 +522,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 className="lunar-btn lunar-status-toggle"
                 aria-expanded={statusOpen}
                 aria-controls="lunar-status-drawer"
-                disabled={simulation.eventPhase !== 'idle'}
+                disabled={!eventGameplayActive}
                 onClick={() => setStatusOpen((open) => !open)}
               >
                  OUTPOST STATUS
@@ -523,7 +538,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                     type="button"
                     className="lunar-task-inline-action"
                     title={`${challenge.title} — verify this task now`}
-                    disabled={simulation.eventPhase !== 'idle' || simulation.gameStatus !== 'playing'}
+                    disabled={!eventGameplayActive || simulation.gameStatus !== 'playing'}
                     onClick={() => completeDailyChallenge(challenge.id, challenge.targetComponentId)}
                   >
                     {challenge.actionLabel}
@@ -549,7 +564,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             <button
               type="button"
               className={`lunar-btn ${cameraMode === 'first-person' ? 'active' : ''}`}
-              disabled={simulation.eventPhase !== 'idle' || simulation.gameStatus !== 'playing'}
+              disabled={!['idle', 'awaitingDecision'].includes(simulation.eventPhase) || simulation.gameStatus !== 'playing'}
               onClick={() => engineRef.current?.toggleCameraMode()}
             >
               {cameraMode === 'free' ? 'FIRST PERSON' : 'FREE CAMERA'}
@@ -895,7 +910,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </div>
       )}
 
-      {dailyTasksOpen && simulation.eventPhase === 'idle' && simulation.gameStatus === 'playing' && (
+      {dailyTasksOpen && eventGameplayActive && simulation.gameStatus === 'playing' && (
         <aside className="lunar-daily-tasks" id="lunar-daily-tasks" aria-label="Daily tasks">
           <div className="lunar-drawer-heading">
             <div>
@@ -1008,7 +1023,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </aside>
       )}
 
-      {statusOpen && simulation.eventPhase === 'idle' && !simulation.warningTaskId && (
+      {statusOpen && eventGameplayActive && !simulation.warningTaskId && (
         <aside className="lunar-status-drawer" id="lunar-status-drawer" aria-label="Outpost readiness and systems overview">
           <div className="lunar-drawer-heading">
             <div>
@@ -1136,7 +1151,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       )}
 
       {/* Proximity prompts - small bottom toast, pointer lock stays active */}
-      {simulation.eventPhase === 'idle' && prompt.type === 'airlock' && (
+      {['idle', 'awaitingDecision'].includes(simulation.eventPhase) && prompt.type === 'airlock' && (
         <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Airlock prompt">
           <span className="lunar-proximity-dot" aria-hidden="true" />
           <div className="lunar-proximity-text">
@@ -1153,7 +1168,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </div>
       )}
 
-      {simulation.eventPhase === 'idle' && prompt.type === 'airlockEnd' && (
+      {['idle', 'awaitingDecision'].includes(simulation.eventPhase) && prompt.type === 'airlockEnd' && (
         <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Airlock direction prompt">
           <span className="lunar-proximity-dot" aria-hidden="true" />
           <div className="lunar-proximity-text">
@@ -1179,7 +1194,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </div>
       )}
 
-      {simulation.eventPhase === 'idle' && prompt.type === 'greenhouseDoor' && (
+      {['idle', 'awaitingDecision'].includes(simulation.eventPhase) && prompt.type === 'greenhouseDoor' && (
         <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Greenhouse door prompt">
           <span className="lunar-proximity-dot" aria-hidden="true" />
           <div className="lunar-proximity-text">
@@ -1196,7 +1211,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </div>
       )}
 
-      {simulation.eventPhase === 'idle' && prompt.type === 'component' && (
+      {['idle', 'awaitingDecision'].includes(simulation.eventPhase) && prompt.type === 'component' && (
         <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Component prompt">
           <span className="lunar-proximity-dot" aria-hidden="true" />
           <div className="lunar-proximity-text">
@@ -1214,8 +1229,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       )}
 
       <EventModal
-        event={simulation.eventPhase === 'awaitingDecision' && !simulation.warningTaskId ? simulation.currentEvent : null}
+        event={eventOptionsOpen && simulation.eventPhase === 'awaitingDecision' && !simulation.warningTaskId ? simulation.currentEvent : null}
         onSelectDecision={simulation.makeDecision}
+        onClose={() => setEventOptionsOpen(false)}
       />
       {simulation.gameStatus !== 'playing' && simulation.eventPhase !== 'resolving' && (
         <EndGameReport

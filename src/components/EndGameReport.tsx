@@ -7,6 +7,7 @@ import type {
   SystemFaultRecord,
   PostponementRecord,
 } from '../hooks/useGameSimulation';
+import { MISSION_FAILURE_RESOURCE_THRESHOLD } from '../hooks/useGameSimulation';
 import { MOON_EVENTS } from '../data/moonEvents';
 import type { ResourceKey } from '../data/moonEvents';
 import type { EventOccurrence } from '../hooks/eventScheduler';
@@ -95,7 +96,7 @@ export default function EndGameReport({
         <p className="report-intro">
           {isSuccess
             ? 'Your crew reached the end of the 30-day mission with its vital resources still operating.'
-            : `The mission ended when ${failureReason ? RESOURCE_LABELS[failureReason].toLowerCase() : 'a vital resource'} ran out. A resource reaching zero means the crew can no longer safely continue.`}
+            : `The mission ended when ${failureReason ? RESOURCE_LABELS[failureReason].toLowerCase() : 'a vital resource'} fell to the critical reserve limit of ${MISSION_FAILURE_RESOURCE_THRESHOLD}%. Continuing below that level is unsafe for the crew.`}
         </p>
 
         <div className="report-learning-card">
@@ -107,8 +108,8 @@ export default function EndGameReport({
           </p>
           <p>
             {isSuccess
-              ? 'Keeping oxygen, water, and power above zero through the final day made the mission a success.'
-              : `On day ${day}, ${RESOURCE_LABELS[failureReason ?? 'oxygen'].toLowerCase()} reached zero. Check the remaining reserves below to see where the crew had the least margin.`}
+              ? `Keeping oxygen, water, and power above ${MISSION_FAILURE_RESOURCE_THRESHOLD}% through the final day made the mission a success.`
+              : `On day ${day}, ${RESOURCE_LABELS[failureReason ?? 'oxygen'].toLowerCase()} reached the critical ${MISSION_FAILURE_RESOURCE_THRESHOLD}% reserve limit. Check the remaining reserves below to see where the crew had the least margin.`}
           </p>
         </div>
 
