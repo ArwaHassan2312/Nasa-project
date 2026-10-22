@@ -93,7 +93,7 @@ interface GameState {
   resources: ResourceLevels;
   systemConditions: SystemConditions;
   currentEvent: GameEvent | null;
-  queuedEvents: { event: GameEvent; drainElapsedMs: number }[];
+  queuedEvents: { event: GameEvent; drainElapsedMs: number; presented: boolean }[];
   eventPhase: EventPhase;
   eventEffectId: string | null;
   flags: string[];
@@ -745,18 +745,46 @@ function advanceClockState(
           nextState.flags,
           nextState.systemConditions,
         );
+        const activeEvent = nextState.currentEvent;
+        const isShowingDecision = nextState.eventPhase === 'awaitingDecision';
+        const isPresentingEvent = nextState.eventPhase === 'pending'
+          || nextState.eventPhase === 'presenting';
         nextState = {
           ...nextState,
-          ...(nextState.currentEvent
+          ...(activeEvent && isShowingDecision
             ? {
-              queuedEvents: [...nextState.queuedEvents, { event, drainElapsedMs: 0 }],
-            }
-            : {
+              // Put the unresolved incident aside while the new incident gets
+              // its camera presentation and decision focus.
               currentEvent: event,
+              queuedEvents: [
+                ...nextState.queuedEvents,
+                {
+                  event: activeEvent,
+                  drainElapsedMs: nextState.eventDrainElapsedMs,
+                  presented: true,
+                },
+              ],
               eventPhase: 'pending' as const,
               eventDrainElapsedMs: 0,
               eventEffectId: event.id,
-            }),
+            }
+            : activeEvent && isPresentingEvent
+              ? {
+                // Finish the camera move already in progress, then present
+                // this incident before returning to any decision screens.
+                queuedEvents: [
+                  ...nextState.queuedEvents,
+                  { event, drainElapsedMs: 0, presented: false },
+                ],
+              }
+              : {
+                // This also handles a new incident arriving while the previous
+                // choice is resolving; that choice has already been applied.
+                currentEvent: event,
+                eventPhase: 'pending' as const,
+                eventDrainElapsedMs: 0,
+                eventEffectId: event.id,
+              }),
           eventHistory: [
             ...nextState.eventHistory,
             {
@@ -853,7 +881,32 @@ export function useGameSimulation({
       ) {
         return currentState;
       }
-      return { ...currentState, eventPhase: 'awaitingDecision' };
+      const nextPresentationIndex = currentState.queuedEvents.findIndex(
+        (queued) => !queued.presented,
+      );
+      if (nextPresentationIndex < 0) {
+        return { ...currentState, eventPhase: 'awaitingDecision' };
+      }
+
+      const nextQueuedEvent = currentState.queuedEvents[nextPresentationIndex];
+      const remainingQueuedEvents = currentState.queuedEvents.filter(
+        (_queued, index) => index !== nextPresentationIndex,
+      );
+      return {
+        ...currentState,
+        currentEvent: nextQueuedEvent.event,
+        queuedEvents: [
+          ...remainingQueuedEvents,
+          {
+            event: currentState.currentEvent,
+            drainElapsedMs: currentState.eventDrainElapsedMs,
+            presented: true,
+          },
+        ],
+        eventPhase: 'pending',
+        eventDrainElapsedMs: nextQueuedEvent.drainElapsedMs,
+        eventEffectId: nextQueuedEvent.event.id,
+      };
     });
   }, []);
 
@@ -966,7 +1019,9 @@ export function useGameSimulation({
         ...currentState,
         currentEvent: nextQueuedEvent?.event ?? null,
         queuedEvents: remainingQueuedEvents,
-        eventPhase: nextQueuedEvent ? 'pending' : 'idle',
+        eventPhase: nextQueuedEvent
+          ? nextQueuedEvent.presented ? 'awaitingDecision' : 'pending'
+          : 'idle',
         eventDrainElapsedMs: nextQueuedEvent?.drainElapsedMs ?? 0,
         eventEffectId: nextQueuedEvent?.event.id ?? null,
       };
