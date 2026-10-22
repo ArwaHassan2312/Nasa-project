@@ -342,6 +342,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let cameraMode = 'free'; // 'free' | 'first-person' | 'interior'
   let firstPersonYaw = 0;
   let firstPersonPitch = 0;
+  let dayStartCameraTransition = null;
 
   // Prompts state tracked for callback updates with zero GC stringify
   let currentPromptType = null;
@@ -874,6 +875,60 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function returnFromEvent(onReturned) {
     startEventReturn(onReturned);
+  }
+
+  function returnToFirstPersonStart() {
+    if (isDestroyed || !outpostRoot || !heightGrid) return;
+
+    releaseAllKeys();
+    firstPersonVelocity.set(0, 0, 0);
+    if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+
+    if (activeModuleInterior) {
+      scene.remove(activeModuleInterior);
+      scene.remove(activeModuleInteriorLight);
+      disposeModuleInterior(activeModuleInterior);
+      unmountTaskConsole();
+      activeModuleInterior = null;
+      activeModuleInteriorBounds = null;
+      activeModuleInteriorLight = null;
+    }
+    if (airlockInterior) scene.remove(airlockInterior);
+    if (greenhouseInterior) scene.remove(greenhouseInterior);
+    scene.remove(airlockInteriorLight);
+    scene.remove(greenhouseInteriorLight);
+    if (greenhouseInterior) greenhouseInterior.visible = false;
+    if (airlockInterior) airlockInterior.visible = false;
+    if (closeupEarthMesh) closeupEarthMesh.visible = false;
+
+    moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
+    horizon.visible = true;
+    outpostRoot.visible = true;
+    scene.background = outsideBackground ?? scene.background;
+    controls.enabled = false;
+    earthViewActive = false;
+    cameraMode = 'first-person';
+    camera.rotation.order = 'YXZ';
+    camera.lookAt(firstPersonLookAt);
+    firstPersonYaw = camera.rotation.y;
+    firstPersonPitch = camera.rotation.x;
+    onModeChange(cameraMode);
+    onInsidePanelChange({ visible: false, label: '', buttonText: '' });
+    setPrompt(null);
+    consoleEditMode = false;
+    consoleDragging = false;
+    if (canvas) canvas.style.cursor = '';
+
+    const looker = new THREE.PerspectiveCamera();
+    looker.position.copy(firstPersonStart);
+    looker.lookAt(firstPersonLookAt);
+    dayStartCameraTransition = {
+      elapsed: 0,
+      startPosition: camera.position.clone(),
+      startQuaternion: camera.quaternion.clone(),
+      destination: firstPersonStart.clone(),
+      destinationQuaternion: looker.quaternion.clone(),
+    };
   }
 
   // Milky Way Skybox: cached, mipmap-free, downscaled to 4K at decode time
@@ -3260,7 +3315,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const dt = Math.min(clock.getDelta(), 0.05);
 
     promptCheckTimer += dt;
-    if (!eventCinematic && promptCheckTimer >= 0.1) {
+    if (!eventCinematic && !dayStartCameraTransition && promptCheckTimer >= 0.1) {
       promptCheckTimer = 0;
       if (cameraMode === 'first-person') {
         updateAirlockPrompt();
@@ -3273,6 +3328,22 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
     if (eventCinematic) {
       animateEventCamera(dt);
+    } else if (dayStartCameraTransition) {
+      const transition = dayStartCameraTransition;
+      transition.elapsed += dt;
+      const progress = Math.min(transition.elapsed / 2.6, 1);
+      const eased = progress * progress * (3 - 2 * progress);
+      camera.position.lerpVectors(transition.startPosition, transition.destination, eased);
+      camera.quaternion.slerpQuaternions(
+        transition.startQuaternion,
+        transition.destinationQuaternion,
+        eased,
+      );
+      if (progress >= 1) {
+        camera.position.copy(transition.destination);
+        camera.quaternion.copy(transition.destinationQuaternion);
+        dayStartCameraTransition = null;
+      }
     } else if (cameraMode === 'free') {
       controls.update();
     } else {
@@ -3425,6 +3496,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     resetConsolePlacement,
     presentEvent,
     returnFromEvent,
+    returnToFirstPersonStart,
     toggleCameraMode,
     toggleEarthView,
     enterAirlock,

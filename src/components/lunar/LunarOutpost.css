@@ -1852,3 +1852,142 @@
     padding: 9px 12px;
   }
 }
+
+.lunar-day-transition {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #eef7ff;
+  background: rgba(0, 0, 0, 0.97);
+  animation: lunar-day-black-in 2800ms ease both;
+}
+
+.lunar-day-report {
+  width: min(760px, 100%);
+  max-height: min(88vh, 900px);
+  overflow-y: auto;
+  padding: clamp(24px, 5vw, 52px);
+  border: 1px solid rgba(127, 220, 255, 0.35);
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(12, 23, 37, 0.98), rgba(2, 7, 13, 0.99));
+  box-shadow: 0 0 60px rgba(54, 159, 255, 0.12);
+}
+
+.lunar-day-report-kicker {
+  color: #77d9ff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.lunar-day-report h2,
+.lunar-day-transition-opening h2 {
+  margin: 12px 0;
+  color: #f5fbff;
+  font-size: clamp(2rem, 6vw, 3.6rem);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lunar-day-report-summary,
+.lunar-day-transition-opening p {
+  color: #aab9c8;
+}
+
+.lunar-day-report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 28px 0 18px;
+}
+
+.lunar-day-report-grid > div {
+  min-height: 130px;
+  padding: 16px;
+  border: 1px solid rgba(156, 193, 220, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.lunar-day-report-grid h3 {
+  margin: 0 0 10px;
+  color: #9be4ff;
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.lunar-day-report-grid ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #d5e0ea;
+  line-height: 1.65;
+}
+
+.lunar-day-report-grid p {
+  color: #8c9ba9;
+}
+
+.lunar-day-report-resources {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 20px 0 28px;
+}
+
+.lunar-day-report-resources span {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 8px;
+  color: #aebdcc;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+}
+
+.lunar-day-report-resources strong {
+  color: #fff;
+}
+
+.lunar-day-advance {
+  width: 100%;
+  padding: 15px 18px;
+  border: 1px solid rgba(102, 220, 255, 0.75);
+  border-radius: 9px;
+  color: #00131d;
+  background: #76dcff;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  transition: filter 160ms ease, transform 160ms ease;
+}
+
+.lunar-day-advance:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+
+.lunar-day-transition-opening {
+  text-align: center;
+  animation: lunar-day-black-out 3200ms ease-in-out both;
+}
+
+@keyframes lunar-day-black-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes lunar-day-black-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (max-width: 560px) {
+  .lunar-day-report-grid { grid-template-columns: 1fr; }
+  .lunar-day-report-resources { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

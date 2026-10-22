@@ -48,6 +48,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const engineRef = useRef(null);
   const presentedEventRef = useRef(null);
   const returningEventRef = useRef(null);
+  const dayStartCameraDayRef = useRef(null);
 
   const [isLoading, setIsLoading] = useState(true);
   const [cameraMode, setCameraMode] = useState('free');
@@ -148,6 +149,17 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   useEffect(() => {
     engineRef.current?.setEventEffect(simulation.eventEffectId);
   }, [simulation.eventEffectId]);
+
+  useEffect(() => {
+    if (simulation.dayPhase !== 'transition') {
+      dayStartCameraDayRef.current = null;
+      return;
+    }
+    if (dayStartCameraDayRef.current === simulation.day) return;
+
+    dayStartCameraDayRef.current = simulation.day;
+    engineRef.current?.returnToFirstPersonStart();
+  }, [simulation.day, simulation.dayPhase]);
 
   useEffect(() => {
     engineRef.current?.setChallengeFlags(simulation.flags);
@@ -483,7 +495,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
           <span className="lunar-status-dot" />
           <span>DAY {simulation.day} / {simulation.maxDays}</span>
           <span className="lunar-status-divider">·</span>
-          <span>{simulation.timeOfDay} LUNAR</span>
+          <span>{simulation.dayPhase === 'closing' || simulation.dayPhase === 'report' ? '24:00' : simulation.timeOfDay} LUNAR</span>
           <span className="lunar-status-divider">·</span>
           <span>{simulation.remainingDays} DAYS LEFT</span>
           <span className="lunar-status-divider">·</span>
@@ -952,7 +964,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             <button type="button" aria-label="Close daily tasks" onClick={() => setDailyTasksOpen(false)}>×</button>
           </div>
           <p className="lunar-task-intro">
-            Start a task from this list to activate it — only activated tasks can be completed inside their component. Once activated, enter the named location and press its dedicated button there. Travel uses the continuous clock; task actions add no extra time.
+            Complete today’s checklist to close the day early. While tasks remain, the mission clock runs at half speed. If time expires, unfinished tasks become overdue; linked incidents must be handled before the day report.
           </p>
           <div className="lunar-task-list">
             {simulation.dailyChallenges.map((challenge) => {
@@ -970,7 +982,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                       {challenge.priority === 'critical' ? 'CRITICAL' : challenge.priority.toUpperCase()} priority
                     </span>
                     <span>Location: {challenge.targetComponentName}</span>
-                    <span>Deadline: Day {challenge.deadlineDay}</span>
+                    <span>{challenge.status === 'overdue' ? `Overdue from Day ${challenge.deadlineDay}` : 'Due today'}</span>
                   </div>
                   <p>{challenge.description}</p>
                   <small>{challenge.objective}</small>
@@ -1265,6 +1277,49 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         onSelectDecision={simulation.makeDecision}
         onClose={() => setEventOptionsOpen(false)}
       />
+      {simulation.dayPhase === 'report' && simulation.dayReport && (
+        <div className="lunar-day-transition" role="dialog" aria-modal="true" aria-labelledby="day-report-title">
+          <section className="lunar-day-report">
+            <span className="lunar-day-report-kicker">Lunar operations · Day {simulation.dayReport.day}</span>
+            <h2 id="day-report-title">Day {simulation.dayReport.day} ended</h2>
+            <p className="lunar-day-report-summary">
+              {simulation.dayReport.completedTasks.length} task{simulation.dayReport.completedTasks.length === 1 ? '' : 's'} completed · {simulation.dayReport.overdueTasks.length} carried overdue
+            </p>
+            <div className="lunar-day-report-grid">
+              <div>
+                <h3>Completed</h3>
+                {simulation.dayReport.completedTasks.length > 0 ? (
+                  <ul>{simulation.dayReport.completedTasks.map((title) => <li key={title}>{title}</li>)}</ul>
+                ) : <p>No tasks completed.</p>}
+              </div>
+              <div>
+                <h3>Carried forward</h3>
+                {simulation.dayReport.overdueTasks.length > 0 ? (
+                  <ul>{simulation.dayReport.overdueTasks.map((title) => <li key={title}>{title}</li>)}</ul>
+                ) : <p>Nothing overdue.</p>}
+              </div>
+            </div>
+            <div className="lunar-day-report-resources">
+              <span>Power <strong>{simulation.dayReport.resources.power}%</strong></span>
+              <span>Oxygen <strong>{simulation.dayReport.resources.oxygen}%</strong></span>
+              <span>Water <strong>{simulation.dayReport.resources.water}%</strong></span>
+              <span>Food <strong>{simulation.dayReport.resources.food}%</strong></span>
+            </div>
+            <button type="button" className="lunar-day-advance" onClick={simulation.advanceDay}>
+              {simulation.dayReport.day >= simulation.maxDays
+                ? 'COMPLETE MISSION'
+                : `ADVANCE TO DAY ${simulation.dayReport.day + 1}`}
+            </button>
+          </section>
+        </div>
+      )}
+      {simulation.dayPhase === 'transition' && (
+        <div className="lunar-day-transition lunar-day-transition-opening" role="status" aria-live="assertive">
+          <span className="lunar-day-report-kicker">Lunar operations</span>
+          <h2>Day {simulation.day}</h2>
+          <p>Mission day commencing</p>
+        </div>
+      )}
       {simulation.gameStatus !== 'playing' && simulation.eventPhase !== 'resolving' && (
         <EndGameReport
           status={simulation.gameStatus}
