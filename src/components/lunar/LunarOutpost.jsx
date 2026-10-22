@@ -306,9 +306,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
 
     if (
       eventPhase === 'presenting' &&
-      presentedEventRef.current !== event.id
+      presentedEventRef.current !== event
     ) {
-      presentedEventRef.current = event.id;
+      presentedEventRef.current = event;
       engineRef.current?.presentEvent(event.id, () => {
         completePresentation(event.id);
       });
@@ -317,9 +317,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
 
     if (
       eventPhase === 'resolving' &&
-      returningEventRef.current !== event.id
+      returningEventRef.current !== event
     ) {
-      returningEventRef.current = event.id;
+      returningEventRef.current = event;
       engineRef.current?.returnFromEvent(() => {
         completeResolution(event.id);
       });
@@ -509,6 +509,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             >
               <span className="lunar-event-alert-pulse" aria-hidden="true" />
               RED ALERT · {simulation.currentEvent.name}
+              {simulation.queuedEvents.length > 0 && ` · ${simulation.queuedEvents.length} MORE INCIDENT${simulation.queuedEvents.length === 1 ? '' : 'S'}`}
             </button>
           )}
           {!insidePanel.visible && (

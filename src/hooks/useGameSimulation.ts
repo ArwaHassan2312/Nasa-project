@@ -93,6 +93,7 @@ interface GameState {
   resources: ResourceLevels;
   systemConditions: SystemConditions;
   currentEvent: GameEvent | null;
+  queuedEvents: { event: GameEvent; drainElapsedMs: number }[];
   eventPhase: EventPhase;
   eventEffectId: string | null;
   flags: string[];
@@ -182,6 +183,7 @@ function createInitialState(seed: number): GameState {
       equipment: 82,
     },
     currentEvent: null,
+    queuedEvents: [],
     eventPhase: 'idle',
     eventEffectId: null,
     flags: [],
@@ -626,10 +628,11 @@ function advanceClockState(
     };
     remainingMs -= step;
 
-    // Accumulate event time and apply damage in visible half point steps while
-    // preserving the overall drain rate of one point per lunar day.
+    // Each active event drains its threatened resources in visible half point
+    // steps while preserving the rate of one point per lunar day per event.
+    const eventDrains: Partial<Record<ResourceKey, number>> = {};
+    const halfDayMs = dayDurationMs / 2;
     if (nextState.currentEvent && nextState.eventPhase !== 'resolving') {
-      const halfDayMs = dayDurationMs / 2;
       const totalElapsedMs = nextState.eventDrainElapsedMs + step;
       const halfPointSteps = Math.floor(totalElapsedMs / halfDayMs);
       const drain = halfPointSteps * 0.5;
@@ -638,18 +641,37 @@ function advanceClockState(
         eventDrainElapsedMs: totalElapsedMs - halfPointSteps * halfDayMs,
       };
       if (drain > 0) {
-        const eventDrain = Object.fromEntries(
-          nextState.currentEvent.riskResources.map((resource) => [resource, -drain]),
-        ) as Partial<Record<ResourceKey, number>>;
-        const resources = applyEffects(nextState.resources, eventDrain);
-        const failedVital = findFailedVital(resources);
-        nextState = {
-          ...nextState,
-          resources,
-          ...(failedVital ? { gameStatus: 'failed' as const, failureReason: failedVital } : {}),
-        };
-        if (nextState.gameStatus !== 'playing') return nextState;
+        for (const resource of nextState.currentEvent.riskResources) {
+          eventDrains[resource] = (eventDrains[resource] ?? 0) - drain;
+        }
       }
+    }
+    nextState = {
+      ...nextState,
+      queuedEvents: nextState.queuedEvents.map((queued) => {
+        const totalElapsedMs = queued.drainElapsedMs + step;
+        const halfPointSteps = Math.floor(totalElapsedMs / halfDayMs);
+        const drain = halfPointSteps * 0.5;
+        if (drain > 0) {
+          for (const resource of queued.event.riskResources) {
+            eventDrains[resource] = (eventDrains[resource] ?? 0) - drain;
+          }
+        }
+        return {
+          ...queued,
+          drainElapsedMs: totalElapsedMs - halfPointSteps * halfDayMs,
+        };
+      }),
+    };
+    if (Object.keys(eventDrains).length > 0) {
+      const resources = applyEffects(nextState.resources, eventDrains);
+      const failedVital = findFailedVital(resources);
+      nextState = {
+        ...nextState,
+        resources,
+        ...(failedVital ? { gameStatus: 'failed' as const, failureReason: failedVital } : {}),
+      };
+      if (nextState.gameStatus !== 'playing') return nextState;
     }
 
     nextState = applyTimedTaskConsequences(nextState);
@@ -682,6 +704,7 @@ function advanceClockState(
           resources,
           gameStatus: 'success',
           currentEvent: null,
+          queuedEvents: [],
           eventPhase: 'idle',
           eventEffectId: null,
         };
@@ -698,10 +721,7 @@ function advanceClockState(
       if (nextState.gameStatus !== 'playing') return nextState;
     }
 
-    if (
-      !nextState.currentEvent
-      && nextState.schedulerElapsedMs >= EVENT_SCHEDULER_CONFIG.checkIntervalMs
-    ) {
+    if (nextState.schedulerElapsedMs >= EVENT_SCHEDULER_CONFIG.checkIntervalMs) {
       nextState = { ...nextState, schedulerElapsedMs: 0 };
       const selection = selectMajorEvent({
         events: MOON_EVENTS,
@@ -727,10 +747,16 @@ function advanceClockState(
         );
         nextState = {
           ...nextState,
-          currentEvent: event,
-          eventPhase: 'pending',
-          eventDrainElapsedMs: 0,
-          eventEffectId: event.id,
+          ...(nextState.currentEvent
+            ? {
+              queuedEvents: [...nextState.queuedEvents, { event, drainElapsedMs: 0 }],
+            }
+            : {
+              currentEvent: event,
+              eventPhase: 'pending' as const,
+              eventDrainElapsedMs: 0,
+              eventEffectId: event.id,
+            }),
           eventHistory: [
             ...nextState.eventHistory,
             {
@@ -742,13 +768,6 @@ function advanceClockState(
         };
         return nextState;
       }
-    } else if (
-      nextState.currentEvent
-      && nextState.schedulerElapsedMs >= EVENT_SCHEDULER_CONFIG.checkIntervalMs
-    ) {
-      // Keep the clock stepping while an alert is active without accumulating
-      // a scheduler interval that would otherwise reduce the next step to 0.
-      nextState = { ...nextState, schedulerElapsedMs: 0 };
     }
   }
 
@@ -942,12 +961,14 @@ export function useGameSimulation({
       ) {
         return currentState;
       }
+      const [nextQueuedEvent, ...remainingQueuedEvents] = currentState.queuedEvents;
       return {
         ...currentState,
-        currentEvent: null,
-        eventPhase: 'idle',
-        eventDrainElapsedMs: 0,
-        eventEffectId: null,
+        currentEvent: nextQueuedEvent?.event ?? null,
+        queuedEvents: remainingQueuedEvents,
+        eventPhase: nextQueuedEvent ? 'pending' : 'idle',
+        eventDrainElapsedMs: nextQueuedEvent?.drainElapsedMs ?? 0,
+        eventEffectId: nextQueuedEvent?.event.id ?? null,
       };
     });
   }, []);
