@@ -177,6 +177,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   let outpostRoot = null;
   let outpostHeightField = null; // walker collision rasterized from the outpost meshes
+  let commandCenterRoot = null;
+  let commandCenterModelRoot = null;
+  let commandCenterExteriorShell = null;
+  let commandCenterInteriorActive = false;
   let jumpVelocity = 0; // vertical speed while the walker is airborne
   let airborne = false;
   let mapComponents = [];
@@ -501,6 +505,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
       terrainVisibility: moonTerrainMeshes.map(terrain => terrain.visible),
       horizonVisibility: horizon.visible,
       outpostVisibility: outpostRoot?.visible ?? true,
+      commandCenterParent: commandCenterRoot?.parent ?? null,
+      commandCenterVisibility: commandCenterRoot?.visible ?? true,
+      commandCenterExteriorVisibility: commandCenterExteriorShell?.visible ?? true,
       airlockVisibility: airlockInterior?.visible ?? false,
       greenhouseVisibility: greenhouseInterior?.visible ?? false,
       moduleVisibility: activeModuleInterior?.visible ?? false,
@@ -512,10 +519,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
   function exposeOutpostForEvent() {
     moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
     horizon.visible = true;
+    if (commandCenterRoot && commandCenterInteriorActive && outpostRoot) {
+      if (commandCenterExteriorShell) commandCenterExteriorShell.visible = true;
+      outpostRoot.attach(commandCenterRoot);
+      commandCenterRoot.visible = true;
+    }
     if (outpostRoot) outpostRoot.visible = true;
     if (airlockInterior) airlockInterior.visible = false;
     if (greenhouseInterior) greenhouseInterior.visible = false;
-    if (activeModuleInterior) activeModuleInterior.visible = false;
+    if (activeModuleInterior && !commandCenterInteriorActive) activeModuleInterior.visible = false;
     if (closeupEarthMesh) closeupEarthMesh.visible = false;
     if (outsideBackground) scene.background = outsideBackground;
     controls.enabled = false;
@@ -528,6 +540,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
       terrain.visible = snapshot.terrainVisibility[index] ?? true;
     });
     horizon.visible = snapshot.horizonVisibility;
+    if (commandCenterRoot && snapshot.commandCenterParent
+      && commandCenterRoot.parent !== snapshot.commandCenterParent) {
+      snapshot.commandCenterParent.attach(commandCenterRoot);
+    }
+    if (commandCenterRoot) commandCenterRoot.visible = snapshot.commandCenterVisibility;
+    if (commandCenterExteriorShell) {
+      commandCenterExteriorShell.visible = snapshot.commandCenterExteriorVisibility;
+    }
     if (outpostRoot) outpostRoot.visible = snapshot.outpostVisibility;
     if (airlockInterior) airlockInterior.visible = snapshot.airlockVisibility;
     if (greenhouseInterior) greenhouseInterior.visible = snapshot.greenhouseVisibility;
@@ -885,9 +905,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (document.pointerLockElement === canvas) document.exitPointerLock?.();
 
     if (activeModuleInterior) {
-      scene.remove(activeModuleInterior);
+      if (commandCenterInteriorActive) {
+        if (commandCenterExteriorShell) commandCenterExteriorShell.visible = true;
+        if (outpostRoot && commandCenterRoot) outpostRoot.attach(commandCenterRoot);
+        commandCenterInteriorActive = false;
+        commandCenterRoot.visible = true;
+      } else {
+        scene.remove(activeModuleInterior);
+        disposeModuleInterior(activeModuleInterior);
+      }
       scene.remove(activeModuleInteriorLight);
-      disposeModuleInterior(activeModuleInterior);
       unmountTaskConsole();
       activeModuleInterior = null;
       activeModuleInteriorBounds = null;
@@ -1061,6 +1088,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const LUNAR_OUTPOST_POSITION_X = 0;
   const LUNAR_OUTPOST_POSITION_Y = 2.9;
   const LUNAR_OUTPOST_POSITION_Z = 0;
+  const COMMAND_CENTER_WIDTH = 18;
+  const COMMAND_CENTER_GAP = 4;
   const OUTPOST_SITE_MARGIN = 6;
   const OUTPOST_GROUND_EPSILON = 0.05;
   const FIRST_PERSON_EYE_HEIGHT = 3.2;
@@ -1130,6 +1159,85 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const terrainScans = [];
   const moonTerrainMeshes = [];
   let loaded = 0;
+
+  function mountCommandCenter(outpost, model) {
+    if (isDestroyed) return;
+
+    if (!model) {
+      console.warn('Command center model could not be loaded.');
+      return;
+    }
+
+    model.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(model);
+    const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+    const scale = COMMAND_CENTER_WIDTH / Math.max(sourceSize.x, 1);
+    model.scale.multiplyScalar(scale);
+    model.traverse(object => {
+      if (!object.isMesh) return;
+      object.castShadow = true;
+      object.receiveShadow = true;
+    });
+
+    const commandCenter = new THREE.Group();
+    commandCenter.name = 'Command Center';
+    commandCenter.add(model);
+    commandCenterRoot = commandCenter;
+    commandCenterModelRoot = model;
+    commandCenterExteriorShell = model.getObjectByName('CommandCenter_Exterior_SM');
+    // The full model has its entrance and stairs on +Z; face them away from
+    // the outpost while keeping the authored shell, interior, and stairs aligned.
+    commandCenter.rotation.y = Math.PI / 2;
+    commandCenter.updateMatrixWorld(true);
+    const orientedModelBounds = new THREE.Box3().setFromObject(model);
+    const orientedModelCenter = orientedModelBounds.getCenter(new THREE.Vector3());
+    const outpostBounds = new THREE.Box3().setFromObject(outpost);
+    const outpostCenter = outpostBounds.getCenter(new THREE.Vector3());
+    const targetX = outpostBounds.max.x + COMMAND_CENTER_GAP
+      + orientedModelBounds.getSize(new THREE.Vector3()).x / 2;
+    const targetZ = outpostCenter.z;
+    const groundY = sampleGroundHeight(targetX, targetZ) ?? PLAIN_LEVEL;
+    commandCenter.position.set(
+      targetX - orientedModelCenter.x,
+      groundY - orientedModelBounds.min.y + OUTPOST_GROUND_EPSILON,
+      targetZ - orientedModelCenter.z,
+    );
+
+    scene.add(commandCenter);
+    commandCenter.updateMatrixWorld(true);
+    outpost.attach(commandCenter);
+    outpost.updateMatrixWorld(true);
+    outpostHeightField = buildOutpostHeightField(outpost);
+    componentTargets = buildComponentTargets(outpost);
+    const entrance = model.getObjectByName('commandCenter_Exterior_stairs_SM') || model;
+    const entranceBounds = new THREE.Box3().setFromObject(entrance);
+    if (!entranceBounds.isEmpty()) {
+      const entranceSize = entranceBounds.getSize(new THREE.Vector3());
+      componentTargets.push({
+        id: '024',
+        name: 'Command Center',
+        roomType: 'commandCenter',
+        center: entranceBounds.getCenter(new THREE.Vector3()),
+        bounds: {
+          minX: entranceBounds.min.x,
+          maxX: entranceBounds.max.x,
+          minZ: entranceBounds.min.z,
+          maxZ: entranceBounds.max.z,
+        },
+        radius: Math.max(8, Math.max(entranceSize.x, entranceSize.z) * 1.5),
+      });
+    }
+    mapComponents = buildMapComponents(outpost);
+  }
+
+  function loadCommandCenter(outpost) {
+    loadCachedGLTF(
+      '/lunar/Command_Center/Command%20center%20full.glb',
+      model => mountCommandCenter(outpost, model),
+      undefined,
+      error => console.warn('Command center model could not be loaded.', error),
+    );
+  }
 
   function onTerrainGeometryReady(entry, geometry) {
     if (isDestroyed) return;
@@ -1258,6 +1366,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           scene.add(outpost);
           outpost.updateMatrixWorld(true);
           outpostRoot = outpost;
+          loadCommandCenter(outpost);
           buildEventVisualization();
 
           addOutpostPartLabels(outpost);
@@ -2020,9 +2129,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function exitModuleInterior() {
     if (!activeModuleInterior) return;
-    scene.remove(activeModuleInterior);
+    if (commandCenterInteriorActive) {
+      if (commandCenterExteriorShell) commandCenterExteriorShell.visible = true;
+      if (outpostRoot && commandCenterRoot) outpostRoot.attach(commandCenterRoot);
+      commandCenterInteriorActive = false;
+    } else {
+      scene.remove(activeModuleInterior);
+      disposeModuleInterior(activeModuleInterior);
+    }
     scene.remove(activeModuleInteriorLight);
-    disposeModuleInterior(activeModuleInterior);
     unmountTaskConsole();
     consoleEditMode = false;
     consoleDragging = false;
@@ -2065,6 +2180,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (cameraMode !== 'first-person' || !activeComponentTarget) return;
     const target = activeComponentTarget;
     moduleReturnMode = 'exterior';
+    if (target.roomType === 'commandCenter') {
+      enterCommandCenterInterior(target);
+      return;
+    }
     if (target.roomType === 'greenhouse') {
       enterGreenhouseFromExterior();
       return;
@@ -2074,6 +2193,51 @@ export function createLunarEngine(canvas, callbacks = {}) {
     } else {
       ensureComponentInteriorKit(() => enterModuleInterior(target));
     }
+  }
+
+  function enterCommandCenterInterior(target) {
+    if (!commandCenterRoot || !commandCenterModelRoot || activeModuleInterior) return;
+    outsideCameraPosition = camera.position.clone();
+    outsideCameraYaw = firstPersonYaw;
+    outsideCameraPitch = firstPersonPitch;
+    outsideBackground = scene.background;
+
+    // Keep the full GLB in the scene while hiding only its opaque exterior
+    // shell, so the authored interior equipment remains visible around the player.
+    scene.attach(commandCenterRoot);
+    commandCenterRoot.visible = true;
+    if (outpostRoot) outpostRoot.visible = false;
+    moonTerrainMeshes.forEach(terrain => { terrain.visible = false; });
+    horizon.visible = false;
+    if (commandCenterExteriorShell) commandCenterExteriorShell.visible = false;
+    scene.background = new THREE.Color(0x10151b);
+
+    activeModuleInterior = commandCenterRoot;
+    commandCenterInteriorActive = true;
+    const interiorNode = commandCenterModelRoot.getObjectByName('CC_Module') || commandCenterModelRoot;
+    commandCenterRoot.updateMatrixWorld(true);
+    activeModuleInteriorBounds = new THREE.Box3().setFromObject(interiorNode);
+
+    const interiorSpawn = commandCenterRoot.localToWorld(new THREE.Vector3(0, 4.2, 1.8));
+    camera.position.copy(interiorSpawn);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.set(0, Math.PI / 2, 0);
+    firstPersonYaw = camera.rotation.y;
+    firstPersonPitch = 0;
+    activeModuleInteriorLight = new THREE.PointLight(0xe4edff, 16, 26);
+    activeModuleInteriorLight.position.copy(interiorSpawn).add(new THREE.Vector3(-1, 1, 0));
+    scene.add(activeModuleInteriorLight);
+    cameraMode = 'interior';
+    onModeChange(cameraMode);
+    controls.enabled = false;
+    ensurePointerLocked();
+    setPrompt(null);
+    onInsidePanelChange({
+      visible: true,
+      label: 'INSIDE COMMAND CENTER · E TO EXIT',
+      buttonText: 'EXIT COMMAND CENTER',
+      componentId: target.id,
+    });
   }
 
   function prepareAirlockInterior(gltfScene) {
