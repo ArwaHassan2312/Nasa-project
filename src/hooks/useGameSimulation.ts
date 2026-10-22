@@ -714,6 +714,9 @@ function advanceClockState(
         systemConditions: nextState.systemConditions,
         resources: nextState.resources,
         eventHistory: nextState.eventHistory,
+        overdueTaskIds: nextState.dailyChallenges
+          .filter((challenge) => challenge.status === 'overdue')
+          .map((challenge) => challenge.id),
       }, EVENT_SCHEDULER_CONFIG.checkIntervalMs);
       nextState = { ...nextState, rngState: selection.rngState };
       if (selection.event) {
@@ -1187,6 +1190,108 @@ export function useGameSimulation({
     setState(createInitialState(seed ?? createRandomSeed()));
   }, [seed]);
 
+  const testTaskEventTrigger = useCallback((challengeId: string) => {
+    setState((currentState) => {
+      const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
+      const relatedEvent = MOON_EVENTS.find((event) => event.riskTaskIds?.includes(challengeId));
+      if (
+        currentState.gameStatus !== 'playing'
+        || currentState.currentEvent
+        || currentState.warningTaskId
+        || !challenge
+        || !relatedEvent
+      ) return currentState;
+
+      const testDay = Math.max(currentState.day, relatedEvent.minDay);
+      const selection = selectMajorEvent({
+        events: [relatedEvent],
+        day: testDay,
+        maxDays: Math.max(currentState.maxDays, testDay),
+        dayDurationMs,
+        elapsedMs: currentState.campaignElapsedMs,
+        rngState: currentState.rngState,
+        flags: currentState.flags,
+        systemConditions: currentState.systemConditions,
+        resources: currentState.resources,
+        eventHistory: [],
+        overdueTaskIds: [challengeId],
+      }, EVENT_SCHEDULER_CONFIG.checkIntervalMs);
+
+      if (!selection.event) {
+        return {
+          ...currentState,
+          challengeFeedback: `TEST PASSED: ${relatedEvent.name} was blocked by the completed ${challenge.title} task.`,
+        };
+      }
+
+      const event = prepareEventForReadiness(
+        { ...selection.event, day: currentState.day },
+        currentState.flags,
+        currentState.systemConditions,
+      );
+      return {
+        ...currentState,
+        rngState: selection.rngState,
+        dailyChallenges: currentState.dailyChallenges.map((task) =>
+          task.id === challengeId
+            ? { ...task, status: 'overdue', deadlineMissed: true }
+            : task,
+        ),
+        currentEvent: event,
+        eventPhase: 'pending',
+        eventDrainElapsedMs: 0,
+        eventEffectId: event.id,
+        eventHistory: [
+          ...currentState.eventHistory,
+          { eventId: event.id, day: currentState.day, elapsedMs: currentState.campaignElapsedMs },
+        ],
+        challengeFeedback: `TEST: overdue ${challenge.title} triggered ${event.name}.`,
+      };
+    });
+  }, [dayDurationMs]);
+
+  const testTaskEventPrevention = useCallback((challengeId: string) => {
+    setState((currentState) => {
+      const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
+      const relatedEvent = MOON_EVENTS.find((event) => event.riskTaskIds?.includes(challengeId));
+      if (
+        currentState.gameStatus !== 'playing'
+        || currentState.currentEvent
+        || currentState.warningTaskId
+        || !challenge
+        || !relatedEvent
+      ) return currentState;
+
+      const flags = [...new Set([...currentState.flags, challenge.readinessFlag])];
+      const testDay = Math.max(currentState.day, relatedEvent.minDay);
+      const selection = selectMajorEvent({
+        events: [relatedEvent],
+        day: testDay,
+        maxDays: Math.max(currentState.maxDays, testDay),
+        dayDurationMs,
+        elapsedMs: currentState.campaignElapsedMs,
+        rngState: currentState.rngState,
+        flags,
+        systemConditions: currentState.systemConditions,
+        resources: currentState.resources,
+        eventHistory: [],
+        overdueTaskIds: [challengeId],
+      }, EVENT_SCHEDULER_CONFIG.checkIntervalMs);
+
+      if (selection.event) return currentState;
+      return {
+        ...currentState,
+        flags,
+        dailyChallenges: currentState.dailyChallenges.map((task) =>
+          task.id === challengeId
+            ? { ...task, status: 'completed', completedDay: currentState.day }
+            : task,
+        ),
+        challengeFeedback: `TEST PASSED: completing ${challenge.title} blocks ${relatedEvent.name} for this mission.`,
+      };
+    });
+  }, [dayDurationMs]);
+
   const dismissChallengeFeedback = useCallback(() => {
     setState((currentState) => (
       currentState.challengeFeedback
@@ -1225,6 +1330,8 @@ export function useGameSimulation({
     dismissChallengeFeedback,
     makeDecision,
     restart,
+    testTaskEventTrigger,
+    testTaskEventPrevention,
   };
 }
 

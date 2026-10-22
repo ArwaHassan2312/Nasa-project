@@ -17,6 +17,7 @@ export interface EventSchedulerInput {
   systemConditions: Record<SystemKey, number>;
   resources: Record<ResourceKey, number>;
   eventHistory: EventOccurrence[];
+  overdueTaskIds?: string[];
 }
 
 export const EVENT_SCHEDULER_CONFIG = {
@@ -54,6 +55,7 @@ export function selectMajorEvent(
     systemConditions,
     resources,
     eventHistory,
+    overdueTaskIds = [],
   } = input;
   if (
     day < EVENT_SCHEDULER_CONFIG.firstEventEarliestDay
@@ -85,6 +87,7 @@ export function selectMajorEvent(
     return day >= event.minDay
       && occurrences.length < event.maxOccurrences
       && (!event.requiredFlags || event.requiredFlags.every((flag) => flags.includes(flag)))
+      && !event.preventedByFlags?.some((flag) => flags.includes(flag))
       && (
         !previousOccurrence
         || (elapsedMs - previousOccurrence.elapsedMs) / dayDurationMs >= minimumCooldown
@@ -92,13 +95,22 @@ export function selectMajorEvent(
   });
   if (eligible.length === 0) return { event: null, rngState: input.rngState };
 
+  const overdueTaskSet = new Set(overdueTaskIds);
+  const overdueTaskEvents = eligible.filter((event) =>
+    event.riskTaskIds?.some((taskId) => overdueTaskSet.has(taskId)),
+  );
   const seenIds = new Set(eventHistory.map((entry) => entry.eventId));
   const unencountered = eligible.filter((event) => !seenIds.has(event.id));
-  const candidates = unencountered.length > 0 ? unencountered : eligible;
+  const candidates = overdueTaskEvents.length > 0
+    ? overdueTaskEvents
+    : unencountered.length > 0 ? unencountered : eligible;
 
   const overdue = daysSinceLastEvent >= EVENT_SCHEDULER_CONFIG.maximumGapDays;
   let rngState = input.rngState;
-  if (!overdue) {
+  // An overdue task that directly risks an event triggers that incident at
+  // the next eligible scheduler check. Preventive completion flags remove it
+  // from `eligible`, so finished work cannot trigger the incident.
+  if (!overdue && overdueTaskEvents.length === 0) {
     const roll = nextRandom(rngState);
     rngState = roll.state;
     const readinessMultiplier = 0.8 + Math.min(day / maxDays, 1) * 0.6;

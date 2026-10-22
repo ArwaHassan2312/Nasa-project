@@ -21,6 +21,12 @@ const RESOURCE_ITEMS = [
   ['potentialWater', 'Potential water', '❄']
 ];
 
+const TASK_EVENT_TESTS = [
+  ['workshop-equipment-maintenance', 'Workshop maintenance', 'Habitat fire'],
+  ['solar-array-inspection', 'Solar array inspection', 'Power failure'],
+  ['habitat-waterline-inspection', 'Waterline inspection', 'Water leak'],
+];
+
 function getSystemConditionLevel(value) {
   if (value === 0) return 'failed';
   if (value < 20) return 'severe';
@@ -572,6 +578,31 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
           )}
         </div>
       </div>
+
+      {import.meta.env.DEV && (
+        <details className="lunar-event-test-tools">
+          <summary>TEST TASK ↔ EVENT LINKS</summary>
+          {TASK_EVENT_TESTS.map(([challengeId, taskLabel, eventLabel]) => (
+            <div className="lunar-event-test-row" key={challengeId}>
+              <span>{taskLabel} / {eventLabel}</span>
+              <button
+                type="button"
+                disabled={simulation.gameStatus !== 'playing' || Boolean(simulation.currentEvent) || Boolean(simulation.warningTaskId)}
+                onClick={() => simulation.testTaskEventTrigger(challengeId)}
+              >
+                TEST OVERDUE TRIGGER
+              </button>
+              <button
+                type="button"
+                disabled={simulation.gameStatus !== 'playing' || Boolean(simulation.currentEvent) || Boolean(simulation.warningTaskId)}
+                onClick={() => simulation.testTaskEventPrevention(challengeId)}
+              >
+                TEST COMPLETION BLOCK
+              </button>
+            </div>
+          ))}
+        </details>
+      )}
 
       {/* Task console editor (positioning only, no coordinates) */}
       {consoleEdit && insidePanel.visible && (

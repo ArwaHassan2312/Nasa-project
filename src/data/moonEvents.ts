@@ -52,6 +52,10 @@ export interface GameEvent {
   cooldownDays: number;
   maxOccurrences: number;
   requiredFlags?: string[];
+  /** Unresolved overdue work that can trigger this event. */
+  riskTaskIds?: string[];
+  /** Completed preventive work that makes this event ineligible. */
+  preventedByFlags?: string[];
   preparationFlags: string[];
   emergencyTask?: EmergencyTaskDefinition;
 }
@@ -68,6 +72,8 @@ export const MOON_EVENTS: GameEvent[] = [
     minDay: 2,
     cooldownDays: 5,
     maxOccurrences: 2,
+    riskTaskIds: ['workshop-equipment-maintenance'],
+    preventedByFlags: ['workshopMaintenanceComplete'],
     preparationFlags: ['workshopMaintenanceComplete', 'habitatSealVerified'],
     emergencyTask: {
       title: 'Contain Habitat Pressure Loss',
@@ -136,6 +142,8 @@ export const MOON_EVENTS: GameEvent[] = [
     minDay: 2,
     cooldownDays: 5,
     maxOccurrences: 2,
+    riskTaskIds: ['solar-array-inspection'],
+    preventedByFlags: ['solarArrayInspected'],
     preparationFlags: ['batteryReadinessVerified'],
     emergencyTask: {
       title: 'Restore Battery Bus',
@@ -316,6 +324,8 @@ export const MOON_EVENTS: GameEvent[] = [
     minDay: 2,
     cooldownDays: 5,
     maxOccurrences: 2,
+    riskTaskIds: ['habitat-waterline-inspection'],
+    preventedByFlags: ['waterLineInspected'],
     preparationFlags: ['waterLineInspected'],
     emergencyTask: {
       title: 'Repair Habitat Waterline',
