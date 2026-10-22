@@ -882,7 +882,8 @@ function advanceClockState(
     // steps while preserving the rate of one point per lunar day per event.
     const eventDrains: Partial<Record<ResourceKey, number>> = {};
     const halfDayMs = dayDurationMs / 2;
-    if (nextState.currentEvent && nextState.eventPhase !== 'resolving') {
+    const activeEvent = nextState.currentEvent;
+    if (activeEvent && nextState.eventPhase !== 'resolving') {
       const totalElapsedMs = nextState.eventDrainElapsedMs + step;
       const halfPointSteps = Math.floor(totalElapsedMs / halfDayMs);
       const drain = halfPointSteps * 0.5;
@@ -891,7 +892,7 @@ function advanceClockState(
         eventDrainElapsedMs: totalElapsedMs - halfPointSteps * halfDayMs,
       };
       if (drain > 0) {
-        for (const resource of nextState.currentEvent.riskResources) {
+        for (const resource of activeEvent.riskResources) {
           eventDrains[resource] = (eventDrains[resource] ?? 0) - drain;
         }
       }
