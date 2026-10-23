@@ -1,7 +1,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { buildOutpostHeightField, isOutpostBlocked, sampleOutpostTop } from './outpostCollision.js';
+import {
+  buildOutpostHeightField,
+  COLLIDE_STEP_HEIGHT,
+  isOutpostBlocked,
+  sampleOutpostTop,
+} from './outpostCollision.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { DAILY_CHALLENGES } from '../../data/dailyChallenges';
@@ -100,6 +105,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const {
     onLoading = () => { },
     onModeChange = () => { },
+    onRoverReady = () => { },
+    onRoverCameraChange = () => { },
     onEarthToggleChange = () => { },
     onPromptChange = () => { },
     onInsidePanelChange = () => { },
@@ -176,6 +183,36 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const firstPersonVelocity = new THREE.Vector3();
 
   let outpostRoot = null;
+  let roverRoot = null;
+  const roverSpinBones = [];
+  const roverFrontSpinBones = [];
+  const roverSteeringBones = [];
+  const roverBoneRest = new Map();
+  const roverSpinAxis = new THREE.Vector3(0, 0, 1);
+  const roverSteerAxis = new THREE.Vector3(0, 1, 0);
+  const roverBoneDelta = new THREE.Quaternion();
+  const roverSteeringDelta = new THREE.Quaternion();
+  let roverSpeed = 0;
+  let roverHeading = 0;
+  let roverSteering = 0;
+  let roverWheelAngle = 0;
+  let roverGroundOffset = 0;
+  let roverHalfLength = 4;
+  let roverHalfWidth = 2;
+  let roverCameraActive = false;
+  let roverCameraWasPointerLocked = false;
+  let roverCameraDragging = false;
+  let roverCameraPointerX = 0;
+  let roverCameraPointerY = 0;
+  let roverCameraOrbitYaw = 0;
+  let roverCameraOrbitPitch = 0.28;
+  let roverCameraDistance = 12;
+  const roverCameraSavedPosition = new THREE.Vector3();
+  const roverCameraSavedQuaternion = new THREE.Quaternion();
+  const roverCameraSavedTarget = new THREE.Vector3();
+  const roverCameraDesiredPosition = new THREE.Vector3();
+  const roverCameraLookAt = new THREE.Vector3();
+  const roverCameraForward = new THREE.Vector3();
   let outpostHeightField = null; // walker collision rasterized from the outpost meshes
   let commandCenterRoot = null;
   let commandCenterModelRoot = null;
@@ -900,6 +937,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
   function returnToFirstPersonStart() {
     if (isDestroyed || !outpostRoot || !heightGrid) return;
 
+    if (roverCameraActive) {
+      roverCameraActive = false;
+      onRoverCameraChange(false);
+    }
     releaseAllKeys();
     firstPersonVelocity.set(0, 0, 0);
     if (document.pointerLockElement === canvas) document.exitPointerLock?.();
@@ -1092,6 +1133,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const COMMAND_CENTER_GAP = 4;
   const OUTPOST_SITE_MARGIN = 6;
   const OUTPOST_GROUND_EPSILON = 0.05;
+  const ROVER_TARGET_WIDTH = 3; // Change this value to resize the playable rover.
+  const ROVER_MAX_STEP_HEIGHT = COLLIDE_STEP_HEIGHT + 0.45;
   const FIRST_PERSON_EYE_HEIGHT = 3.2;
   // Lunar motion: gravity is about a sixth of Earth's, so the walker shuffles
   // slowly and jumps arc high and float for a couple of seconds instead of
@@ -1159,6 +1202,90 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const terrainScans = [];
   const moonTerrainMeshes = [];
   let loaded = 0;
+
+  function mountRover(outpostBounds) {
+    if (roverRoot || isDestroyed) return;
+
+    sharedGltfLoader.load(
+      '/lunar/rover/rover.glb',
+      gltf => {
+        if (isDestroyed) return;
+        const rover = gltf.scene;
+        registerCachedScene(rover);
+        rover.name = 'Playable Moon Rover';
+        rover.updateMatrixWorld(true);
+
+        const sourceBounds = new THREE.Box3().setFromObject(rover);
+        const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+        const modelWidth = Math.max(sourceSize.x, sourceSize.z, 0.001);
+        rover.scale.multiplyScalar(ROVER_TARGET_WIDTH / modelWidth);
+        rover.updateMatrixWorld(true);
+
+        const scaledBounds = new THREE.Box3().setFromObject(rover);
+        const scaledSize = scaledBounds.getSize(new THREE.Vector3());
+        // Keep the entire rover footprint above the sampled terrain, rather
+        // than positioning only its center over the ground.
+        roverHalfLength = Math.max(scaledSize.x * 0.46, 0.5);
+        roverHalfWidth = Math.max(scaledSize.z * 0.46, 0.5);
+        const scaledCenter = scaledBounds.getCenter(new THREE.Vector3());
+        const targetX = (outpostBounds.min.x + outpostBounds.max.x) / 2;
+        const targetZ = outpostBounds.min.z - 12;
+        const roverX = targetX - scaledCenter.x;
+        const roverZ = targetZ - scaledCenter.z;
+        const groundY = roverSupportHeightAt(roverX, roverZ, roverHeading);
+        rover.position.set(
+          roverX,
+          groundY - scaledBounds.min.y + OUTPOST_GROUND_EPSILON,
+          roverZ,
+        );
+        roverGroundOffset = rover.position.y - groundY;
+
+        rover.traverse(object => {
+          if (object.isMesh) {
+            object.castShadow = true;
+            object.receiveShadow = true;
+          }
+        });
+        scene.add(rover);
+        rover.updateMatrixWorld(true);
+        roverRoot = rover;
+
+        const spinNames = ['RF', 'RM', 'RB', 'LF', 'LM', 'LB']
+          .map(position => `chassis${position}_wheelAxle_SpinZ`);
+        for (const name of spinNames) {
+          const bone = rover.getObjectByName(name);
+          if (!bone) continue;
+          roverSpinBones.push(bone);
+          if (name.includes('chassisRF_') || name.includes('chassisLF_')) {
+            roverFrontSpinBones.push(bone);
+          }
+          roverBoneRest.set(bone, bone.quaternion.clone());
+        }
+
+        const steeringNames = ['chassisRF_wheelAxle_turnY', 'chassisLF_wheelAxle_turnY'];
+        for (const name of steeringNames) {
+          const bone = rover.getObjectByName(name);
+          if (!bone) continue;
+          roverSteeringBones.push(bone);
+          roverBoneRest.set(bone, bone.quaternion.clone());
+        }
+
+        if (roverSpinBones.length !== 6 || roverSteeringBones.length !== 2) {
+          console.warn(
+            '[Rover] Some wheel control bones were not found.',
+            { spin: roverSpinBones.length, steering: roverSteeringBones.length },
+          );
+        }
+        console.info('[Rover] Ready. Arrow Up drives; Left/Right steer.', {
+          spinBones: roverSpinBones.length,
+          steeringBones: roverSteeringBones.length,
+        });
+        onRoverReady(true);
+      },
+      undefined,
+      error => console.error('Unable to load /lunar/rover/rover.glb', error),
+    );
+  }
 
   function mountCommandCenter(outpost, model) {
     if (isDestroyed) return;
@@ -1366,6 +1493,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           scene.add(outpost);
           outpost.updateMatrixWorld(true);
           outpostRoot = outpost;
+          mountRover(outpostBounds);
           loadCommandCenter(outpost);
           buildEventVisualization();
 
@@ -2606,8 +2734,44 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   // Camera & Mode Controls
+  function toggleRoverCamera() {
+    if (!roverRoot || eventCinematic || dayStartCameraTransition || cameraMode === 'interior') return;
+
+    releaseAllKeys();
+    firstPersonVelocity.set(0, 0, 0);
+    if (!roverCameraActive) {
+      roverCameraSavedPosition.copy(camera.position);
+      roverCameraSavedQuaternion.copy(camera.quaternion);
+      roverCameraSavedTarget.copy(controls.target);
+      roverCameraWasPointerLocked = document.pointerLockElement === canvas;
+      if (roverCameraWasPointerLocked) document.exitPointerLock?.();
+      controls.enabled = false;
+      roverCameraOrbitYaw = 0;
+      roverCameraOrbitPitch = 0.28;
+      roverCameraDistance = 12;
+      canvas.style.cursor = 'grab';
+      roverCameraActive = true;
+      updateRoverCamera(0);
+      onRoverCameraChange(true);
+      return;
+    }
+
+    roverCameraActive = false;
+    roverCameraDragging = false;
+    canvas.style.cursor = '';
+    camera.position.copy(roverCameraSavedPosition);
+    camera.quaternion.copy(roverCameraSavedQuaternion);
+    controls.target.copy(roverCameraSavedTarget);
+    controls.enabled = cameraMode === 'free';
+    if (controls.enabled) controls.update();
+    if (cameraMode === 'first-person' && roverCameraWasPointerLocked) {
+      canvas.requestPointerLock?.();
+    }
+    onRoverCameraChange(false);
+  }
+
   function toggleCameraMode() {
-    if (eventCinematic) return;
+    if (eventCinematic || roverCameraActive) return;
     if (cameraMode === 'free' && (!outpostRoot || !heightGrid)) return;
     if (cameraMode === 'free') {
       savedFreePosition.copy(camera.position);
@@ -2633,7 +2797,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function toggleEarthView() {
-    if (eventCinematic) return;
+    if (eventCinematic || roverCameraActive) return;
     if (!earthMesh || cameraMode !== 'free') return;
     if (earthViewActive) {
       camera.position.copy(savedEarthViewPosition);
@@ -2725,6 +2889,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleConsolePointerDown(event) {
+    if (roverCameraActive && event.button === 0) {
+      event.preventDefault();
+      roverCameraDragging = true;
+      roverCameraPointerX = event.clientX;
+      roverCameraPointerY = event.clientY;
+      try { canvas.setPointerCapture?.(event.pointerId); } catch (error) { /* noop */ }
+      canvas.style.cursor = 'grabbing';
+      return;
+    }
     if (!consoleEditMode || !taskConsoleGroup || event.button !== 0) return;
     taskRaycaster.setFromCamera(consolePointerNdcFromEvent(event), camera);
     const hits = taskRaycaster.intersectObjects(taskConsoleGroup.children, true);
@@ -2742,6 +2915,20 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleConsolePointerMove(event) {
+    if (roverCameraActive && roverCameraDragging) {
+      const deltaX = event.clientX - roverCameraPointerX;
+      const deltaY = event.clientY - roverCameraPointerY;
+      roverCameraPointerX = event.clientX;
+      roverCameraPointerY = event.clientY;
+      roverCameraOrbitYaw -= deltaX * 0.006;
+      roverCameraOrbitPitch = THREE.MathUtils.clamp(
+        roverCameraOrbitPitch - deltaY * 0.004,
+        0.04,
+        1.05,
+      );
+      event.preventDefault();
+      return;
+    }
     if (!consoleEditMode || !consoleDragging || !taskConsoleGroup) return;
     event.preventDefault();
     taskRaycaster.setFromCamera(consolePointerNdcFromEvent(event), camera);
@@ -2766,6 +2953,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleConsolePointerUp() {
+    if (roverCameraDragging) {
+      roverCameraDragging = false;
+      if (canvas) canvas.style.cursor = roverCameraActive ? 'grab' : '';
+    }
     if (!consoleDragging) return;
     consoleDragging = false;
     if (canvas) canvas.style.cursor = consoleEditMode ? 'move' : '';
@@ -2774,6 +2965,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleConsoleWheel(event) {
+    if (roverCameraActive) {
+      event.preventDefault();
+      roverCameraDistance = THREE.MathUtils.clamp(
+        roverCameraDistance * (event.deltaY < 0 ? 0.9 : 1 / 0.9),
+        5,
+        28,
+      );
+      return;
+    }
     if (!consoleEditMode || !taskConsoleInner || !taskConsoleGroup) return;
     event.preventDefault();
     const next = THREE.MathUtils.clamp(
@@ -2786,7 +2986,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleCanvasClick() {
-    if (eventCinematic) return;
+    if (eventCinematic || roverCameraActive) return;
     if (consoleEditMode) return;
     if (['first-person', 'interior'].includes(cameraMode) && document.pointerLockElement !== canvas) {
       canvas.requestPointerLock?.();
@@ -2820,6 +3020,91 @@ export function createLunarEngine(canvas, callbacks = {}) {
     firstPersonPitch = THREE.MathUtils.clamp(firstPersonPitch - event.movementY * 0.0018, -1.45, 1.45);
   }
 
+  function updateRoverCamera(dt) {
+    if (!roverRoot) return;
+    // This rover model's nose points along local +X. Use its world-space
+    // forward vector so the chase camera stays centered behind the chassis.
+    roverCameraForward.set(1, 0, 0).applyQuaternion(roverRoot.quaternion).normalize();
+    roverCameraDesiredPosition.set(-Math.cos(roverCameraOrbitYaw), 0, Math.sin(roverCameraOrbitYaw))
+      .applyQuaternion(roverRoot.quaternion)
+      .multiplyScalar(roverCameraDistance * Math.cos(roverCameraOrbitPitch));
+    roverCameraDesiredPosition.add(roverRoot.position);
+    roverCameraDesiredPosition.y += roverCameraDistance * Math.sin(roverCameraOrbitPitch) + 0.5;
+    const followBlend = dt > 0 ? 1 - Math.exp(-6 * dt) : 1;
+    camera.position.lerp(roverCameraDesiredPosition, followBlend);
+
+    roverCameraLookAt.copy(roverRoot.position)
+      .addScaledVector(roverCameraForward, 2.5);
+    roverCameraLookAt.y += 1.4;
+    camera.lookAt(roverCameraLookAt);
+    controls.target.copy(roverCameraLookAt);
+  }
+
+  function updateRoverDrive(dt) {
+    if (!roverRoot) return;
+
+    const canDrive = roverCameraActive
+      && !eventCinematic
+      && !dayStartCameraTransition
+      && (cameraMode === 'free' || cameraMode === 'first-person');
+    const steerInput = canDrive
+      ? (keys.has('arrowleft') ? 1 : 0) - (keys.has('arrowright') ? 1 : 0)
+      : 0;
+    const throttleInput = canDrive
+      ? (keys.has('arrowup') ? 1 : 0) - (keys.has('arrowdown') ? 1 : 0)
+      : 0;
+    const targetSpeed = throttleInput > 0 ? 8 : throttleInput < 0 ? -3 : 0;
+    roverSpeed = THREE.MathUtils.damp(roverSpeed, targetSpeed, throttleInput ? 2.8 : 4.5, dt);
+    roverSteering = THREE.MathUtils.damp(roverSteering, steerInput * 0.3, 9, dt);
+
+    if (Math.abs(roverSpeed) > 0.01) {
+      roverHeading += roverSteering * 0.55 * Math.sign(roverSpeed) * dt;
+      roverRoot.rotation.y = roverHeading;
+
+      // This extracted rover faces local +X. Arrow Up drives along its nose;
+      // side keys steer, turning the chassis while it is moving.
+      const nextX = roverRoot.position.x + Math.cos(roverHeading) * roverSpeed * dt;
+      const nextZ = roverRoot.position.z - Math.sin(roverHeading) * roverSpeed * dt;
+      const nextGround = roverSupportHeightAt(nextX, nextZ, roverHeading);
+      const currentGround = roverRoot.position.y - roverGroundOffset;
+      if (isRoverBlockedAt(nextX, nextZ, roverHeading, currentGround)) {
+        roverSpeed = 0;
+      } else {
+        roverRoot.position.x = nextX;
+        roverRoot.position.z = nextZ;
+        roverRoot.position.y = nextGround + roverGroundOffset;
+      }
+    }
+
+    // Terrain can finish loading after the rover model. Keep clamping its
+    // underside above the terrain every frame, including while it is parked.
+    const minimumRoverY = roverSupportHeightAt(
+      roverRoot.position.x,
+      roverRoot.position.z,
+      roverHeading,
+    ) + roverGroundOffset;
+    roverRoot.position.y = Math.max(roverRoot.position.y, minimumRoverY);
+
+    // The exported wheel joints use the opposite local axle sign from the
+    // rover's +X travel direction, so negate speed to make tire roll match it.
+    roverWheelAngle -= roverSpeed * 0.9 * dt;
+    roverBoneDelta.setFromAxisAngle(roverSpinAxis, roverWheelAngle);
+    roverSteeringDelta.setFromAxisAngle(roverSteerAxis, roverSteering);
+    for (const bone of roverSpinBones) {
+      bone.quaternion.copy(roverBoneRest.get(bone));
+      if (roverFrontSpinBones.includes(bone)) {
+        // The turnY bones animate the suspension links. Steer the actual front
+        // tire joints too, then keep their rolling motion on the axle axis.
+        bone.quaternion.multiply(roverSteeringDelta);
+      }
+      bone.quaternion.multiply(roverBoneDelta);
+    }
+
+    for (const bone of roverSteeringBones) {
+      bone.quaternion.copy(roverBoneRest.get(bone)).multiply(roverSteeringDelta);
+    }
+  }
+
   function handleKeyDown(event) {
     if (eventCinematic) {
       event.preventDefault();
@@ -2828,6 +3113,31 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const rawKey = event.key || '';
     const key = rawKey.toLowerCase();
     const code = event.code || '';
+    if (roverCameraActive) {
+      if (key === 'v' && !event.repeat) {
+        event.preventDefault();
+        toggleRoverCamera();
+        return;
+      }
+      if (code.startsWith('Arrow')) {
+        event.preventDefault();
+        keys.add(key);
+        const alias = KEY_CODE_ALIASES[code];
+        if (alias) keys.add(alias);
+      }
+      return;
+    }
+    const target = event.target;
+    const typing = target && (
+      target.tagName === 'INPUT'
+      || target.tagName === 'TEXTAREA'
+      || target.isContentEditable
+    );
+    if (key === 'v' && !event.repeat && !typing) {
+      event.preventDefault();
+      toggleRoverCamera();
+      return;
+    }
     const isEnter = key === 'enter' || code === 'Enter' || code === 'NumpadEnter';
     const isJump = key === ' ' || code === 'Space';
     const isConfirm = key === 'e' || isEnter;
@@ -2929,6 +3239,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   canvas.addEventListener('pointerdown', handleConsolePointerDown);
   canvas.addEventListener('pointermove', handleConsolePointerMove);
   canvas.addEventListener('pointerup', handleConsolePointerUp);
+  canvas.addEventListener('pointercancel', handleConsolePointerUp);
   canvas.addEventListener('wheel', handleConsoleWheel, { passive: false });
   document.addEventListener('mousemove', handleMouseMove);
   document.addEventListener('keydown', handleKeyDown);
@@ -3335,6 +3646,63 @@ export function createLunarEngine(canvas, callbacks = {}) {
     return outpostTop === null ? terrain : Math.max(terrain, outpostTop);
   }
 
+  function roverSupportHeightAt(x, z, heading) {
+    const forwardX = Math.cos(heading);
+    const forwardZ = -Math.sin(heading);
+    const sideX = Math.sin(heading);
+    const sideZ = Math.cos(heading);
+    let highest = -Infinity;
+
+    // Sample the whole footprint at sub-meter intervals. The terrain height
+    // grid is one meter wide, so sparse corner-only samples could miss bumps
+    // between the wheels and let the chassis clip through them.
+    const lengthSteps = Math.max(2, Math.ceil((roverHalfLength * 2) / 0.75));
+    const widthSteps = Math.max(2, Math.ceil((roverHalfWidth * 2) / 0.75));
+    for (let i = 0; i <= lengthSteps; i++) {
+      const along = (i / lengthSteps) * 2 - 1;
+      for (let j = 0; j <= widthSteps; j++) {
+        const across = (j / widthSteps) * 2 - 1;
+        const sampleX = x + forwardX * roverHalfLength * along + sideX * roverHalfWidth * across;
+        const sampleZ = z + forwardZ * roverHalfLength * along + sideZ * roverHalfWidth * across;
+        const terrain = sampleGroundHeight(sampleX, sampleZ) ?? sampleOuterHeight(sampleX, sampleZ);
+        const deck = sampleOutpostTop(outpostHeightField, sampleX, sampleZ);
+        // Ramps and low obstacles can support the rover, but tall walls and
+        // roofs remain obstacles rather than lifting the vehicle onto them.
+        const height = deck !== null && deck >= terrain && deck - terrain <= ROVER_MAX_STEP_HEIGHT
+          ? deck
+          : terrain;
+        if (Number.isFinite(height)) highest = Math.max(highest, height);
+      }
+    }
+
+    return Number.isFinite(highest) ? highest : PLAIN_LEVEL;
+  }
+
+  function isRoverBlockedAt(x, z, heading, groundY) {
+    if (!outpostHeightField) return false;
+    const forwardX = Math.cos(heading);
+    const forwardZ = -Math.sin(heading);
+    const sideX = Math.sin(heading);
+    const sideZ = Math.cos(heading);
+    // Sweep the rover's oriented footprint in steps at least as fine as the
+    // outpost collision grid, so its long chassis cannot pass through walls,
+    // habitat modules, or supports between frames.
+    const spacing = 0.38;
+    const lengthSteps = Math.max(1, Math.ceil((roverHalfLength * 2) / spacing));
+    const widthSteps = Math.max(1, Math.ceil((roverHalfWidth * 2) / spacing));
+    for (let i = 0; i <= lengthSteps; i++) {
+      const along = (i / lengthSteps) * 2 - 1;
+      for (let j = 0; j <= widthSteps; j++) {
+        const across = (j / widthSteps) * 2 - 1;
+        const sampleX = x + forwardX * roverHalfLength * along + sideX * roverHalfWidth * across;
+        const sampleZ = z + forwardZ * roverHalfLength * along + sideZ * roverHalfWidth * across;
+        const obstacleTop = sampleOutpostTop(outpostHeightField, sampleX, sampleZ);
+        if (obstacleTop !== null && obstacleTop - groundY > ROVER_MAX_STEP_HEIGHT) return true;
+      }
+    }
+    return false;
+  }
+
   function moveFirstPersonWithCollisions(stepX, stepZ) {
     if (!outpostHeightField) {
       camera.position.x += stepX;
@@ -3477,9 +3845,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     animId = requestAnimationFrame(animate);
 
     const dt = Math.min(clock.getDelta(), 0.05);
+    updateRoverDrive(dt);
 
     promptCheckTimer += dt;
-    if (!eventCinematic && !dayStartCameraTransition && promptCheckTimer >= 0.1) {
+    if (!eventCinematic && !dayStartCameraTransition && !roverCameraActive && promptCheckTimer >= 0.1) {
       promptCheckTimer = 0;
       if (cameraMode === 'first-person') {
         updateAirlockPrompt();
@@ -3508,11 +3877,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
         camera.quaternion.copy(transition.destinationQuaternion);
         dayStartCameraTransition = null;
       }
+    } else if (roverCameraActive) {
+      updateRoverCamera(dt);
     } else if (cameraMode === 'free') {
       controls.update();
     } else {
-      const forward = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
-      const side = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+      const forward = (keys.has('w') || keys.has('arrowup') ? 1 : 0)
+        - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+      const side = (keys.has('d') || keys.has('arrowright') ? 1 : 0)
+        - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
       camera.rotation.order = 'YXZ';
       camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
       camera.getWorldDirection(firstPersonForward).normalize();
@@ -3585,7 +3958,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     // Horizontal momentum only belongs to the walking first-person view; every
     // other mode (free camera, interiors, event cinematics) resets it so the
     // walker never glides off after switching.
-    if (cameraMode !== 'first-person' || eventCinematic) {
+    if (cameraMode !== 'first-person' || eventCinematic || roverCameraActive) {
       firstPersonVelocity.set(0, 0, 0);
     }
 
@@ -3662,6 +4035,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     returnFromEvent,
     returnToFirstPersonStart,
     toggleCameraMode,
+    toggleRoverCamera,
     toggleEarthView,
     enterAirlock,
     dismissAirlock: () => {
@@ -3699,6 +4073,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       canvas.removeEventListener('pointerdown', handleConsolePointerDown);
       canvas.removeEventListener('pointermove', handleConsolePointerMove);
       canvas.removeEventListener('pointerup', handleConsolePointerUp);
+      canvas.removeEventListener('pointercancel', handleConsolePointerUp);
       canvas.removeEventListener('wheel', handleConsoleWheel);
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('keydown', handleKeyDown);

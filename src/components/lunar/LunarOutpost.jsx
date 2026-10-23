@@ -52,6 +52,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
 
   const [isLoading, setIsLoading] = useState(true);
   const [cameraMode, setCameraMode] = useState('free');
+  const [roverReady, setRoverReady] = useState(false);
+  const [roverCameraActive, setRoverCameraActive] = useState(false);
   const [prompt, setPrompt] = useState({ type: null, data: null });
   const [insidePanel, setInsidePanel] = useState({
     visible: false,
@@ -122,6 +124,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       engine = createLunarEngine(canvas, {
         onLoading: (state) => setIsLoading(state.active),
         onModeChange: (mode) => setCameraMode(mode),
+        onRoverReady: (ready) => setRoverReady(ready),
+        onRoverCameraChange: (active) => setRoverCameraActive(active),
         onPromptChange: (type, data) => setPrompt({ type, data }),
         onInsidePanelChange: (panel) => setInsidePanel(panel),
         onTaskAction: (componentId, taskId) => taskActionRef.current?.(componentId, taskId),
@@ -580,17 +584,46 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
               </button>
             </div>
           ) : (
-            <button
-              type="button"
-              className={`lunar-btn ${cameraMode === 'first-person' ? 'active' : ''}`}
-              disabled={!['idle', 'awaitingDecision'].includes(simulation.eventPhase) || simulation.gameStatus !== 'playing'}
-              onClick={() => engineRef.current?.toggleCameraMode()}
-            >
-              {cameraMode === 'free' ? 'FIRST PERSON' : 'FREE CAMERA'}
-            </button>
+            <>
+              <button
+                type="button"
+                className={`lunar-btn ${cameraMode === 'first-person' ? 'active' : ''}`}
+                disabled={roverCameraActive || !['idle', 'awaitingDecision'].includes(simulation.eventPhase) || simulation.gameStatus !== 'playing'}
+                onClick={() => engineRef.current?.toggleCameraMode()}
+              >
+                {cameraMode === 'free' ? 'FIRST PERSON' : 'FREE CAMERA'}
+              </button>
+              <button
+                type="button"
+                className={`lunar-btn ${roverCameraActive ? 'active' : ''}`}
+                aria-pressed={roverCameraActive}
+                disabled={!roverCameraActive && (!roverReady || cameraMode === 'interior' || !eventGameplayActive || simulation.gameStatus !== 'playing')}
+                onClick={() => engineRef.current?.toggleRoverCamera()}
+                title={roverReady ? 'Switch between player view and rover follow camera' : 'Loading rover'}
+              >
+                {roverCameraActive ? 'PLAYER CAMERA' : roverReady ? 'ROVER CAMERA' : 'LOADING ROVER'}
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {cameraMode !== 'interior' && (
+        <div className="lunar-rover-help" role="note" aria-label="Rover keyboard controls">
+          {roverCameraActive ? (
+            <>
+              <strong>ROVER</strong>
+              <span>DRAG MOUSE TO ORBIT</span>
+              <span>SCROLL TO ZOOM</span>
+              <span><kbd>↑</kbd> DRIVE</span>
+              <span><kbd>←</kbd> <kbd>→</kbd> STEER</span>
+              <span><kbd>↓</kbd> REVERSE</span>
+            </>
+          ) : (
+            <span>PLAYER CAMERA Â· ARROWS MOVE PLAYER Â· PRESS V OR SELECT ROVER CAMERA TO DRIVE</span>
+          )}
+        </div>
+      )}
 
       {import.meta.env.DEV && (
         <details className="lunar-event-test-tools">

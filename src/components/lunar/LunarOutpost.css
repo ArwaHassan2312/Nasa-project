@@ -109,6 +109,53 @@
   pointer-events: none;
 }
 
+.lunar-rover-help {
+  position: absolute;
+  right: clamp(12px, 3vw, 28px);
+  bottom: clamp(12px, 2.5vh, 22px);
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid rgba(127, 240, 255, 0.25);
+  border-radius: 5px;
+  background: rgba(8, 13, 20, 0.78);
+  color: rgba(242, 245, 245, 0.82);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+
+@media (max-width: 520px) {
+  .lunar-rover-help {
+    left: 12px;
+    right: 12px;
+    justify-content: center;
+    gap: 7px;
+    padding: 8px;
+    font-size: 0.54rem;
+  }
+}
+
+.lunar-rover-help strong {
+  color: var(--lunar-cyan);
+  font-family: var(--lunar-font-tech);
+}
+
+.lunar-rover-help kbd {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 2px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 3px;
+  color: #fff;
+  font: inherit;
+  text-align: center;
+}
+
 .lunar-event-alert-button {
   display: inline-flex;
   align-items: center;
