@@ -8,7 +8,7 @@ import type {
   PostponementRecord,
 } from '../hooks/useGameSimulation';
 import { MISSION_FAILURE_RESOURCE_THRESHOLD } from '../hooks/useGameSimulation';
-import { MOON_EVENTS } from '../data/moonEvents';
+import { MOON_EVENTS, TASK_CONSEQUENCE_EVENTS } from '../data/moonEvents';
 import type { ResourceKey } from '../data/moonEvents';
 import type { EventOccurrence } from '../hooks/eventScheduler';
 
@@ -168,7 +168,7 @@ export default function EndGameReport({
               {eventHistory.map((event, index) => (
                 <li key={`${event.eventId}-${index}`}>
                   <strong>
-                    Day {event.day}: {MOON_EVENTS.find((definition) => definition.id === event.eventId)?.name
+                    Day {event.day}: {[...MOON_EVENTS, ...TASK_CONSEQUENCE_EVENTS].find((definition) => definition.id === event.eventId)?.name
                       ?? event.eventId.replaceAll('_', ' ')}
                   </strong>
                 </li>

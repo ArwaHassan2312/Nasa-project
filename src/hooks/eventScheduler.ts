@@ -4,6 +4,10 @@ export interface EventOccurrence {
   eventId: string;
   day: number;
   elapsedMs: number;
+  /** Elapsed time within the current day, used only for the first independent-event delay. */
+  independentElapsedMs?: number;
+  source?: 'independent' | 'task';
+  occurrenceId?: string;
 }
 
 export interface EventSchedulerInput {
@@ -17,14 +21,17 @@ export interface EventSchedulerInput {
   systemConditions: Record<SystemKey, number>;
   resources: Record<ResourceKey, number>;
   eventHistory: EventOccurrence[];
-  overdueTaskIds?: string[];
+  forceEvent?: boolean;
+  ignoreMinimumDay?: boolean;
+  ignorePreventedByFlags?: boolean;
 }
 
 export const EVENT_SCHEDULER_CONFIG = {
   checkIntervalMs: 10_000,
   minimumCooldownDays: 2,
   maximumGapDays: 5.5,
-  firstEventEarliestDay: 2,
+  firstEventEarliestDay: 1,
+  minimumIndependentEventElapsedMs: 20_000,
   baseDailyProbability: 0.18,
   elevatedSeverityCondition: 40,
   criticalSeverityCondition: 20,
@@ -51,11 +58,14 @@ export function selectMajorEvent(
     maxDays,
     dayDurationMs,
     elapsedMs,
+    independentElapsedMs = elapsedMs,
     flags,
     systemConditions,
     resources,
     eventHistory,
-    overdueTaskIds = [],
+    forceEvent = false,
+    ignoreMinimumDay = false,
+    ignorePreventedByFlags = false,
   } = input;
   if (
     day < EVENT_SCHEDULER_CONFIG.firstEventEarliestDay
@@ -72,6 +82,7 @@ export function selectMajorEvent(
     : elapsedMs / dayDurationMs;
   if (
     lastEvent
+    && !forceEvent
     && daysSinceLastEvent < EVENT_SCHEDULER_CONFIG.minimumCooldownDays
   ) {
     return { event: null, rngState: input.rngState };
@@ -84,33 +95,31 @@ export function selectMajorEvent(
       EVENT_SCHEDULER_CONFIG.minimumCooldownDays,
       event.cooldownDays,
     );
-    return day >= event.minDay
+    return (ignoreMinimumDay || day >= event.minDay)
       && occurrences.length < event.maxOccurrences
       && (!event.requiredFlags || event.requiredFlags.every((flag) => flags.includes(flag)))
-      && !event.preventedByFlags?.some((flag) => flags.includes(flag))
+      && (ignorePreventedByFlags || !event.preventedByFlags?.some((flag) => flags.includes(flag)))
       && (
-        !previousOccurrence
+        forceEvent
+        || !previousOccurrence
         || (elapsedMs - previousOccurrence.elapsedMs) / dayDurationMs >= minimumCooldown
       );
   });
   if (eligible.length === 0) return { event: null, rngState: input.rngState };
 
-  const overdueTaskSet = new Set(overdueTaskIds);
-  const overdueTaskEvents = eligible.filter((event) =>
-    event.riskTaskIds?.some((taskId) => overdueTaskSet.has(taskId)),
-  );
   const seenIds = new Set(eventHistory.map((entry) => entry.eventId));
   const unencountered = eligible.filter((event) => !seenIds.has(event.id));
-  const candidates = overdueTaskEvents.length > 0
-    ? overdueTaskEvents
-    : unencountered.length > 0 ? unencountered : eligible;
+  const candidates = unencountered.length > 0 ? unencountered : eligible;
 
   const overdue = daysSinceLastEvent >= EVENT_SCHEDULER_CONFIG.maximumGapDays;
   let rngState = input.rngState;
-  // An overdue task that directly risks an event triggers that incident at
-  // the next eligible scheduler check. Preventive completion flags remove it
-  // from `eligible`, so finished work cannot trigger the incident.
-  if (!overdue && overdueTaskEvents.length === 0) {
+  if (
+    !forceEvent
+    && independentElapsedMs < EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs
+  ) {
+    return { event: null, rngState: input.rngState };
+  }
+  if (!forceEvent && !overdue) {
     const roll = nextRandom(rngState);
     rngState = roll.state;
     const readinessMultiplier = 0.8 + Math.min(day / maxDays, 1) * 0.6;

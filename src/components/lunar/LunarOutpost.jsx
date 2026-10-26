@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createLunarEngine } from './lunarOutpostEngine';
 import EventModal from '../EventModal';
 import EndGameReport from '../EndGameReport';
@@ -26,6 +26,12 @@ const TASK_EVENT_TESTS = [
   ['solar-array-inspection', 'Solar array inspection', 'Power failure'],
   ['habitat-waterline-inspection', 'Waterline inspection', 'Water leak'],
 ];
+const RESOURCE_LABELS = {
+  power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
+  habitat: 'Habitat integrity', equipment: 'Equipment', health: 'Crew health',
+  radProtection: 'Radiation protection', comms: 'Communications', science: 'Science',
+  emergencyReserve: 'Emergency reserve', potentialWater: 'Potential water',
+};
 
 function getSystemConditionLevel(value) {
   if (value === 0) return 'failed';
@@ -43,12 +49,21 @@ function formatRemainingTime(milliseconds) {
   return `${minutes}:${seconds}`;
 }
 
+function getEventOccurrenceKey(event) {
+  return event?.occurrenceId ?? (event ? `${event.id}-${event.day ?? 0}` : null);
+}
+
 export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const containerRef = useRef(null);
   const engineRef = useRef(null);
   const presentedEventRef = useRef(null);
   const returningEventRef = useRef(null);
+  const queuedPresentationsRef = useRef(new Set());
+  const eventOptionsEventIdRef = useRef(null);
+  const eventTimerActionRef = useRef(null);
   const dayStartCameraDayRef = useRef(null);
+  const alertPanelDayRef = useRef(simulation.day);
+  const setSceneReady = simulation.setSceneReady;
 
   const [isLoading, setIsLoading] = useState(true);
   const [cameraMode, setCameraMode] = useState('free');
@@ -61,7 +76,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   });
   const [statusOpen, setStatusOpen] = useState(false);
   const [dailyTasksOpen, setDailyTasksOpen] = useState(false);
+  const [focusedTaskId, setFocusedTaskId] = useState(null);
   const [eventOptionsOpen, setEventOptionsOpen] = useState(false);
+  const [selectedAlertId, setSelectedAlertId] = useState(null);
   const [mapOpen, setMapOpen] = useState(false);
   const [mapOpenedAtDecisionCount, setMapOpenedAtDecisionCount] = useState(0);
   const [selectedMapTaskId, setSelectedMapTaskId] = useState(null);
@@ -73,15 +90,19 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     currentEvent,
     beginPresentation,
     completePresentation,
+    completeQueuedPresentation,
     completeResolution,
     startDailyChallenge,
     completeDailyChallenge,
-    requestDailyChallengePostponement,
-    cancelDailyChallengePostponement,
-    confirmDailyChallengePostponement,
     dismissChallengeFeedback,
   } = simulation;
   const eventGameplayActive = eventPhase === 'idle' || eventPhase === 'awaitingDecision';
+  eventTimerActionRef.current = (event) => {
+    if (!event || simulation.eventResolutionLocked) return;
+    eventOptionsEventIdRef.current = getEventOccurrenceKey(event);
+    setSelectedAlertId(getEventOccurrenceKey(event));
+    setEventOptionsOpen(true);
+  };
   // Only tasks activated from the Daily Tasks list show a button in the inside
   // panel; available or completed tasks add no interior UI at all.
   const insideComponentTasks = insidePanel.componentId
@@ -125,7 +146,12 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         onPromptChange: (type, data) => setPrompt({ type, data }),
         onInsidePanelChange: (panel) => setInsidePanel(panel),
         onTaskAction: (componentId, taskId) => taskActionRef.current?.(componentId, taskId),
-        onConsoleEdit: (info) => setConsoleInfo(info)
+        onTaskTimerClick: (taskId) => {
+          setFocusedTaskId(taskId);
+          setDailyTasksOpen(true);
+        },
+        onConsoleEdit: (info) => setConsoleInfo(info),
+        onSceneReady: () => setSceneReady(true),
       });
     } catch (error) {
       console.error('[LunarOutpost] Engine failed to start, retry on next mount.', error);
@@ -142,13 +168,18 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         console.error('[LunarOutpost] Engine destroy failed.', error);
       }
       engineRef.current = null;
+      setSceneReady(false);
       if (canvas.parentNode) canvas.remove();
     };
-  }, []);
+  }, [setSceneReady]);
 
   useEffect(() => {
-    engineRef.current?.setEventEffect(simulation.eventEffectId);
-  }, [simulation.eventEffectId]);
+    if (alertPanelDayRef.current === simulation.day) return;
+    alertPanelDayRef.current = simulation.day;
+    eventOptionsEventIdRef.current = null;
+    setSelectedAlertId(null);
+    setEventOptionsOpen(false);
+  }, [simulation.day]);
 
   useEffect(() => {
     if (simulation.dayPhase !== 'transition') {
@@ -158,7 +189,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     if (dayStartCameraDayRef.current === simulation.day) return;
 
     dayStartCameraDayRef.current = simulation.day;
-    engineRef.current?.returnToFirstPersonStart();
+    engineRef.current?.returnToOutpostOverview();
   }, [simulation.day, simulation.dayPhase]);
 
   useEffect(() => {
@@ -175,6 +206,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       }))
     );
   }, [simulation.dailyChallenges]);
+
+  useEffect(() => {
+    if (!dailyTasksOpen || !focusedTaskId) return;
+    document.getElementById(`lunar-task-${focusedTaskId}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [dailyTasksOpen, focusedTaskId]);
 
   useEffect(() => {
     engineRef.current?.setConsoleEditMode?.(consoleEdit);
@@ -307,12 +343,13 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     if (!event) {
       presentedEventRef.current = null;
       returningEventRef.current = null;
-      setEventOptionsOpen(false);
+      eventOptionsEventIdRef.current = null;
       return;
     }
+    const occurrenceId = getEventOccurrenceKey(event);
 
     if (eventPhase === 'pending') {
-      beginPresentation(event.id);
+      beginPresentation(occurrenceId);
       return;
     }
 
@@ -321,8 +358,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       presentedEventRef.current !== event
     ) {
       presentedEventRef.current = event;
-      engineRef.current?.presentEvent(event.id, () => {
-        completePresentation(event.id);
+      engineRef.current?.presentEvent(event.sourceEventId ?? event.id, occurrenceId, () => {
+        completePresentation(occurrenceId);
       });
       return;
     }
@@ -332,17 +369,31 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       returningEventRef.current !== event
     ) {
       returningEventRef.current = event;
-      engineRef.current?.returnFromEvent(() => {
-        completeResolution(event.id);
+      engineRef.current?.returnFromEvent(occurrenceId, () => {
+        completeResolution(occurrenceId);
       });
     }
   }, [
     beginPresentation,
     completePresentation,
+    completeQueuedPresentation,
     completeResolution,
     currentEvent,
     eventPhase,
   ]);
+
+  useEffect(() => {
+    simulation.queuedEvents.forEach(({ event }) => {
+      const occurrenceId = getEventOccurrenceKey(event);
+      if (!occurrenceId || queuedPresentationsRef.current.has(occurrenceId)) return;
+      queuedPresentationsRef.current.add(occurrenceId);
+      engineRef.current?.presentEvent(
+        event.sourceEventId ?? event.id,
+        occurrenceId,
+        () => completeQueuedPresentation(occurrenceId),
+      );
+    });
+  }, [completeQueuedPresentation, simulation.queuedEvents, simulation.sceneReady]);
 
   const selectedMapTask = simulation.dailyChallenges.find(
     (challenge) => challenge.id === selectedMapTaskId,
@@ -453,15 +504,55 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       : matchingSystemTask
         ? `Prioritize ${matchingSystemTask.title} (deadline Day ${matchingSystemTask.deadlineDay}).`
         : `Review ${lowestSystem[1].toLowerCase()} maintenance.`;
-  const warningTask = simulation.dailyChallenges.find(
-    (task) => task.id === simulation.warningTaskId,
-  );
-
+  const allActiveEventEntries = [
+    ...(simulation.currentEvent ? [{
+      event: simulation.currentEvent,
+      deadlineAtMs: simulation.eventDeadlineAtMs,
+      isCurrent: true,
+    }] : []),
+    ...simulation.queuedEvents.map((entry) => ({
+      event: entry.event,
+      deadlineAtMs: entry.deadlineAtMs,
+      isCurrent: false,
+    })),
+  ];
+  const activeEventEntries = allActiveEventEntries;
+  useEffect(() => {
+    if (activeEventEntries.length > 0 || !eventOptionsOpen) return;
+    eventOptionsEventIdRef.current = null;
+    setSelectedAlertId(null);
+    setEventOptionsOpen(false);
+  }, [activeEventEntries.length, eventOptionsOpen]);
+  const activeEventVisuals = useMemo(() => [
+    ...(simulation.currentEvent && simulation.eventPhase !== 'resolving'
+      ? [{
+        occurrenceId: getEventOccurrenceKey(simulation.currentEvent),
+        eventId: simulation.currentEvent.sourceEventId ?? simulation.currentEvent.id,
+      }]
+      : []),
+    ...simulation.queuedEvents.map(({ event }) => ({
+      occurrenceId: getEventOccurrenceKey(event),
+      eventId: event.sourceEventId ?? event.id,
+    })),
+  ], [simulation.currentEvent, simulation.eventPhase, simulation.queuedEvents]);
+  useEffect(() => {
+    engineRef.current?.setEventEffects(activeEventVisuals);
+  }, [activeEventVisuals, simulation.sceneReady]);
+  const selectedEventEntry = activeEventEntries.find(
+    ({ event }) => getEventOccurrenceKey(event) === selectedAlertId,
+  ) ?? activeEventEntries[0] ?? null;
+  const selectedEventCanDecide = Boolean(selectedEventEntry)
+    && (!selectedEventEntry.isCurrent || simulation.eventPhase === 'awaitingDecision')
+    && (selectedEventEntry.event.triggerSource !== 'task'
+      || selectedEventEntry.isCurrent
+      || simulation.queuedEvents.find(({ event }) => (
+        getEventOccurrenceKey(event) === getEventOccurrenceKey(selectedEventEntry.event)
+      ))?.presented === true);
   return (
     <div className="lunar-root" ref={containerRef}>
       <div className="lunar-grain" />
       <div className="lunar-shade" />
-    {simulation.eventEffectId === 'lunar_night' && (
+    {activeEventVisuals.some(({ eventId }) => eventId === 'lunar_night') && (
       <div className="lunar-night-overlay" aria-hidden="true" />
     )}
 
@@ -495,6 +586,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
           <span className="lunar-status-dot" />
           <span>DAY {simulation.day} / {simulation.maxDays}</span>
           <span className="lunar-status-divider">·</span>
+          <span className="lunar-day-countdown" aria-label="Time remaining this day">{formatRemainingTime(simulation.dayRemainingMs)}</span>
+          <span className="lunar-status-divider">·</span>
           <span>{simulation.dayPhase === 'closing' || simulation.dayPhase === 'report' ? '24:00' : simulation.timeOfDay} LUNAR</span>
           <span className="lunar-status-divider">·</span>
           <span>{simulation.remainingDays} DAYS LEFT</span>
@@ -517,7 +610,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
               className="lunar-event-alert-button"
               aria-expanded={eventOptionsOpen}
               aria-controls="event-title"
-              onClick={() => setEventOptionsOpen(true)}
+              onClick={() => {
+                eventOptionsEventIdRef.current = getEventOccurrenceKey(simulation.currentEvent);
+                setSelectedAlertId(getEventOccurrenceKey(simulation.currentEvent));
+                setEventOptionsOpen(true);
+              }}
             >
               <span className="lunar-event-alert-pulse" aria-hidden="true" />
               RED ALERT · {simulation.currentEvent.name}
@@ -531,7 +628,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 className="lunar-btn lunar-status-toggle"
                 aria-expanded={dailyTasksOpen}
                 aria-controls="lunar-daily-tasks"
-                disabled={!eventGameplayActive || simulation.gameStatus !== 'playing'}
+                disabled={!eventGameplayActive || simulation.gameStatus !== 'playing' || simulation.dayPhase !== 'active'}
                 onClick={() => setDailyTasksOpen((open) => !open)}
               >
                 DAILY TASKS
@@ -541,7 +638,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 className="lunar-btn lunar-status-toggle"
                 aria-expanded={statusOpen}
                 aria-controls="lunar-status-drawer"
-                disabled={!eventGameplayActive}
+                disabled={!eventGameplayActive || simulation.dayPhase !== 'active'}
                 onClick={() => setStatusOpen((open) => !open)}
               >
                  OUTPOST STATUS
@@ -557,7 +654,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                     type="button"
                     className="lunar-task-inline-action"
                     title={`${challenge.title} — verify this task now`}
-                    disabled={!eventGameplayActive || simulation.gameStatus !== 'playing'}
+                    disabled={!eventGameplayActive || simulation.gameStatus !== 'playing' || simulation.dayPhase !== 'active'}
                     onClick={() => completeDailyChallenge(challenge.id, challenge.targetComponentId)}
                   >
                     {challenge.actionLabel}
@@ -591,6 +688,47 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
           )}
         </div>
       </div>
+
+      {simulation.dayPhase === 'active' && (
+        <aside className={`lunar-countdown-panel${statusOpen ? ' is-status-open' : ''}${simulation.currentEvent?.triggerSource === 'task' ? ' is-task-event' : ''}`} aria-label="Active task and event timers">
+          {simulation.dailyChallenges
+            .filter((task) => task.status === 'inProgress' && task.urgentDeadlineAtMs !== null)
+            .map((task) => (
+              <button
+                type="button"
+                className="lunar-countdown-item lunar-countdown-task"
+                key={task.id}
+                disabled={simulation.gameStatus !== 'playing'}
+                onClick={() => {
+                  setFocusedTaskId(task.id);
+                  setDailyTasksOpen(true);
+                }}
+              >
+                <span className="lunar-countdown-kind">ACTIVE TASK</span>
+                <span className="lunar-countdown-title">{task.title}</span>
+                <strong className="lunar-countdown-time">
+                  {formatRemainingTime(Math.max(0, task.urgentDeadlineAtMs - simulation.campaignElapsedMs))}
+                </strong>
+              </button>
+            ))}
+          {activeEventEntries
+            .filter(({ deadlineAtMs }) => deadlineAtMs !== null)
+            .map(({ event, deadlineAtMs }) => (
+              <button
+                type="button"
+                className="lunar-countdown-item lunar-countdown-event"
+                key={getEventOccurrenceKey(event)}
+                onClick={() => eventTimerActionRef.current?.(event)}
+              >
+                <span className="lunar-countdown-kind">ACTIVE EVENT</span>
+                <span className="lunar-countdown-title">{event.name}</span>
+                <strong className="lunar-countdown-time">
+                  {formatRemainingTime(Math.max(0, deadlineAtMs - simulation.campaignElapsedMs))}
+                </strong>
+              </button>
+            ))}
+        </aside>
+      )}
 
       {import.meta.env.DEV && (
         <details className="lunar-event-test-tools">
@@ -954,7 +1092,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </div>
       )}
 
-      {dailyTasksOpen && eventGameplayActive && simulation.gameStatus === 'playing' && (
+      {dailyTasksOpen && eventGameplayActive && simulation.gameStatus === 'playing' && simulation.dayPhase === 'active' && (
         <aside className="lunar-daily-tasks" id="lunar-daily-tasks" aria-label="Daily tasks">
           <div className="lunar-drawer-heading">
             <div>
@@ -964,7 +1102,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             <button type="button" aria-label="Close daily tasks" onClick={() => setDailyTasksOpen(false)}>×</button>
           </div>
           <p className="lunar-task-intro">
-            Complete today’s checklist to close the day early. While tasks remain, the mission clock runs at half speed. If time expires, unfinished tasks become overdue; linked incidents must be handled before the day report.
+            Complete today’s checklist to close the day early. If time expires, unfinished tasks become overdue and appear in the day report.
           </p>
           <div className="lunar-task-list">
             {simulation.dailyChallenges.map((challenge) => {
@@ -972,17 +1110,21 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
               const isUnfinished = challenge.status !== 'completed';
 
               return (
-                <article className={`lunar-task-card lunar-task-${challenge.status}`} key={challenge.id}>
+                <article id={`lunar-task-${challenge.id}`} className={`lunar-task-card lunar-task-${challenge.status}${focusedTaskId === challenge.id ? ' is-focused' : ''}`} key={challenge.id}>
                   <div className="lunar-task-title-row">
                     <h3>{challenge.title}</h3>
                     <span>{challenge.status === 'inProgress' ? 'IN PROGRESS' : challenge.status.toUpperCase()}</span>
                   </div>
                   <div className="lunar-task-meta">
                     <span className={`lunar-task-priority lunar-task-priority-${challenge.priority}`}>
-                      {challenge.priority === 'critical' ? 'CRITICAL' : challenge.priority.toUpperCase()} priority
+                      {challenge.taskType === 'event-prevention' ? 'CRITICAL · EVENT PREVENTION' : `${challenge.priority.toUpperCase()} priority`}
                     </span>
                     <span>Location: {challenge.targetComponentName}</span>
-                    <span>{challenge.status === 'overdue' ? `Overdue from Day ${challenge.deadlineDay}` : 'Due today'}</span>
+                    <span>{challenge.status === 'overdue'
+                      ? `Overdue from Day ${challenge.scheduledDay}`
+                      : challenge.scheduledDay < simulation.day
+                        ? `Carried over from Day ${challenge.scheduledDay}`
+                        : 'Due today'}</span>
                   </div>
                   <p>{challenge.description}</p>
                   <small>{challenge.objective}</small>
@@ -1016,16 +1158,6 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                   )}
                   {challenge.urgentDeadlineAtMs !== null && isUnfinished && (
                     <small className="lunar-task-risk">If delayed: {challenge.riskIfDelayed}</small>
-                  )}
-                  {isUnfinished && challenge.status !== 'overdue' && challenge.urgentStartedAtMs === null && (
-                    <button
-                      type="button"
-                      className="lunar-task-postpone"
-                      disabled={challenge.postponed}
-                      onClick={() => requestDailyChallengePostponement(challenge.id)}
-                    >
-                      {challenge.postponed ? 'Postponed' : 'Postpone'}
-                    </button>
                   )}
                   <button
                     type="button"
@@ -1135,7 +1267,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </aside>
       )}
 
-      {simulation.eventEffectId === 'solar_storm' && (
+      {activeEventVisuals.some(({ eventId }) => eventId === 'solar_storm') && (
         <div className="lunar-storm-overlay" aria-hidden="true" />
       )}
 
@@ -1149,48 +1281,6 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
           >
             ×
           </button>
-        </div>
-      )}
-
-      {warningTask && simulation.eventPhase === 'idle' && simulation.gameStatus === 'playing' && (
-        <div className="simulation-modal-backdrop" role="presentation">
-          <section
-            className="simulation-warning-modal"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="postponement-title"
-            onKeyDown={(event) => event.stopPropagation()}
-          >
-            <div className="simulation-eyebrow">Task postponement · Day {simulation.day}</div>
-            <h2 id="postponement-title">Accept the system risk?</h2>
-            <p>{warningTask.postponement.warning}</p>
-            <p><strong>Affected system:</strong> {warningTask.affectedSystem}</p>
-            <p>
-              Confirming will reduce {warningTask.affectedSystem} condition by{' '}
-              {warningTask.postponement.immediateConditionLoss} points. The task remains unfinished
-              and its Day {warningTask.deadlineDay} deadline still applies.
-            </p>
-            <div className="simulation-warning-actions">
-              <button
-                type="button"
-                className="simulation-warning-return"
-                autoFocus
-                onClick={() => {
-                  cancelDailyChallengePostponement();
-                  setDailyTasksOpen(true);
-                }}
-              >
-                Return and prioritize task
-              </button>
-              <button
-                type="button"
-                className="simulation-warning-confirm"
-                onClick={confirmDailyChallengePostponement}
-              >
-                Confirm postponement
-              </button>
-            </div>
-          </section>
         </div>
       )}
 
@@ -1273,18 +1363,82 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       )}
 
       <EventModal
-        event={eventOptionsOpen && simulation.eventPhase === 'awaitingDecision' && !simulation.warningTaskId ? simulation.currentEvent : null}
+        event={eventOptionsOpen
+          && !simulation.warningTaskId
+          && selectedEventCanDecide
+          ? selectedEventEntry?.event ?? null
+          : null}
+        events={activeEventEntries.map(({ event }) => event)}
+        onSelectEvent={(entry) => setSelectedAlertId(getEventOccurrenceKey(entry))}
+        taskTitles={Object.fromEntries(simulation.dailyChallenges.map((task) => [task.id, task.title]))}
+        remainingMs={simulation.eventResolutionLocked || selectedEventEntry?.deadlineAtMs == null
+          ? null
+          : Math.max(0, selectedEventEntry.deadlineAtMs - simulation.campaignElapsedMs)}
+        locked={simulation.eventResolutionLocked}
+        canDecide={selectedEventCanDecide}
         onSelectDecision={simulation.makeDecision}
-        onClose={() => setEventOptionsOpen(false)}
+        onClose={() => {
+          const selectedEventId = selectedEventEntry
+            ? getEventOccurrenceKey(selectedEventEntry.event)
+            : eventOptionsEventIdRef.current;
+          eventOptionsEventIdRef.current = null;
+          setSelectedAlertId(null);
+          if (!simulation.eventResolutionLocked) simulation.abandonEvent(selectedEventId);
+          setEventOptionsOpen(false);
+        }}
       />
+      <div className="lunar-notification-stack lunar-notification-stack-right" aria-live="polite">
+      {(simulation.eventFailureNotices ?? []).filter((notice) => notice.day === simulation.day).map((notice) => (
+        <aside className="lunar-persistent-notice lunar-event-failure-notice" key={notice.id} role="alert">
+          <button type="button" className="lunar-notice-close" aria-label="Dismiss event failure notice" onClick={() => simulation.dismissEventFailureNotice(notice.id)}>×</button>
+          <strong>{notice.name} — {notice.expired ? 'Event Expired' : 'Event Failed'}</strong>
+          <p>{notice.feedback}</p>
+          {Object.entries(notice.changes).map(([resource, change]) => (
+            <span key={resource}>{RESOURCE_LABELS[resource] ?? resource}: {change > 0 ? '+' : ''}{change}%</span>
+          ))}
+        </aside>
+      ))}
+      {(simulation.eventSuccessNotices ?? []).filter((notice) => notice.day === simulation.day).map((notice) => (
+        <aside className="lunar-persistent-notice lunar-event-success-notice" key={notice.id} role="status">
+          <button type="button" className="lunar-notice-close" aria-label="Dismiss event resolution notice" onClick={() => simulation.dismissEventSuccessNotice(notice.id)}>×</button>
+          <strong>{notice.name} — Successfully Resolved</strong>
+          <p>Response: {notice.decision}. {notice.feedback}</p>
+          {Object.entries(notice.changes).map(([resource, change]) => (
+            <span key={resource}>{RESOURCE_LABELS[resource] ?? resource}: {change > 0 ? '+' : ''}{change}%</span>
+          ))}
+        </aside>
+      ))}
+      </div>
+      <div className="lunar-notification-stack lunar-notification-stack-left" aria-live="polite">
+      {(simulation.taskFailureNotices ?? []).filter((notice) => (
+        notice.day === simulation.day && notice.presented
+      )).map((notice) => (
+        <aside className="lunar-persistent-notice lunar-task-failure-notice" key={notice.id} role="alert">
+          <button type="button" className="lunar-notice-close" aria-label="Dismiss critical task notice" onClick={() => simulation.dismissTaskFailureNotice(notice.id)}>×</button>
+          <strong>Missed Task · Event Triggered</strong>
+          <p>{notice.task} was not completed in time. This caused {notice.event}; its resolution is reported separately.</p>
+        </aside>
+      ))}
+      </div>
       {simulation.dayPhase === 'report' && simulation.dayReport && (
         <div className="lunar-day-transition" role="dialog" aria-modal="true" aria-labelledby="day-report-title">
           <section className="lunar-day-report">
             <span className="lunar-day-report-kicker">Lunar operations · Day {simulation.dayReport.day}</span>
             <h2 id="day-report-title">Day {simulation.dayReport.day} ended</h2>
             <p className="lunar-day-report-summary">
-              {simulation.dayReport.completedTasks.length} task{simulation.dayReport.completedTasks.length === 1 ? '' : 's'} completed · {simulation.dayReport.overdueTasks.length} carried overdue
+              {simulation.dayReport.completedTasks.length} task{simulation.dayReport.completedTasks.length === 1 ? '' : 's'} completed · {simulation.dayReport.totalEvents} event{simulation.dayReport.totalEvents === 1 ? '' : 's'} · {simulation.dayReport.overdueTasks.length} overdue task{simulation.dayReport.overdueTasks.length === 1 ? '' : 's'} · {simulation.dayReport.expiredEvents} expired event{simulation.dayReport.expiredEvents === 1 ? '' : 's'}
             </p>
+            {simulation.dayReport.eventOutcomes.length > 0 && (
+              <div className="lunar-day-report-events">
+                <h3>Event outcomes</h3>
+                <ul>{simulation.dayReport.eventOutcomes.map((outcome) => (
+                  <li key={outcome.occurrenceId}>
+                    <strong>{outcome.eventName} · {outcome.status === 'resolved' ? 'Successfully resolved' : outcome.status === 'expired' ? 'Expired' : 'Failed'}</strong>
+                    <span>{outcome.decision ? `Response: ${outcome.decision}. ` : ''}{outcome.feedback}</span>
+                  </li>
+                ))}</ul>
+              </div>
+            )}
             <div className="lunar-day-report-grid">
               <div>
                 <h3>Completed</h3>
@@ -1293,17 +1447,20 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 ) : <p>No tasks completed.</p>}
               </div>
               <div>
-                <h3>Carried forward</h3>
+                <h3>Not completed</h3>
                 {simulation.dayReport.overdueTasks.length > 0 ? (
                   <ul>{simulation.dayReport.overdueTasks.map((title) => <li key={title}>{title}</li>)}</ul>
                 ) : <p>Nothing overdue.</p>}
               </div>
             </div>
+            <h3 className="lunar-day-report-impact-title">Resource impact</h3>
             <div className="lunar-day-report-resources">
-              <span>Power <strong>{simulation.dayReport.resources.power}%</strong></span>
-              <span>Oxygen <strong>{simulation.dayReport.resources.oxygen}%</strong></span>
-              <span>Water <strong>{simulation.dayReport.resources.water}%</strong></span>
-              <span>Food <strong>{simulation.dayReport.resources.food}%</strong></span>
+              {Object.entries(simulation.dayReport.resourceChanges).map(([resource, change]) => (
+                <span className={change > 0 ? 'resource-gain' : 'resource-loss'} key={resource}>
+                  {RESOURCE_LABELS[resource] ?? resource} <strong>{simulation.dayReport.resourceStart[resource]}% → {simulation.dayReport.resources[resource]}% ({change > 0 ? '+' : ''}{change})</strong>
+                </span>
+              ))}
+              {Object.keys(simulation.dayReport.resourceChanges).length === 0 && <span>No resources changed</span>}
             </div>
             <button type="button" className="lunar-day-advance" onClick={simulation.advanceDay}>
               {simulation.dayReport.day >= simulation.maxDays
