@@ -9,6 +9,9 @@ import {
 } from './outpostCollision.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+// The rover asset is a single skinned mesh, so a plain Object3D.clone() would
+// leave every copy sharing one skeleton. SkeletonUtils rebuilds the bone rig.
+import { clone as cloneSkinnedRig } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { DAILY_CHALLENGES } from '../../data/dailyChallenges';
 import { loadDownscaledTexture } from '../../utils/textureUtils';
 
@@ -183,23 +186,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const firstPersonVelocity = new THREE.Vector3();
 
   let outpostRoot = null;
-  let roverRoot = null;
-  const roverSpinBones = [];
-  const roverFrontSpinBones = [];
-  const roverSteeringBones = [];
-  const roverBoneRest = new Map();
-  const roverSpinAxis = new THREE.Vector3(0, 0, 1);
-  const roverSteerAxis = new THREE.Vector3(0, 1, 0);
-  const roverBoneDelta = new THREE.Quaternion();
-  const roverSteeringDelta = new THREE.Quaternion();
-  let roverSpeed = 0;
-  let roverHeading = 0;
-  let roverSteering = 0;
-  let roverWheelAngle = 0;
-  let roverGroundOffset = 0;
-  let roverHalfLength = 4;
-  let roverHalfWidth = 2;
+  // Rover fleet. Each entry owns its own chassis transform, wheel bones and
+  // drive state so two rovers can park and roll independently.
+  const rovers = [];
+  let activeRover = null; // chassis currently bound to the camera
   let roverCameraActive = false;
+  let roverRemoteControl = false; // true while driving from a command center monitor
   let roverCameraWasPointerLocked = false;
   let roverCameraDragging = false;
   let roverCameraPointerX = 0;
@@ -213,6 +205,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const roverCameraDesiredPosition = new THREE.Vector3();
   const roverCameraLookAt = new THREE.Vector3();
   const roverCameraForward = new THREE.Vector3();
+  // Everything the command center interior needs back when a remote link ends.
+  let remoteControlReturn = null;
+  // The command center already ships a pair of console monitors: one downlink
+  // screen per rover, focused with the crosshair to take control.
+  const roverMonitors = [];
+  let focusedRoverId = null;
+  let roverMonitorPromptDismissed = false;
+  const monitorFocusOffset = new THREE.Vector3();
+  const monitorFocusDirection = new THREE.Vector3();
+  const monitorFocusNearest = new THREE.Vector3();
   let outpostHeightField = null; // walker collision rasterized from the outpost meshes
   let commandCenterRoot = null;
   let commandCenterModelRoot = null;
@@ -381,6 +383,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   const clock = new THREE.Clock();
   let cameraMode = 'free'; // 'free' | 'first-person' | 'interior'
+  let previousCameraMode = cameraMode;
   let firstPersonYaw = 0;
   let firstPersonPitch = 0;
   let dayStartCameraTransition = null;
@@ -937,10 +940,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   function returnToFirstPersonStart() {
     if (isDestroyed || !outpostRoot || !heightGrid) return;
 
-    if (roverCameraActive) {
-      roverCameraActive = false;
-      onRoverCameraChange(false);
-    }
+    if (roverCameraActive) stopRoverControl({ silent: true });
     releaseAllKeys();
     firstPersonVelocity.set(0, 0, 0);
     if (document.pointerLockElement === canvas) document.exitPointerLock?.();
@@ -1135,6 +1135,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const OUTPOST_GROUND_EPSILON = 0.05;
   const ROVER_TARGET_WIDTH = 3; // Change this value to resize the playable rover.
   const ROVER_MAX_STEP_HEIGHT = COLLIDE_STEP_HEIGHT + 0.45;
+  // Parked side by side in front of the outpost, nose pointing away from it.
+  const ROVER_SLOTS = [
+    { id: 1, label: 'ROVER 01', offsetX: -10, offsetZ: 0, tint: 0x59e3ff },
+    { id: 2, label: 'ROVER 02', offsetX: 10, offsetZ: -3, tint: 0xffb84d },
+  ];
+  // Aim tolerance for the command center downlink monitors: the two screens
+  // sit ~0.5 units apart, so focus is measured off the aim ray, not a huge cone.
+  const MONITOR_FOCUS_DISTANCE = 22;
+  const MONITOR_FOCUS_MIN_TOLERANCE = 0.8;
+  const MONITOR_FOCUS_TOLERANCE_RATIO = 0.2;
   const FIRST_PERSON_EYE_HEIGHT = 3.2;
   // Lunar motion: gravity is about a sixth of Earth's, so the walker shuffles
   // slowly and jumps arc high and float for a couple of seconds instead of
@@ -1203,83 +1213,125 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const moonTerrainMeshes = [];
   let loaded = 0;
 
-  function mountRover(outpostBounds) {
-    if (roverRoot || isDestroyed) return;
+  function createRoverRig(root, slot) {
+    const rover = {
+      id: slot.id,
+      label: slot.label,
+      tint: slot.tint,
+      root,
+      // Drive state — every rover keeps its own so a parked one never rolls.
+      speed: 0,
+      heading: 0,
+      steering: 0,
+      wheelAngle: 0,
+      groundOffset: 0,
+      halfLength: 4,
+      halfWidth: 2,
+      // Wheel animation rig, rebuilt per clone so both chassis roll separately.
+      spinBones: [],
+      frontSpinBones: [],
+      steeringBones: [],
+      boneRest: new Map(),
+      spinAxis: new THREE.Vector3(0, 0, 1),
+      steerAxis: new THREE.Vector3(0, 1, 0),
+      boneDelta: new THREE.Quaternion(),
+      steeringDelta: new THREE.Quaternion(),
+    };
+
+    const spinNames = ['RF', 'RM', 'RB', 'LF', 'LM', 'LB']
+      .map(position => `chassis${position}_wheelAxle_SpinZ`);
+    for (const name of spinNames) {
+      const bone = root.getObjectByName(name);
+      if (!bone) continue;
+      rover.spinBones.push(bone);
+      if (name.includes('chassisRF_') || name.includes('chassisLF_')) {
+        rover.frontSpinBones.push(bone);
+      }
+      rover.boneRest.set(bone, bone.quaternion.clone());
+    }
+
+    for (const name of ['chassisRF_wheelAxle_turnY', 'chassisLF_wheelAxle_turnY']) {
+      const bone = root.getObjectByName(name);
+      if (!bone) continue;
+      rover.steeringBones.push(bone);
+      rover.boneRest.set(bone, bone.quaternion.clone());
+    }
+
+    if (rover.spinBones.length !== 6 || rover.steeringBones.length !== 2) {
+      console.warn(
+        '[Rover] Some wheel control bones were not found.',
+        { rover: rover.label, spin: rover.spinBones.length, steering: rover.steeringBones.length },
+      );
+    }
+    return rover;
+  }
+
+  function mountRovers(outpostBounds) {
+    if (rovers.length || isDestroyed) return;
 
     sharedGltfLoader.load(
       '/lunar/rover/rover.glb',
       gltf => {
         if (isDestroyed) return;
-        const rover = gltf.scene;
-        registerCachedScene(rover);
-        rover.name = 'Playable Moon Rover';
-        rover.updateMatrixWorld(true);
+        const template = gltf.scene;
+        registerCachedScene(template);
+        template.updateMatrixWorld(true);
 
-        const sourceBounds = new THREE.Box3().setFromObject(rover);
-        const sourceSize = sourceBounds.getSize(new THREE.Vector3());
-        const modelWidth = Math.max(sourceSize.x, sourceSize.z, 0.001);
-        rover.scale.multiplyScalar(ROVER_TARGET_WIDTH / modelWidth);
-        rover.updateMatrixWorld(true);
+        // Measure once on the pristine asset, then fit every copy identically.
+        const sourceSize = new THREE.Box3().setFromObject(template).getSize(new THREE.Vector3());
+        const fitScale = ROVER_TARGET_WIDTH / Math.max(sourceSize.x, sourceSize.z, 0.001);
+        const fleetCenterX = (outpostBounds.min.x + outpostBounds.max.x) / 2;
+        const fleetBaseZ = outpostBounds.min.z - 12;
 
-        const scaledBounds = new THREE.Box3().setFromObject(rover);
-        const scaledSize = scaledBounds.getSize(new THREE.Vector3());
-        // Keep the entire rover footprint above the sampled terrain, rather
-        // than positioning only its center over the ground.
-        roverHalfLength = Math.max(scaledSize.x * 0.46, 0.5);
-        roverHalfWidth = Math.max(scaledSize.z * 0.46, 0.5);
-        const scaledCenter = scaledBounds.getCenter(new THREE.Vector3());
-        const targetX = (outpostBounds.min.x + outpostBounds.max.x) / 2;
-        const targetZ = outpostBounds.min.z - 12;
-        const roverX = targetX - scaledCenter.x;
-        const roverZ = targetZ - scaledCenter.z;
-        const groundY = roverSupportHeightAt(roverX, roverZ, roverHeading);
-        rover.position.set(
-          roverX,
-          groundY - scaledBounds.min.y + OUTPOST_GROUND_EPSILON,
-          roverZ,
-        );
-        roverGroundOffset = rover.position.y - groundY;
+        for (const slot of ROVER_SLOTS) {
+          // cloneSkinnedRig keeps the template untouched and re-binds the new
+          // chassis to its own bones, so wheels never animate in lock-step.
+          const root = cloneSkinnedRig(template);
+          root.name = `Playable Moon Rover ${slot.id}`;
+          root.scale.multiplyScalar(fitScale);
+          root.updateMatrixWorld(true);
 
-        rover.traverse(object => {
-          if (object.isMesh) {
-            object.castShadow = true;
-            object.receiveShadow = true;
-          }
-        });
-        scene.add(rover);
-        rover.updateMatrixWorld(true);
-        roverRoot = rover;
+          const rover = createRoverRig(root, slot);
+          const bounds = new THREE.Box3().setFromObject(root);
+          const size = bounds.getSize(new THREE.Vector3());
+          const center = bounds.getCenter(new THREE.Vector3());
+          // Keep the entire rover footprint above the sampled terrain, rather
+          // than positioning only its center over the ground.
+          rover.halfLength = Math.max(size.x * 0.46, 0.5);
+          rover.halfWidth = Math.max(size.z * 0.46, 0.5);
 
-        const spinNames = ['RF', 'RM', 'RB', 'LF', 'LM', 'LB']
-          .map(position => `chassis${position}_wheelAxle_SpinZ`);
-        for (const name of spinNames) {
-          const bone = rover.getObjectByName(name);
-          if (!bone) continue;
-          roverSpinBones.push(bone);
-          if (name.includes('chassisRF_') || name.includes('chassisLF_')) {
-            roverFrontSpinBones.push(bone);
-          }
-          roverBoneRest.set(bone, bone.quaternion.clone());
-        }
-
-        const steeringNames = ['chassisRF_wheelAxle_turnY', 'chassisLF_wheelAxle_turnY'];
-        for (const name of steeringNames) {
-          const bone = rover.getObjectByName(name);
-          if (!bone) continue;
-          roverSteeringBones.push(bone);
-          roverBoneRest.set(bone, bone.quaternion.clone());
-        }
-
-        if (roverSpinBones.length !== 6 || roverSteeringBones.length !== 2) {
-          console.warn(
-            '[Rover] Some wheel control bones were not found.',
-            { spin: roverSpinBones.length, steering: roverSteeringBones.length },
+          const targetX = fleetCenterX + slot.offsetX;
+          const targetZ = fleetBaseZ + slot.offsetZ;
+          const roverX = targetX - center.x;
+          const roverZ = targetZ - center.z;
+          rover.heading = 0;
+          const groundY = roverSupportHeightAt(roverX, roverZ, rover);
+          root.position.set(
+            roverX,
+            groundY - bounds.min.y + OUTPOST_GROUND_EPSILON,
+            roverZ,
           );
+          rover.groundOffset = root.position.y - groundY;
+
+          root.traverse(object => {
+            if (object.isMesh) {
+              object.castShadow = true;
+              object.receiveShadow = true;
+            }
+          });
+          scene.add(root);
+          root.updateMatrixWorld(true);
+          rovers.push(rover);
         }
-        console.info('[Rover] Ready. Arrow Up drives; Left/Right steer.', {
-          spinBones: roverSpinBones.length,
-          steeringBones: roverSteeringBones.length,
+
+        console.info('[Rover] Fleet ready. Arrow Up drives; Left/Right steer.', {
+          rovers: rovers.map(rover => ({
+            label: rover.label,
+            spinBones: rover.spinBones.length,
+            steeringBones: rover.steeringBones.length,
+          })),
         });
+        refreshRoverMonitors();
         onRoverReady(true);
       },
       undefined,
@@ -1355,6 +1407,117 @@ export function createLunarEngine(canvas, callbacks = {}) {
       });
     }
     mapComponents = buildMapComponents(outpost);
+    buildRoverMonitors();
+  }
+
+  // The command center GLB ships a two-screen console: the top and bottom
+  // downlink monitors. Each one is bound to one rover so the player can walk up,
+  // focus a screen, and drive that specific chassis from inside the base.
+  function findCommandCenterMonitors(root) {
+    // The asset names both screens "CommandCenterMonitor" and its frame/screen
+    // meshes "CommandCenterMonitor_1/_2". GLTFLoader force-uniquifies every node
+    // name, so the second screen ends up as "CommandCenterMonitor_1" as well.
+    // Match by prefix, then keep only the outermost match of each assembly so
+    // the meshes inside a monitor are not mistaken for extra monitors.
+    const matches = [];
+    root.traverse(object => {
+      if (object.name?.startsWith('CommandCenterMonitor')) matches.push(object);
+    });
+    return matches.filter((object) => {
+      let parent = object.parent;
+      while (parent) {
+        if (matches.includes(parent)) return false;
+        parent = parent.parent;
+      }
+      return true;
+    });
+  }
+
+  function buildRoverMonitors() {
+    roverMonitors.length = 0;
+    focusedRoverId = null;
+    if (!commandCenterRoot || !commandCenterModelRoot) return;
+
+    const screens = findCommandCenterMonitors(commandCenterModelRoot);
+    if (screens.length < ROVER_SLOTS.length) {
+      console.warn(
+        '[Rover monitor] Expected one screen per rover.',
+        { found: screens.length, names: screens.map(screen => screen.name) },
+      );
+    }
+    if (!screens.length) {
+      console.warn('[Rover monitor] No CommandCenterMonitor nodes found.');
+      return;
+    }
+
+    commandCenterRoot.updateMatrixWorld(true);
+    const placements = screens.map((object) => {
+      const bounds = new THREE.Box3().setFromObject(object);
+      return { object, bounds, center: bounds.getCenter(new THREE.Vector3()) };
+    });
+    // Highest screen gets ROVER 01 so the pair reads top-down like a console.
+    placements.sort((a, b) => b.center.y - a.center.y);
+
+    placements.slice(0, ROVER_SLOTS.length).forEach((placement, index) => {
+      const slot = ROVER_SLOTS[index];
+      const tint = new THREE.Color(slot.tint);
+      // Glow only the inset screen surface (the smallest mesh of the monitor
+      // group), and clone its material so the tint never leaks elsewhere.
+      const meshes = [];
+      placement.object.traverse(child => {
+        if (!child.isMesh || !child.material) return;
+        const bounds = new THREE.Box3().setFromObject(child);
+        const size = bounds.getSize(new THREE.Vector3());
+        meshes.push({ child, volume: size.x * size.y * size.z });
+      });
+      meshes.sort((a, b) => a.volume - b.volume);
+
+      const screenMaterials = [];
+      for (const { child } of meshes.slice(0, 1)) {
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        const cloned = materials.map(material => {
+          const copy = material.clone();
+          screenMaterials.push({
+            material: copy,
+            color: copy.emissive ? copy.emissive.clone() : null,
+            intensity: copy.emissiveIntensity ?? 1,
+          });
+          return copy;
+        });
+        child.material = Array.isArray(child.material) ? cloned : cloned[0];
+      }
+
+      roverMonitors.push({
+        roverId: slot.id,
+        label: slot.label,
+        object: placement.object,
+        center: placement.center,
+        bounds: placement.bounds,
+        tint,
+        screenMaterials,
+      });
+    });
+
+    console.info('[Rover monitor] Downlink screens bound.', {
+      monitors: roverMonitors.map(monitor => monitor.label),
+    });
+    refreshRoverMonitors();
+  }
+
+  // Screens glow in their rover's colour: dim while idle, brighter while the
+  // player is aiming at them, and brightest while that rover is being driven.
+  function refreshRoverMonitors() {
+    for (const monitor of roverMonitors) {
+      const linked = roverCameraActive && activeRover?.id === monitor.roverId;
+      const focused = focusedRoverId === monitor.roverId;
+      for (const entry of monitor.screenMaterials) {
+        const material = entry.material;
+        if (!material.emissive) continue;
+        if (entry.color) material.emissive.copy(entry.color);
+        material.emissive.lerp(monitor.tint, linked ? 0.9 : focused ? 0.55 : 0.2);
+        material.emissiveIntensity = entry.intensity * (linked ? 2.4 : focused ? 1.6 : 1);
+      }
+    }
   }
 
   function loadCommandCenter(outpost) {
@@ -1493,7 +1656,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           scene.add(outpost);
           outpost.updateMatrixWorld(true);
           outpostRoot = outpost;
-          mountRover(outpostBounds);
+          mountRovers(outpostBounds);
           loadCommandCenter(outpost);
           buildEventVisualization();
 
@@ -2344,14 +2507,33 @@ export function createLunarEngine(canvas, callbacks = {}) {
     commandCenterInteriorActive = true;
     const interiorNode = commandCenterModelRoot.getObjectByName('CC_Module') || commandCenterModelRoot;
     commandCenterRoot.updateMatrixWorld(true);
-    activeModuleInteriorBounds = new THREE.Box3().setFromObject(interiorNode);
+    // CC_Module's box starts well above the room floor, so clamping to it would
+    // pin the eye ~1.5 units too high and read as a floating free camera. The
+    // exterior shell is the actual room: its min.y is the deck the player stands
+    // on, and its plan is the walkable footprint the player camera expects.
+    const shellBounds = commandCenterExteriorShell
+      ? new THREE.Box3().setFromObject(commandCenterExteriorShell)
+      : null;
+    activeModuleInteriorBounds = shellBounds && !shellBounds.isEmpty()
+      ? shellBounds
+      : new THREE.Box3().setFromObject(interiorNode);
 
-    const interiorSpawn = commandCenterRoot.localToWorld(new THREE.Vector3(0, 4.2, 1.8));
+    // Stand on the deck at the same eye height the player camera uses outside.
+    const interiorSpawn = commandCenterRoot.localToWorld(new THREE.Vector3(0, 0, 1.8));
+    interiorSpawn.y = activeModuleInteriorBounds.min.y + FIRST_PERSON_EYE_HEIGHT;
     camera.position.copy(interiorSpawn);
     camera.rotation.order = 'YXZ';
-    camera.rotation.set(0, Math.PI / 2, 0);
+    // Walk in facing the rover downlink console when the model exposes it, so
+    // the monitors are immediately in view instead of behind the player.
+    const monitorAim = roverMonitors.length
+      ? roverMonitors
+        .reduce((sum, monitor) => sum.add(monitor.center), new THREE.Vector3())
+        .divideScalar(roverMonitors.length)
+      : null;
+    if (monitorAim) camera.lookAt(monitorAim);
+    else camera.rotation.set(0, Math.PI / 2, 0);
     firstPersonYaw = camera.rotation.y;
-    firstPersonPitch = 0;
+    firstPersonPitch = camera.rotation.x;
     activeModuleInteriorLight = new THREE.PointLight(0xe4edff, 16, 26);
     activeModuleInteriorLight.position.copy(interiorSpawn).add(new THREE.Vector3(-1, 1, 0));
     scene.add(activeModuleInteriorLight);
@@ -2734,31 +2916,147 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   // Camera & Mode Controls
-  function toggleRoverCamera() {
-    if (!roverRoot || eventCinematic || dayStartCameraTransition || cameraMode === 'interior') return;
+  function roverById(roverId) {
+    return rovers.find(rover => rover.id === roverId) ?? null;
+  }
+
+  function nearestRoverTo(position) {
+    let best = rovers[0] ?? null;
+    let bestDistance = Infinity;
+    for (const rover of rovers) {
+      const distance = rover.root.position.distanceTo(position);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = rover;
+      }
+    }
+    return best;
+  }
+
+  // Remote links are started from a command center monitor; the interior is
+  // hidden for the duration while the real moon and outpost come back on the
+  // feed, then everything is restored exactly as it was on disconnect.
+  function beginRoverControl(roverId, options = {}) {
+    const remote = Boolean(options.remote);
+    if (!rovers.length || eventCinematic || dayStartCameraTransition) return false;
+    if (roverCameraActive) stopRoverControl({ silent: true });
+    if (!remote && cameraMode === 'interior') return false;
+
+    const rover = roverId != null ? roverById(roverId) : nearestRoverTo(camera.position);
+    if (!rover) return false;
 
     releaseAllKeys();
     firstPersonVelocity.set(0, 0, 0);
-    if (!roverCameraActive) {
-      roverCameraSavedPosition.copy(camera.position);
-      roverCameraSavedQuaternion.copy(camera.quaternion);
-      roverCameraSavedTarget.copy(controls.target);
-      roverCameraWasPointerLocked = document.pointerLockElement === canvas;
-      if (roverCameraWasPointerLocked) document.exitPointerLock?.();
+    roverCameraSavedPosition.copy(camera.position);
+    roverCameraSavedQuaternion.copy(camera.quaternion);
+    roverCameraSavedTarget.copy(controls.target);
+    roverCameraWasPointerLocked = document.pointerLockElement === canvas;
+    if (roverCameraWasPointerLocked) document.exitPointerLock?.();
+
+    if (remote) {
+      remoteControlReturn = {
+        position: camera.position.clone(),
+        quaternion: camera.quaternion.clone(),
+        yaw: firstPersonYaw,
+        pitch: firstPersonPitch,
+        // Two different skies: the interior colour to hand back on disconnect,
+        // and the real lunar sky to show while the downlink is live.
+        background: scene.background,
+        feedBackground: outsideBackground ?? scene.background,
+        terrainVisibility: moonTerrainMeshes.map(terrain => terrain.visible),
+        horizonVisibility: horizon.visible,
+        outpostVisibility: outpostRoot?.visible ?? true,
+        commandCenterVisibility: commandCenterRoot?.visible ?? true,
+        shellVisibility: commandCenterExteriorShell?.visible ?? true,
+      };
+      // Put the moon back on screen: the monitor feed is the real rover out on
+      // the surface, so the interior shell must not sit in front of the camera.
+      moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
+      horizon.visible = true;
+      if (outpostRoot) outpostRoot.visible = true;
+      if (commandCenterRoot) commandCenterRoot.visible = false;
+      scene.background = remoteControlReturn.feedBackground;
+      // Hide the inside panel so the HUD falls back to the rover controls.
+      onInsidePanelChange({ visible: false, label: '', buttonText: '' });
+    }
+
+    controls.enabled = false;
+    roverCameraOrbitYaw = 0;
+    roverCameraOrbitPitch = 0.28;
+    roverCameraDistance = 12;
+    if (canvas) canvas.style.cursor = 'grab';
+    setPrompt(null);
+    focusedRoverId = null;
+    roverMonitorPromptDismissed = false;
+    rover.speed = 0;
+    rover.steering = 0;
+    activeRover = rover;
+    roverCameraActive = true;
+    roverRemoteControl = remote;
+    updateRoverCamera(0);
+    refreshRoverMonitors();
+    onRoverCameraChange(true, { roverId: rover.id, roverLabel: rover.label, remote });
+    return true;
+  }
+
+  function stopRoverControl(options = {}) {
+    if (!roverCameraActive) return;
+    const silent = Boolean(options.silent);
+    const previousRover = activeRover;
+    const wasRemote = roverRemoteControl;
+    const restore = remoteControlReturn;
+    remoteControlReturn = null;
+
+    roverCameraActive = false;
+    roverRemoteControl = false;
+    roverCameraDragging = false;
+    activeRover = null;
+    if (previousRover) {
+      previousRover.speed = 0;
+      previousRover.steering = 0;
+    }
+    if (canvas) canvas.style.cursor = '';
+    releaseAllKeys();
+    firstPersonVelocity.set(0, 0, 0);
+    focusedRoverId = null;
+    roverMonitorPromptDismissed = false;
+    refreshRoverMonitors();
+    onRoverCameraChange(false, {
+      roverId: previousRover?.id ?? null,
+      roverLabel: previousRover?.label ?? '',
+      remote: wasRemote,
+    });
+
+    if (wasRemote && restore) {
+      moonTerrainMeshes.forEach((terrain, index) => {
+        terrain.visible = restore.terrainVisibility[index] ?? false;
+      });
+      horizon.visible = restore.horizonVisibility;
+      if (outpostRoot) outpostRoot.visible = restore.outpostVisibility;
+      if (commandCenterRoot) commandCenterRoot.visible = restore.commandCenterVisibility;
+      if (commandCenterExteriorShell) commandCenterExteriorShell.visible = restore.shellVisibility;
+      scene.background = restore.background;
+      camera.position.copy(restore.position);
+      camera.quaternion.copy(restore.quaternion);
+      firstPersonYaw = restore.yaw;
+      firstPersonPitch = restore.pitch;
+      camera.rotation.order = 'YXZ';
+      camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
+      cameraMode = 'interior';
       controls.enabled = false;
-      roverCameraOrbitYaw = 0;
-      roverCameraOrbitPitch = 0.28;
-      roverCameraDistance = 12;
-      canvas.style.cursor = 'grab';
-      roverCameraActive = true;
-      updateRoverCamera(0);
-      onRoverCameraChange(true);
+      onModeChange(cameraMode);
+      onInsidePanelChange({
+        visible: true,
+        label: 'INSIDE COMMAND CENTER · E TO EXIT',
+        buttonText: 'EXIT COMMAND CENTER',
+        componentId: '024',
+      });
+      if (!silent) ensurePointerLocked();
       return;
     }
 
-    roverCameraActive = false;
-    roverCameraDragging = false;
-    canvas.style.cursor = '';
+    if (silent) return;
+
     camera.position.copy(roverCameraSavedPosition);
     camera.quaternion.copy(roverCameraSavedQuaternion);
     controls.target.copy(roverCameraSavedTarget);
@@ -2767,7 +3065,26 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (cameraMode === 'first-person' && roverCameraWasPointerLocked) {
       canvas.requestPointerLock?.();
     }
-    onRoverCameraChange(false);
+  }
+
+  function toggleRoverCamera() {
+    if (roverCameraActive) {
+      stopRoverControl();
+      return;
+    }
+    if (eventCinematic || dayStartCameraTransition || cameraMode === 'interior') return;
+    beginRoverControl(null, { remote: false });
+  }
+
+  // Called by the proximity prompt: link the focused command center monitor.
+  function controlFocusedRover() {
+    if (focusedRoverId == null) return false;
+    return beginRoverControl(focusedRoverId, { remote: commandCenterInteriorActive });
+  }
+
+  // Called from the HUD / prompt button with an explicit rover id.
+  function controlRover(roverId) {
+    return beginRoverControl(roverId, { remote: commandCenterInteriorActive });
   }
 
   function toggleCameraMode() {
@@ -3021,87 +3338,97 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function updateRoverCamera(dt) {
-    if (!roverRoot) return;
+    if (!activeRover) return;
+    const chassis = activeRover.root;
     // This rover model's nose points along local +X. Use its world-space
     // forward vector so the chase camera stays centered behind the chassis.
-    roverCameraForward.set(1, 0, 0).applyQuaternion(roverRoot.quaternion).normalize();
+    roverCameraForward.set(1, 0, 0).applyQuaternion(chassis.quaternion).normalize();
     roverCameraDesiredPosition.set(-Math.cos(roverCameraOrbitYaw), 0, Math.sin(roverCameraOrbitYaw))
-      .applyQuaternion(roverRoot.quaternion)
+      .applyQuaternion(chassis.quaternion)
       .multiplyScalar(roverCameraDistance * Math.cos(roverCameraOrbitPitch));
-    roverCameraDesiredPosition.add(roverRoot.position);
+    roverCameraDesiredPosition.add(chassis.position);
     roverCameraDesiredPosition.y += roverCameraDistance * Math.sin(roverCameraOrbitPitch) + 0.5;
     const followBlend = dt > 0 ? 1 - Math.exp(-6 * dt) : 1;
     camera.position.lerp(roverCameraDesiredPosition, followBlend);
 
-    roverCameraLookAt.copy(roverRoot.position)
+    roverCameraLookAt.copy(chassis.position)
       .addScaledVector(roverCameraForward, 2.5);
     roverCameraLookAt.y += 1.4;
     camera.lookAt(roverCameraLookAt);
     controls.target.copy(roverCameraLookAt);
   }
 
-  function updateRoverDrive(dt) {
-    if (!roverRoot) return;
-
-    const canDrive = roverCameraActive
-      && !eventCinematic
-      && !dayStartCameraTransition
-      && (cameraMode === 'free' || cameraMode === 'first-person');
-    const steerInput = canDrive
-      ? (keys.has('arrowleft') ? 1 : 0) - (keys.has('arrowright') ? 1 : 0)
+  function stepRover(rover, dt, driving, steerInput, throttleInput) {
+    const targetSpeed = driving
+      ? (throttleInput > 0 ? 8 : throttleInput < 0 ? -3 : 0)
       : 0;
-    const throttleInput = canDrive
-      ? (keys.has('arrowup') ? 1 : 0) - (keys.has('arrowdown') ? 1 : 0)
-      : 0;
-    const targetSpeed = throttleInput > 0 ? 8 : throttleInput < 0 ? -3 : 0;
-    roverSpeed = THREE.MathUtils.damp(roverSpeed, targetSpeed, throttleInput ? 2.8 : 4.5, dt);
-    roverSteering = THREE.MathUtils.damp(roverSteering, steerInput * 0.3, 9, dt);
+    rover.speed = THREE.MathUtils.damp(rover.speed, targetSpeed, driving && throttleInput ? 2.8 : 4.5, dt);
+    rover.steering = THREE.MathUtils.damp(rover.steering, driving ? steerInput * 0.3 : 0, 9, dt);
 
-    if (Math.abs(roverSpeed) > 0.01) {
-      roverHeading += roverSteering * 0.55 * Math.sign(roverSpeed) * dt;
-      roverRoot.rotation.y = roverHeading;
+    if (Math.abs(rover.speed) > 0.01) {
+      rover.heading += rover.steering * 0.55 * Math.sign(rover.speed) * dt;
+      rover.root.rotation.y = rover.heading;
 
       // This extracted rover faces local +X. Arrow Up drives along its nose;
       // side keys steer, turning the chassis while it is moving.
-      const nextX = roverRoot.position.x + Math.cos(roverHeading) * roverSpeed * dt;
-      const nextZ = roverRoot.position.z - Math.sin(roverHeading) * roverSpeed * dt;
-      const nextGround = roverSupportHeightAt(nextX, nextZ, roverHeading);
-      const currentGround = roverRoot.position.y - roverGroundOffset;
-      if (isRoverBlockedAt(nextX, nextZ, roverHeading, currentGround)) {
-        roverSpeed = 0;
+      const nextX = rover.root.position.x + Math.cos(rover.heading) * rover.speed * dt;
+      const nextZ = rover.root.position.z - Math.sin(rover.heading) * rover.speed * dt;
+      const nextGround = roverSupportHeightAt(nextX, nextZ, rover);
+      const currentGround = rover.root.position.y - rover.groundOffset;
+      if (isRoverBlockedAt(nextX, nextZ, rover, currentGround)) {
+        rover.speed = 0;
       } else {
-        roverRoot.position.x = nextX;
-        roverRoot.position.z = nextZ;
-        roverRoot.position.y = nextGround + roverGroundOffset;
+        rover.root.position.x = nextX;
+        rover.root.position.z = nextZ;
+        rover.root.position.y = nextGround + rover.groundOffset;
       }
     }
 
     // Terrain can finish loading after the rover model. Keep clamping its
     // underside above the terrain every frame, including while it is parked.
     const minimumRoverY = roverSupportHeightAt(
-      roverRoot.position.x,
-      roverRoot.position.z,
-      roverHeading,
-    ) + roverGroundOffset;
-    roverRoot.position.y = Math.max(roverRoot.position.y, minimumRoverY);
+      rover.root.position.x,
+      rover.root.position.z,
+      rover,
+    ) + rover.groundOffset;
+    rover.root.position.y = Math.max(rover.root.position.y, minimumRoverY);
 
     // The exported wheel joints use the opposite local axle sign from the
     // rover's +X travel direction, so negate speed to make tire roll match it.
-    roverWheelAngle -= roverSpeed * 0.9 * dt;
-    roverBoneDelta.setFromAxisAngle(roverSpinAxis, roverWheelAngle);
-    roverSteeringDelta.setFromAxisAngle(roverSteerAxis, roverSteering);
-    for (const bone of roverSpinBones) {
-      bone.quaternion.copy(roverBoneRest.get(bone));
-      if (roverFrontSpinBones.includes(bone)) {
+    rover.wheelAngle -= rover.speed * 0.9 * dt;
+    rover.boneDelta.setFromAxisAngle(rover.spinAxis, rover.wheelAngle);
+    rover.steeringDelta.setFromAxisAngle(rover.steerAxis, rover.steering);
+    for (const bone of rover.spinBones) {
+      bone.quaternion.copy(rover.boneRest.get(bone));
+      if (rover.frontSpinBones.includes(bone)) {
         // The turnY bones animate the suspension links. Steer the actual front
         // tire joints too, then keep their rolling motion on the axle axis.
-        bone.quaternion.multiply(roverSteeringDelta);
+        bone.quaternion.multiply(rover.steeringDelta);
       }
-      bone.quaternion.multiply(roverBoneDelta);
+      bone.quaternion.multiply(rover.boneDelta);
     }
 
-    for (const bone of roverSteeringBones) {
-      bone.quaternion.copy(roverBoneRest.get(bone)).multiply(roverSteeringDelta);
+    for (const bone of rover.steeringBones) {
+      bone.quaternion.copy(rover.boneRest.get(bone)).multiply(rover.steeringDelta);
+    }
+  }
+
+  function updateRoverDrive(dt) {
+    if (!rovers.length) return;
+
+    const canDrive = roverCameraActive
+      && !eventCinematic
+      && !dayStartCameraTransition
+      && (roverRemoteControl || cameraMode === 'free' || cameraMode === 'first-person');
+    const steerInput = canDrive
+      ? (keys.has('arrowleft') || keys.has('a') ? 1 : 0) - (keys.has('arrowright') || keys.has('d') ? 1 : 0)
+      : 0;
+    const throttleInput = canDrive
+      ? (keys.has('arrowup') || keys.has('w') ? 1 : 0) - (keys.has('arrowdown') || keys.has('s') ? 1 : 0)
+      : 0;
+
+    for (const rover of rovers) {
+      stepRover(rover, dt, canDrive && rover === activeRover, steerInput, throttleInput);
     }
   }
 
@@ -3114,12 +3441,17 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const key = rawKey.toLowerCase();
     const code = event.code || '';
     if (roverCameraActive) {
-      if (key === 'v' && !event.repeat) {
+      // V always disconnects. From a command center monitor, Escape and E also
+      // drop the remote link and hand the player back to the interior.
+      const disconnects = key === 'v'
+        || (roverRemoteControl && (key === 'escape' || key === 'e'));
+      if (disconnects && !event.repeat) {
         event.preventDefault();
-        toggleRoverCamera();
+        stopRoverControl();
         return;
       }
-      if (code.startsWith('Arrow')) {
+      const driveKey = code.startsWith('Arrow') || ['w', 'a', 's', 'd'].includes(key);
+      if (driveKey) {
         event.preventDefault();
         keys.add(key);
         const alias = KEY_CODE_ALIASES[code];
@@ -3143,7 +3475,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const isConfirm = key === 'e' || isEnter;
     if (isConfirm && cameraMode === 'interior') {
       event.preventDefault();
-      if (currentPromptType === 'component') enterNearbyComponent();
+      if (currentPromptType === 'roverMonitor') controlFocusedRover();
+      else if (currentPromptType === 'component') enterNearbyComponent();
       else if (currentPromptType === 'greenhouseDoor') returnToAirlock();
       else if (activeModuleInterior?.visible) exitModuleInterior();
       else if (greenhouseInterior?.visible) returnToAirlock();
@@ -3189,6 +3522,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
       event.preventDefault();
       setPrompt(null);
       airlockPromptDismissed = true;
+      return;
+    }
+    if ((key === 'escape' || key === 'n') && currentPromptType === 'roverMonitor') {
+      event.preventDefault();
+      setPrompt(null);
+      roverMonitorPromptDismissed = true;
       return;
     }
     if ((key === 'escape' || key === 'n') && currentPromptType === 'component') {
@@ -3358,6 +3697,72 @@ export function createLunarEngine(canvas, callbacks = {}) {
       id: nearest.id,
       title: `Enter the ${nearest.name}?`,
       message: `You are near the ${nearest.name.toLowerCase()}. Enter to explore its interior.`
+    });
+  }
+
+  // Focus a command center downlink monitor by aiming at it. The two screens
+  // are stacked closely, so the scorer uses the off-axis distance from the aim
+  // ray: whichever screen the crosshair is actually on wins, without jitter.
+  function updateRoverMonitorPrompt() {
+    if (roverCameraActive || !commandCenterInteriorActive || cameraMode !== 'interior' || !roverMonitors.length) {
+      if (currentPromptType === 'roverMonitor') setPrompt(null);
+      if (focusedRoverId !== null) {
+        focusedRoverId = null;
+        refreshRoverMonitors();
+      }
+      return;
+    }
+
+    camera.getWorldDirection(monitorFocusDirection);
+    let best = null;
+    let bestScore = Infinity;
+    for (const monitor of roverMonitors) {
+      monitorFocusOffset.copy(monitor.center).sub(camera.position);
+      const distance = monitorFocusOffset.length();
+      if (distance < 0.05 || distance > MONITOR_FOCUS_DISTANCE) continue;
+      const alignment = monitorFocusOffset.divideScalar(distance).dot(monitorFocusDirection);
+      if (alignment <= 0.05) continue;
+      // Closest point on the aim ray to this screen's centre.
+      monitorFocusNearest.copy(monitorFocusDirection)
+        .multiplyScalar(distance * alignment)
+        .add(camera.position);
+      const offAxis = monitorFocusNearest.distanceTo(monitor.center);
+      const tolerance = Math.max(
+        MONITOR_FOCUS_MIN_TOLERANCE,
+        distance * MONITOR_FOCUS_TOLERANCE_RATIO,
+      );
+      if (offAxis > tolerance) continue;
+      if (offAxis < bestScore) {
+        bestScore = offAxis;
+        best = monitor;
+      }
+    }
+
+    if (!best) {
+      if (currentPromptType === 'roverMonitor') setPrompt(null);
+      if (focusedRoverId !== null) {
+        focusedRoverId = null;
+        refreshRoverMonitors();
+      }
+      roverMonitorPromptDismissed = false;
+      return;
+    }
+
+    if (focusedRoverId !== best.roverId) {
+      focusedRoverId = best.roverId;
+      refreshRoverMonitors();
+    }
+    if (roverMonitorPromptDismissed) {
+      if (currentPromptType === 'roverMonitor') setPrompt(null);
+      return;
+    }
+
+    setPrompt('roverMonitor', {
+      id: `cc-monitor-${best.roverId}`,
+      roverId: best.roverId,
+      roverLabel: best.label,
+      title: `Link to ${best.label}?`,
+      message: `You are facing the ${best.label.toLowerCase()} downlink monitor. Link in to drive it from here.`
     });
   }
 
@@ -3646,7 +4051,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     return outpostTop === null ? terrain : Math.max(terrain, outpostTop);
   }
 
-  function roverSupportHeightAt(x, z, heading) {
+  function roverSupportHeightAt(x, z, rover) {
+    const heading = rover.heading;
+    const halfLength = rover.halfLength;
+    const halfWidth = rover.halfWidth;
     const forwardX = Math.cos(heading);
     const forwardZ = -Math.sin(heading);
     const sideX = Math.sin(heading);
@@ -3656,14 +4064,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
     // Sample the whole footprint at sub-meter intervals. The terrain height
     // grid is one meter wide, so sparse corner-only samples could miss bumps
     // between the wheels and let the chassis clip through them.
-    const lengthSteps = Math.max(2, Math.ceil((roverHalfLength * 2) / 0.75));
-    const widthSteps = Math.max(2, Math.ceil((roverHalfWidth * 2) / 0.75));
+    const lengthSteps = Math.max(2, Math.ceil((halfLength * 2) / 0.75));
+    const widthSteps = Math.max(2, Math.ceil((halfWidth * 2) / 0.75));
     for (let i = 0; i <= lengthSteps; i++) {
       const along = (i / lengthSteps) * 2 - 1;
       for (let j = 0; j <= widthSteps; j++) {
         const across = (j / widthSteps) * 2 - 1;
-        const sampleX = x + forwardX * roverHalfLength * along + sideX * roverHalfWidth * across;
-        const sampleZ = z + forwardZ * roverHalfLength * along + sideZ * roverHalfWidth * across;
+        const sampleX = x + forwardX * halfLength * along + sideX * halfWidth * across;
+        const sampleZ = z + forwardZ * halfLength * along + sideZ * halfWidth * across;
         const terrain = sampleGroundHeight(sampleX, sampleZ) ?? sampleOuterHeight(sampleX, sampleZ);
         const deck = sampleOutpostTop(outpostHeightField, sampleX, sampleZ);
         // Ramps and low obstacles can support the rover, but tall walls and
@@ -3678,8 +4086,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
     return Number.isFinite(highest) ? highest : PLAIN_LEVEL;
   }
 
-  function isRoverBlockedAt(x, z, heading, groundY) {
+  function isRoverBlockedAt(x, z, rover, groundY) {
     if (!outpostHeightField) return false;
+    const heading = rover.heading;
+    const halfLength = rover.halfLength;
+    const halfWidth = rover.halfWidth;
     const forwardX = Math.cos(heading);
     const forwardZ = -Math.sin(heading);
     const sideX = Math.sin(heading);
@@ -3688,14 +4099,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
     // outpost collision grid, so its long chassis cannot pass through walls,
     // habitat modules, or supports between frames.
     const spacing = 0.38;
-    const lengthSteps = Math.max(1, Math.ceil((roverHalfLength * 2) / spacing));
-    const widthSteps = Math.max(1, Math.ceil((roverHalfWidth * 2) / spacing));
+    const lengthSteps = Math.max(1, Math.ceil((halfLength * 2) / spacing));
+    const widthSteps = Math.max(1, Math.ceil((halfWidth * 2) / spacing));
     for (let i = 0; i <= lengthSteps; i++) {
       const along = (i / lengthSteps) * 2 - 1;
       for (let j = 0; j <= widthSteps; j++) {
         const across = (j / widthSteps) * 2 - 1;
-        const sampleX = x + forwardX * roverHalfLength * along + sideX * roverHalfWidth * across;
-        const sampleZ = z + forwardZ * roverHalfLength * along + sideZ * roverHalfWidth * across;
+        const sampleX = x + forwardX * halfLength * along + sideX * halfWidth * across;
+        const sampleZ = z + forwardZ * halfLength * along + sideZ * halfWidth * across;
         const obstacleTop = sampleOutpostTop(outpostHeightField, sampleX, sampleZ);
         if (obstacleTop !== null && obstacleTop - groundY > ROVER_MAX_STEP_HEIGHT) return true;
       }
@@ -3847,6 +4258,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const dt = Math.min(clock.getDelta(), 0.05);
     updateRoverDrive(dt);
 
+    if (cameraMode !== previousCameraMode) {
+      // Every mode switch teleports the camera, so never carry gait momentum
+      // across one: stepping through an airlock must not fire the walker off.
+      previousCameraMode = cameraMode;
+      firstPersonVelocity.set(0, 0, 0);
+    }
+
     promptCheckTimer += dt;
     if (!eventCinematic && !dayStartCameraTransition && !roverCameraActive && promptCheckTimer >= 0.1) {
       promptCheckTimer = 0;
@@ -3856,6 +4274,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       } else if (cameraMode === 'interior') {
         updateAirlockEndPrompt();
         updateGreenhouseDoorPrompt();
+        updateRoverMonitorPrompt();
       }
     }
 
@@ -3896,29 +4315,32 @@ export function createLunarEngine(canvas, callbacks = {}) {
       // Shift runs so the much bigger terrain stays crossable; the default
       // pace is the slow lunar shuffle.
       const moveSpeed = keys.has('shift') ? FIRST_PERSON_SPRINT_SPEED : FIRST_PERSON_WALK_SPEED;
-      if (cameraMode === 'first-person') {
-        // Moon gait: ease into the target speed and glide to a stop, so the
-        // walker carries momentum like a suit on regolith. While airborne the
-        // same horizontal momentum keeps travelling with the hop.
-        const desiredX = wantsMove ? firstPersonDirection.x * moveSpeed : 0;
-        const desiredZ = wantsMove ? firstPersonDirection.z * moveSpeed : 0;
-        const rateStep = (wantsMove ? FIRST_PERSON_ACCELERATION : FIRST_PERSON_DECELERATION) * dt;
-        firstPersonVelocity.x = THREE.MathUtils.clamp(
-          desiredX,
-          firstPersonVelocity.x - rateStep,
-          firstPersonVelocity.x + rateStep,
-        );
-        firstPersonVelocity.z = THREE.MathUtils.clamp(
-          desiredZ,
-          firstPersonVelocity.z - rateStep,
-          firstPersonVelocity.z + rateStep,
-        );
-        if (firstPersonVelocity.x !== 0 || firstPersonVelocity.z !== 0) {
+      // One gait everywhere: ease into the target speed and glide to a stop, so
+      // the suit carries the same momentum through an airlock as it does across
+      // the regolith instead of sliding like a detached free camera.
+      const desiredX = wantsMove ? firstPersonDirection.x * moveSpeed : 0;
+      const desiredZ = wantsMove ? firstPersonDirection.z * moveSpeed : 0;
+      const rateStep = (wantsMove ? FIRST_PERSON_ACCELERATION : FIRST_PERSON_DECELERATION) * dt;
+      firstPersonVelocity.x = THREE.MathUtils.clamp(
+        desiredX,
+        firstPersonVelocity.x - rateStep,
+        firstPersonVelocity.x + rateStep,
+      );
+      firstPersonVelocity.z = THREE.MathUtils.clamp(
+        desiredZ,
+        firstPersonVelocity.z - rateStep,
+        firstPersonVelocity.z + rateStep,
+      );
+      if (firstPersonVelocity.x !== 0 || firstPersonVelocity.z !== 0) {
+        if (cameraMode === 'first-person') {
+          // Outside, the walker collides with whatever the height field rasterized.
           moveFirstPersonWithCollisions(firstPersonVelocity.x * dt, firstPersonVelocity.z * dt);
+        } else {
+          // Interiors are authored spaces with no walkable height field, so the
+          // same gait slides inside the room box instead.
+          camera.position.x += firstPersonVelocity.x * dt;
+          camera.position.z += firstPersonVelocity.z * dt;
         }
-      } else if (wantsMove) {
-        // Inside modules the walker has full traction: direct, tight control.
-        camera.position.addScaledVector(firstPersonDirection, dt * moveSpeed);
       }
       if (greenhouseInterior?.visible && greenhouseInteriorBounds) {
         const wallInset = 0.8;
@@ -3955,10 +4377,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
       }
     }
 
-    // Horizontal momentum only belongs to the walking first-person view; every
-    // other mode (free camera, interiors, event cinematics) resets it so the
-    // walker never glides off after switching.
-    if (cameraMode !== 'first-person' || eventCinematic || roverCameraActive) {
+    // Horizontal momentum belongs to the walking views only — both the surface
+    // walk and the interior walk share one gait. Every other mode (free camera,
+    // rover chase, event cinematics) resets it so the walker never glides off
+    // after switching.
+    if (!['first-person', 'interior'].includes(cameraMode) || eventCinematic || roverCameraActive) {
       firstPersonVelocity.set(0, 0, 0);
     }
 
@@ -4036,6 +4459,18 @@ export function createLunarEngine(canvas, callbacks = {}) {
     returnToFirstPersonStart,
     toggleCameraMode,
     toggleRoverCamera,
+    // Link straight into a specific chassis. Inside the command center this is
+    // a remote downlink (the interior is swapped for the live surface view);
+    // outside it is the normal chase camera.
+    controlRover,
+    controlFocusedRover,
+    exitRoverControl: () => stopRoverControl(),
+    getRoverFleet: () => rovers.map(rover => ({
+      id: rover.id,
+      label: rover.label,
+      x: rover.root.position.x,
+      z: rover.root.position.z,
+    })),
     toggleEarthView,
     enterAirlock,
     dismissAirlock: () => {

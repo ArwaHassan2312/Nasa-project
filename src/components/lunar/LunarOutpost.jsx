@@ -54,6 +54,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const [cameraMode, setCameraMode] = useState('free');
   const [roverReady, setRoverReady] = useState(false);
   const [roverCameraActive, setRoverCameraActive] = useState(false);
+  const [roverLink, setRoverLink] = useState(null);
   const [prompt, setPrompt] = useState({ type: null, data: null });
   const [insidePanel, setInsidePanel] = useState({
     visible: false,
@@ -125,7 +126,10 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         onLoading: (state) => setIsLoading(state.active),
         onModeChange: (mode) => setCameraMode(mode),
         onRoverReady: (ready) => setRoverReady(ready),
-        onRoverCameraChange: (active) => setRoverCameraActive(active),
+        onRoverCameraChange: (active, info) => {
+          setRoverCameraActive(active);
+          setRoverLink(active ? (info ?? null) : null);
+        },
         onPromptChange: (type, data) => setPrompt({ type, data }),
         onInsidePanelChange: (panel) => setInsidePanel(panel),
         onTaskAction: (componentId, taskId) => taskActionRef.current?.(componentId, taskId),
@@ -209,10 +213,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       if (prompt.type === 'component') engineRef.current?.enterNearbyComponent();
       else if (prompt.type === 'airlock') engineRef.current?.enterAirlock();
       else if (prompt.type === 'greenhouseDoor') engineRef.current?.leaveGreenhouse();
+      else if (prompt.type === 'roverMonitor') engineRef.current?.controlRover(prompt.data?.roverId);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [prompt.type, simulation.eventPhase, simulation.warningTaskId]);
+  }, [prompt.type, prompt.data?.roverId, simulation.eventPhase, simulation.warningTaskId]);
 
   // Press M to open/close the full outpost map (same gating as the map entry points).
   useEffect(() => {
@@ -599,28 +604,37 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 aria-pressed={roverCameraActive}
                 disabled={!roverCameraActive && (!roverReady || cameraMode === 'interior' || !eventGameplayActive || simulation.gameStatus !== 'playing')}
                 onClick={() => engineRef.current?.toggleRoverCamera()}
-                title={roverReady ? 'Switch between player view and rover follow camera' : 'Loading rover'}
+                title={
+                  roverCameraActive
+                    ? (roverLink?.remote
+                      ? `Disconnect the ${roverLink.roverLabel} downlink and return to the command center`
+                      : 'Switch back to the player view')
+                    : 'Switch between player view and rover follow camera'
+                }
               >
-                {roverCameraActive ? 'PLAYER CAMERA' : roverReady ? 'ROVER CAMERA' : 'LOADING ROVER'}
+                {roverCameraActive
+                  ? (roverLink?.remote ? 'RETURN TO COMMAND CENTER' : 'PLAYER CAMERA')
+                  : roverReady ? 'ROVER CAMERA' : 'LOADING ROVER'}
               </button>
             </>
           )}
         </div>
       </div>
 
-      {cameraMode !== 'interior' && (
+      {(cameraMode !== 'interior' || roverCameraActive) && (
         <div className="lunar-rover-help" role="note" aria-label="Rover keyboard controls">
           {roverCameraActive ? (
             <>
-              <strong>ROVER</strong>
+              <strong>{roverLink?.roverLabel || 'ROVER'}{roverLink?.remote ? ' · REMOTE LINK' : ''}</strong>
               <span>DRAG MOUSE TO ORBIT</span>
               <span>SCROLL TO ZOOM</span>
-              <span><kbd>↑</kbd> DRIVE</span>
+              <span><kbd>↑</kbd>/<kbd>W</kbd> DRIVE</span>
               <span><kbd>←</kbd> <kbd>→</kbd> STEER</span>
-              <span><kbd>↓</kbd> REVERSE</span>
+              <span><kbd>↓</kbd>/<kbd>S</kbd> REVERSE</span>
+              <span><kbd>V</kbd> {roverLink?.remote ? 'RETURN TO COMMAND CENTER' : 'PLAYER CAMERA'}</span>
             </>
           ) : (
-            <span>PLAYER CAMERA Â· ARROWS MOVE PLAYER Â· PRESS V OR SELECT ROVER CAMERA TO DRIVE</span>
+            <span>PLAYER CAMERA · ARROWS MOVE PLAYER · PRESS V OR SELECT ROVER CAMERA TO DRIVE</span>
           )}
         </div>
       )}
@@ -1301,6 +1315,25 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             onClick={() => engineRef.current?.enterNearbyComponent()}
           >
             ENTER ⏎
+          </button>
+        </div>
+      )}
+
+      {['idle', 'awaitingDecision'].includes(simulation.eventPhase) && prompt.type === 'roverMonitor' && (
+        <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Command center rover monitor prompt">
+          <span className="lunar-proximity-dot" aria-hidden="true" />
+          <div className="lunar-proximity-text">
+            <strong>{prompt.data?.title || 'Link to rover?'}</strong>
+            <small>
+              Press <kbd>Enter</kbd> to link · <kbd>N</kbd> to cancel · <kbd>V</kbd> returns here
+            </small>
+          </div>
+          <button
+            type="button"
+            className="lunar-proximity-enter"
+            onClick={() => engineRef.current?.controlRover(prompt.data?.roverId)}
+          >
+            DRIVE ⏎
           </button>
         </div>
       )}
