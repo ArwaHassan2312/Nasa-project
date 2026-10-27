@@ -53,6 +53,38 @@ function getEventOccurrenceKey(event) {
   return event?.occurrenceId ?? (event ? `${event.id}-${event.day ?? 0}` : null);
 }
 
+// Both maps poll the engine on a timer. Ignore sub-cell jitter in the player and
+// the rover fleet so an idle frame never re-renders an unchanged map.
+const SNAPSHOT_PLAYER_TOLERANCE = 0.35;
+const SNAPSHOT_YAW_TOLERANCE = 0.06;
+
+function snapshotsMatch(current, next) {
+  if (!current || !next) return false;
+  if (current.components !== next.components || current.cameraMode !== next.cameraMode) return false;
+
+  const currentPlayer = current.player;
+  const nextPlayer = next.player;
+  const samePlayer = (currentPlayer === null && nextPlayer === null)
+    || Boolean(currentPlayer && nextPlayer
+      && Math.abs(currentPlayer.x - nextPlayer.x) < SNAPSHOT_PLAYER_TOLERANCE
+      && Math.abs(currentPlayer.z - nextPlayer.z) < SNAPSHOT_PLAYER_TOLERANCE
+      && Math.abs(currentPlayer.yaw - nextPlayer.yaw) < SNAPSHOT_YAW_TOLERANCE
+      && currentPlayer.location === nextPlayer.location);
+  if (!samePlayer) return false;
+
+  const currentRovers = current.rovers ?? [];
+  const nextRovers = next.rovers ?? [];
+  if (currentRovers.length !== nextRovers.length) return false;
+  for (let index = 0; index < currentRovers.length; index += 1) {
+    const a = currentRovers[index];
+    const b = nextRovers[index];
+    if (Math.abs(a.x - b.x) >= SNAPSHOT_PLAYER_TOLERANCE) return false;
+    if (Math.abs(a.z - b.z) >= SNAPSHOT_PLAYER_TOLERANCE) return false;
+    if (Math.abs(a.heading - b.heading) >= SNAPSHOT_YAW_TOLERANCE) return false;
+  }
+  return true;
+}
+
 export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const containerRef = useRef(null);
   const engineRef = useRef(null);
@@ -67,6 +99,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
 
   const [isLoading, setIsLoading] = useState(true);
   const [cameraMode, setCameraMode] = useState('free');
+  const [roverReady, setRoverReady] = useState(false);
+  const [roverCameraActive, setRoverCameraActive] = useState(false);
+  const [roverLink, setRoverLink] = useState(null);
   const [prompt, setPrompt] = useState({ type: null, data: null });
   const [insidePanel, setInsidePanel] = useState({
     visible: false,
@@ -129,6 +164,17 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   };
   const [consoleEdit, setConsoleEdit] = useState(false);
   const [consoleInfo, setConsoleInfo] = useState(null);
+  // Wall display viewpoint scaler, only available inside the command center.
+  const [displayView, setDisplayView] = useState(null);
+  const [displayTunerOpen, setDisplayTunerOpen] = useState(false);
+  const displayTunerVisible = displayTunerOpen
+    && insidePanel.visible
+    && insidePanel.componentId === '024';
+
+  const applyDisplayView = (patch) => {
+    const next = engineRef.current?.setOutpostFeedView?.(patch);
+    if (next) setDisplayView(next);
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -143,6 +189,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       engine = createLunarEngine(canvas, {
         onLoading: (state) => setIsLoading(state.active),
         onModeChange: (mode) => setCameraMode(mode),
+        onRoverReady: (ready) => setRoverReady(ready),
+        onRoverCameraChange: (active, info) => {
+          setRoverCameraActive(active);
+          setRoverLink(active ? (info ?? null) : null);
+        },
         onPromptChange: (type, data) => setPrompt({ type, data }),
         onInsidePanelChange: (panel) => setInsidePanel(panel),
         onTaskAction: (componentId, taskId) => taskActionRef.current?.(componentId, taskId),
@@ -180,6 +231,29 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     setSelectedAlertId(null);
     setEventOptionsOpen(false);
   }, [simulation.day]);
+
+  // Press C inside the command center to open the display scaler. The pointer
+  // lock has to be released so the sliders are actually clickable.
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.repeat) return;
+      if ((event.key || '').toLowerCase() !== 'c') return;
+      const target = event.target;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      if (!insidePanel.visible || insidePanel.componentId !== '024') return;
+      event.preventDefault();
+      setDisplayTunerOpen((open) => {
+        if (open) return false;
+        // Seed the sliders from the engine's current viewpoint on open.
+        const view = engineRef.current?.getOutpostFeedView?.();
+        if (view) setDisplayView(view);
+        if (document.pointerLockElement) document.exitPointerLock?.();
+        return true;
+      });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [insidePanel.visible, insidePanel.componentId]);
 
   useEffect(() => {
     if (simulation.dayPhase !== 'transition') {
@@ -241,10 +315,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       if (prompt.type === 'component') engineRef.current?.enterNearbyComponent();
       else if (prompt.type === 'airlock') engineRef.current?.enterAirlock();
       else if (prompt.type === 'greenhouseDoor') engineRef.current?.leaveGreenhouse();
+      else if (prompt.type === 'roverMonitor') engineRef.current?.controlRover(prompt.data?.roverId);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [prompt.type, simulation.eventPhase, simulation.warningTaskId]);
+  }, [prompt.type, prompt.data?.roverId, simulation.eventPhase, simulation.warningTaskId]);
 
   // Press M to open/close the full outpost map (same gating as the map entry points).
   useEffect(() => {
@@ -281,23 +356,10 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
 
     const updateMiniSnapshot = () => {
       const nextSnapshot = engineRef.current?.getMapSnapshot() ?? null;
-      setMiniSnapshot((currentSnapshot) => {
-        if (!nextSnapshot) return currentSnapshot;
-        const samePlayer = currentSnapshot?.player === null && nextSnapshot.player === null
-          || currentSnapshot?.player && nextSnapshot.player
-            && Math.abs(currentSnapshot.player.x - nextSnapshot.player.x) < 0.3
-            && Math.abs(currentSnapshot.player.z - nextSnapshot.player.z) < 0.3
-            && Math.abs(currentSnapshot.player.yaw - nextSnapshot.player.yaw) < 0.05
-            && currentSnapshot.player.location === nextSnapshot.player.location;
-        if (
-          currentSnapshot?.components === nextSnapshot.components
-          && currentSnapshot.cameraMode === nextSnapshot.cameraMode
-          && samePlayer
-        ) {
-          return currentSnapshot;
-        }
-        return nextSnapshot;
-      });
+      if (!nextSnapshot) return;
+      setMiniSnapshot((currentSnapshot) => (
+        snapshotsMatch(currentSnapshot, nextSnapshot) ? currentSnapshot : nextSnapshot
+      ));
     };
 
     updateMiniSnapshot();
@@ -315,22 +377,10 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
 
     const updateMapSnapshot = () => {
       const nextSnapshot = engineRef.current?.getMapSnapshot() ?? null;
-      setMapSnapshot((currentSnapshot) => {
-        if (!nextSnapshot) return currentSnapshot;
-        const samePlayer = currentSnapshot?.player === null && nextSnapshot.player === null
-          || currentSnapshot?.player && nextSnapshot.player
-            && Math.abs(currentSnapshot.player.x - nextSnapshot.player.x) < 0.35
-            && Math.abs(currentSnapshot.player.z - nextSnapshot.player.z) < 0.35
-            && Math.abs(currentSnapshot.player.yaw - nextSnapshot.player.yaw) < 0.06;
-        if (
-          currentSnapshot?.components === nextSnapshot.components
-          && currentSnapshot.cameraMode === nextSnapshot.cameraMode
-          && samePlayer
-        ) {
-          return currentSnapshot;
-        }
-        return nextSnapshot;
-      });
+      if (!nextSnapshot) return;
+      setMapSnapshot((currentSnapshot) => (
+        snapshotsMatch(currentSnapshot, nextSnapshot) ? currentSnapshot : nextSnapshot
+      ));
     };
 
     updateMapSnapshot();
@@ -677,14 +727,34 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
               </button>
             </div>
           ) : (
-            <button
-              type="button"
-              className={`lunar-btn ${cameraMode === 'first-person' ? 'active' : ''}`}
-              disabled={!['idle', 'awaitingDecision'].includes(simulation.eventPhase) || simulation.gameStatus !== 'playing'}
-              onClick={() => engineRef.current?.toggleCameraMode()}
-            >
-              {cameraMode === 'free' ? 'FIRST PERSON' : 'FREE CAMERA'}
-            </button>
+            <>
+              <button
+                type="button"
+                className={`lunar-btn ${cameraMode === 'first-person' ? 'active' : ''}`}
+                disabled={roverCameraActive || !['idle', 'awaitingDecision'].includes(simulation.eventPhase) || simulation.gameStatus !== 'playing'}
+                onClick={() => engineRef.current?.toggleCameraMode()}
+              >
+                {cameraMode === 'free' ? 'FIRST PERSON' : 'FREE CAMERA'}
+              </button>
+              <button
+                type="button"
+                className={`lunar-btn ${roverCameraActive ? 'active' : ''}`}
+                aria-pressed={roverCameraActive}
+                disabled={!roverCameraActive && (!roverReady || cameraMode === 'interior' || !eventGameplayActive || simulation.gameStatus !== 'playing')}
+                onClick={() => engineRef.current?.toggleRoverCamera()}
+                title={
+                  roverCameraActive
+                    ? (roverLink?.remote
+                      ? `Disconnect the ${roverLink.roverLabel} downlink and return to the command center`
+                      : 'Switch back to the player view')
+                    : 'Switch between player view and rover follow camera'
+                }
+              >
+                {roverCameraActive
+                  ? (roverLink?.remote ? 'RETURN TO COMMAND CENTER' : 'PLAYER CAMERA')
+                  : roverReady ? 'ROVER CAMERA' : 'LOADING ROVER'}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -730,6 +800,24 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         </aside>
       )}
 
+      {(cameraMode !== 'interior' || roverCameraActive) && (
+        <div className="lunar-rover-help" role="note" aria-label="Rover keyboard controls">
+          {roverCameraActive ? (
+            <>
+              <strong>{roverLink?.roverLabel || 'ROVER'}{roverLink?.remote ? ' · REMOTE LINK' : ''}</strong>
+              <span>DRAG MOUSE TO ORBIT</span>
+              <span>SCROLL TO ZOOM</span>
+              <span><kbd>↑</kbd>/<kbd>W</kbd> DRIVE</span>
+              <span><kbd>←</kbd> <kbd>→</kbd> STEER</span>
+              <span><kbd>↓</kbd>/<kbd>S</kbd> REVERSE</span>
+              <span><kbd>V</kbd> {roverLink?.remote ? 'RETURN TO COMMAND CENTER' : 'PLAYER CAMERA'}</span>
+            </>
+          ) : (
+            <span>PLAYER CAMERA · ARROWS MOVE PLAYER · PRESS V OR SELECT ROVER CAMERA TO DRIVE</span>
+          )}
+        </div>
+      )}
+
       {import.meta.env.DEV && (
         <details className="lunar-event-test-tools">
           <summary>TEST TASK ↔ EVENT LINKS</summary>
@@ -769,6 +857,64 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             RESET POSITION
           </button>
         </div>
+      )}
+
+      {/* Wall display scaler — command center only, toggled with C */}
+      {displayTunerVisible && displayView && (
+        <aside className="lunar-display-tuner" aria-label="Wall display scaler">
+          <header>
+            <span>DISPLAY VIEW</span>
+            <button type="button" onClick={() => setDisplayTunerOpen(false)}>CLOSE</button>
+          </header>
+          <label>
+            <span>AZIMUTH</span>
+            <input
+              type="range"
+              min="0"
+              max="360"
+              step="1"
+              value={Math.round(displayView.azimuthDeg)}
+              onChange={(event) => applyDisplayView({ azimuthDeg: Number(event.target.value) })}
+            />
+            <b>{Math.round(displayView.azimuthDeg)}°</b>
+          </label>
+          <label>
+            <span>ELEVATION</span>
+            <input
+              type="range"
+              min="2"
+              max="88"
+              step="1"
+              value={Math.round(displayView.elevationDeg)}
+              onChange={(event) => applyDisplayView({ elevationDeg: Number(event.target.value) })}
+            />
+            <b>{Math.round(displayView.elevationDeg)}°</b>
+          </label>
+          <label>
+            <span>LENS</span>
+            <input
+              type="range"
+              min="15"
+              max="90"
+              step="1"
+              value={Math.round(displayView.fov)}
+              onChange={(event) => applyDisplayView({ fov: Number(event.target.value) })}
+            />
+            <b>{Math.round(displayView.fov)}°</b>
+          </label>
+          <footer>
+            <button
+              type="button"
+              onClick={() => {
+                const next = engineRef.current?.resetOutpostFeedView?.();
+                if (next) setDisplayView(next);
+              }}
+            >
+              RESET VIEW
+            </button>
+            <small><kbd>C</kbd> to close · click the view to look around</small>
+          </footer>
+        </aside>
       )}
 
       {/* Live opacity minimap - top-left under Mission Control, realtime player tracking */}
@@ -838,6 +984,22 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 </g>
               );
             })}
+            {miniSnapshot.rovers?.map((rover) => (
+              <g
+                key={`rover-${rover.id}`}
+                className="lunar-minimap-rover"
+                transform={`translate(${rover.x} ${-rover.z})`}
+                style={{ color: rover.tint }}
+              >
+                <title>{rover.label} · x {Math.round(rover.x)} · z {Math.round(rover.z)}</title>
+                <circle r={miniSpan * 0.045} className="lunar-minimap-rover-halo" />
+                <path
+                  d="M 0 -1.7 L 1.15 0.95 L 0.5 0.95 L 0 0.45 L -0.5 0.95 L -1.15 0.95 Z"
+                  transform={`rotate(${rover.heading * 180 / Math.PI + 90}) scale(${miniSpan * 0.022})`}
+                  className="lunar-minimap-rover-arrow"
+                />
+              </g>
+            ))}
             {miniSnapshot.player && miniFitBounds && (
               <g
                 className="lunar-minimap-player"
@@ -993,6 +1155,23 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                       );
                     })}
 
+                    {mapSnapshot.rovers?.map((rover) => (
+                      <g
+                        key={`rover-${rover.id}`}
+                        className="lunar-map-rover"
+                        transform={`translate(${rover.x} ${-rover.z})`}
+                        style={{ color: rover.tint }}
+                      >
+                        <title>{rover.label} · x {Math.round(rover.x)} · z {Math.round(rover.z)}</title>
+                        <circle r={mapSpan * 0.019} className="lunar-map-rover-halo" />
+                        <path
+                          d="M 0 -1.7 L 1.15 0.95 L 0.5 0.95 L 0 0.45 L -0.5 0.95 L -1.15 0.95 Z"
+                          transform={`rotate(${rover.heading * 180 / Math.PI + 90}) scale(${mapSpan * 0.011})`}
+                          className="lunar-map-rover-arrow"
+                        />
+                      </g>
+                    ))}
+
                     {mapSnapshot.player && (
                       <g
                         className="lunar-map-player"
@@ -1062,9 +1241,25 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                     </div>
                   </div>
                 )}
+                {mapSnapshot?.rovers?.length > 0 && (
+                  <div className="lunar-map-location-list lunar-map-rover-list">
+                    <h3>Rover fleet</h3>
+                    <div>
+                      {mapSnapshot.rovers.map((rover) => (
+                        <span key={rover.id} className="lunar-map-rover-row">
+                          <i style={{ background: rover.tint, color: rover.tint }} />
+                          <span>{rover.label}</span>
+                          <small>x {Math.round(rover.x)} · z {Math.round(rover.z)}</small>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="lunar-map-legend" aria-label="Map legend">
                   <h3>Legend</h3>
                   <span><i className="legend-player" /> You · facing direction</span>
+                  <span><i className="legend-rover" /> Rover · facing direction</span>
+                  <span><i className="legend-structure" /> Command center</span>
                   <span><i className="legend-task legend-available" /> Available task</span>
                   <span><i className="legend-task legend-progress" /> In progress</span>
                   <span><i className="legend-task legend-overdue" /> Overdue (still completable)</span>
@@ -1358,6 +1553,25 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             onClick={() => engineRef.current?.enterNearbyComponent()}
           >
             ENTER ⏎
+          </button>
+        </div>
+      )}
+
+      {['idle', 'awaitingDecision'].includes(simulation.eventPhase) && prompt.type === 'roverMonitor' && (
+        <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Command center rover monitor prompt">
+          <span className="lunar-proximity-dot" aria-hidden="true" />
+          <div className="lunar-proximity-text">
+            <strong>{prompt.data?.title || 'Link to rover?'}</strong>
+            <small>
+              Press <kbd>Enter</kbd> to link · <kbd>N</kbd> to cancel · <kbd>V</kbd> returns here
+            </small>
+          </div>
+          <button
+            type="button"
+            className="lunar-proximity-enter"
+            onClick={() => engineRef.current?.controlRover(prompt.data?.roverId)}
+          >
+            DRIVE ⏎
           </button>
         </div>
       )}

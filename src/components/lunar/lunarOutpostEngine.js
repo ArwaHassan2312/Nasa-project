@@ -1,11 +1,40 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { buildOutpostHeightField, isOutpostBlocked, sampleOutpostTop } from './outpostCollision.js';
+import {
+  buildOutpostHeightField,
+  COLLIDE_STEP_HEIGHT,
+  isOutpostBlocked,
+  sampleOutpostTop,
+} from './outpostCollision.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+// The rover asset is a single skinned mesh, so a plain Object3D.clone() would
+// leave every copy sharing one skeleton. SkeletonUtils rebuilds the bone rig.
+import { clone as cloneSkinnedRig } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { DAILY_CHALLENGES } from '../../data/dailyChallenges';
 import { loadDownscaledTexture } from '../../utils/textureUtils';
+
+// ─── Player camera ───────────────────────────────────────────────────────────
+// One camera for the whole game. The same look, eye height and gait are used on
+// the lunar surface and inside every outpost component, so stepping through an
+// airlock never changes how the player sees or moves. Everything that measures
+// the view from the player's eyes reads this object — change `height` here (or
+// call engine.setPlayerCameraHeight()) and the surface, the airlock, the
+// greenhouse, workshop, habitats and the command center all follow.
+// Scale: an eye height of 3.2 units is roughly 1.7 m, so one unit ≈ half a metre.
+export const PLAYER_CAMERA = {
+  height: 4.2, // eye height above whatever the player stands on
+  minHeight: 0.5, // guard rails for setPlayerCameraHeight()
+  maxHeight: 40,
+  walkSpeed: 2, // slow, deliberate ~1 m/s lunar shuffle
+  sprintSpeed: 10, // shift run, about lunar-rover pace
+  acceleration: 8, // suit + regolith inertia: ease into the target speed
+  deceleration: 6, // and glide to a stop instead of snapping
+  gravity: 3.1, // ~1.6 m/s^2 — the Moon's surface gravity
+  jumpSpeed: 3.6, // apex ~2 units (~1 m), ~2.3 s of air
+  pitchLimit: 1.45, // radians of look up/down travel
+};
 
 // Module-level caches: raw asset buffers loaded once to prevent memory leaks and repeated downloads
 const ASSET_CACHE = {
@@ -100,6 +129,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const {
     onLoading = () => { },
     onModeChange = () => { },
+    onRoverReady = () => { },
+    onRoverCameraChange = () => { },
     onEarthToggleChange = () => { },
     onPromptChange = () => { },
     onInsidePanelChange = () => { },
@@ -170,6 +201,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   };
   const releaseAllKeys = () => keys.clear();
   const firstPersonStart = new THREE.Vector3();
+  // Ground level under firstPersonStart, kept apart from the eye height so the
+  // spawn point follows PLAYER_CAMERA.height when it changes at runtime.
+  let firstPersonStartGroundY = 0;
   const firstPersonLookAt = new THREE.Vector3();
   const savedFreePosition = new THREE.Vector3();
   const savedFreeTarget = new THREE.Vector3();
@@ -181,7 +215,40 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const firstPersonVelocity = new THREE.Vector3();
 
   let outpostRoot = null;
+  // Rover fleet. Each entry owns its own chassis transform, wheel bones and
+  // drive state so two rovers can park and roll independently.
+  const rovers = [];
+  let activeRover = null; // chassis currently bound to the camera
+  let roverCameraActive = false;
+  let roverRemoteControl = false; // true while driving from a command center monitor
+  let roverCameraWasPointerLocked = false;
+  let roverCameraDragging = false;
+  let roverCameraPointerX = 0;
+  let roverCameraPointerY = 0;
+  let roverCameraOrbitYaw = 0;
+  let roverCameraOrbitPitch = 0.28;
+  let roverCameraDistance = 12;
+  const roverCameraSavedPosition = new THREE.Vector3();
+  const roverCameraSavedQuaternion = new THREE.Quaternion();
+  const roverCameraSavedTarget = new THREE.Vector3();
+  const roverCameraDesiredPosition = new THREE.Vector3();
+  const roverCameraLookAt = new THREE.Vector3();
+  const roverCameraForward = new THREE.Vector3();
+  // Everything the command center interior needs back when a remote link ends.
+  let remoteControlReturn = null;
+  // The command center already ships a pair of console monitors: one downlink
+  // screen per rover, focused with the crosshair to take control.
+  const roverMonitors = [];
+  let focusedRoverId = null;
+  let roverMonitorPromptDismissed = false;
+  const monitorFocusOffset = new THREE.Vector3();
+  const monitorFocusDirection = new THREE.Vector3();
+  const monitorFocusNearest = new THREE.Vector3();
   let outpostHeightField = null; // walker collision rasterized from the outpost meshes
+  let commandCenterRoot = null;
+  let commandCenterModelRoot = null;
+  let commandCenterExteriorShell = null;
+  let commandCenterInteriorActive = false;
   let jumpVelocity = 0; // vertical speed while the walker is airborne
   let airborne = false;
   let mapComponents = [];
@@ -344,6 +411,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   const clock = new THREE.Clock();
   let cameraMode = 'free'; // 'free' | 'first-person' | 'interior'
+  let previousCameraMode = cameraMode;
   let firstPersonYaw = 0;
   let firstPersonPitch = 0;
   let dayStartCameraTransition = null;
@@ -526,6 +594,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
       terrainVisibility: moonTerrainMeshes.map(terrain => terrain.visible),
       horizonVisibility: horizon.visible,
       outpostVisibility: outpostRoot?.visible ?? true,
+      commandCenterParent: commandCenterRoot?.parent ?? null,
+      commandCenterVisibility: commandCenterRoot?.visible ?? true,
+      commandCenterExteriorVisibility: commandCenterExteriorShell?.visible ?? true,
       airlockVisibility: airlockInterior?.visible ?? false,
       greenhouseVisibility: greenhouseInterior?.visible ?? false,
       moduleVisibility: activeModuleInterior?.visible ?? false,
@@ -537,10 +608,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
   function exposeOutpostForEvent() {
     moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
     horizon.visible = true;
+    if (commandCenterRoot && commandCenterInteriorActive && outpostRoot) {
+      if (commandCenterExteriorShell) commandCenterExteriorShell.visible = true;
+      outpostRoot.attach(commandCenterRoot);
+      commandCenterRoot.visible = true;
+    }
     if (outpostRoot) outpostRoot.visible = true;
     if (airlockInterior) airlockInterior.visible = false;
     if (greenhouseInterior) greenhouseInterior.visible = false;
-    if (activeModuleInterior) activeModuleInterior.visible = false;
+    if (activeModuleInterior && !commandCenterInteriorActive) activeModuleInterior.visible = false;
     if (closeupEarthMesh) closeupEarthMesh.visible = false;
     if (outsideBackground) scene.background = outsideBackground;
     controls.enabled = false;
@@ -553,6 +629,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
       terrain.visible = snapshot.terrainVisibility[index] ?? true;
     });
     horizon.visible = snapshot.horizonVisibility;
+    if (commandCenterRoot && snapshot.commandCenterParent
+      && commandCenterRoot.parent !== snapshot.commandCenterParent) {
+      snapshot.commandCenterParent.attach(commandCenterRoot);
+    }
+    if (commandCenterRoot) commandCenterRoot.visible = snapshot.commandCenterVisibility;
+    if (commandCenterExteriorShell) {
+      commandCenterExteriorShell.visible = snapshot.commandCenterExteriorVisibility;
+    }
     if (outpostRoot) outpostRoot.visible = snapshot.outpostVisibility;
     if (airlockInterior) airlockInterior.visible = snapshot.airlockVisibility;
     if (greenhouseInterior) greenhouseInterior.visible = snapshot.greenhouseVisibility;
@@ -950,14 +1034,22 @@ export function createLunarEngine(canvas, callbacks = {}) {
   function returnToOutpostOverview() {
     if (isDestroyed || !outpostRoot || !heightGrid || !outpostOverview) return;
 
+    if (roverCameraActive) stopRoverControl({ silent: true });
     releaseAllKeys();
     firstPersonVelocity.set(0, 0, 0);
     if (document.pointerLockElement === canvas) document.exitPointerLock?.();
 
     if (activeModuleInterior) {
-      scene.remove(activeModuleInterior);
+      if (commandCenterInteriorActive) {
+        if (commandCenterExteriorShell) commandCenterExteriorShell.visible = true;
+        if (outpostRoot && commandCenterRoot) outpostRoot.attach(commandCenterRoot);
+        commandCenterInteriorActive = false;
+        commandCenterRoot.visible = true;
+      } else {
+        scene.remove(activeModuleInterior);
+        disposeModuleInterior(activeModuleInterior);
+      }
       scene.remove(activeModuleInteriorLight);
-      disposeModuleInterior(activeModuleInterior);
       unmountTaskConsole();
       activeModuleInterior = null;
       activeModuleInteriorBounds = null;
@@ -988,19 +1080,30 @@ export function createLunarEngine(canvas, callbacks = {}) {
     consoleDragging = false;
     if (canvas) canvas.style.cursor = '';
 
+    const standPosition = playerStandPosition();
     const looker = new THREE.PerspectiveCamera();
-    looker.position.copy(outpostOverview.destination);
-    looker.lookAt(outpostOverview.focus);
+    looker.position.copy(standPosition);
+    looker.lookAt(firstPersonLookAt);
     dayStartCameraTransition = {
       elapsed: 0,
       duration: 2.8,
       startPosition: camera.position.clone(),
       startQuaternion: camera.quaternion.clone(),
-      destination: outpostOverview.destination.clone(),
+      destination: standPosition,
       destinationQuaternion: looker.quaternion.clone(),
       focus: outpostOverview.focus.clone(),
       enableControlsOnFinish: true,
     };
+  }
+
+  // Where the player stands when dropped back onto the surface, resolved against
+  // the current camera height so a runtime height change re-seats the view.
+  function playerStandPosition() {
+    return new THREE.Vector3(
+      firstPersonStart.x,
+      firstPersonStartGroundY + playerCameraHeight,
+      firstPersonStart.z,
+    );
   }
 
   // Milky Way Skybox: cached, mipmap-free, downscaled to 4K at decode time
@@ -1135,21 +1238,58 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const LUNAR_OUTPOST_POSITION_X = 0;
   const LUNAR_OUTPOST_POSITION_Y = 2.9;
   const LUNAR_OUTPOST_POSITION_Z = 0;
+  const COMMAND_CENTER_WIDTH = 18;
+  const COMMAND_CENTER_GAP = 4;
   const OUTPOST_SITE_MARGIN = 6;
   const OUTPOST_GROUND_EPSILON = 0.05;
-  const FIRST_PERSON_EYE_HEIGHT = 3.2;
-  // Lunar motion: gravity is about a sixth of Earth's, so the walker shuffles
-  // slowly and jumps arc high and float for a couple of seconds instead of
-  // snapping back down. Scale: eye height 3.2 units ~ 1.7 m, so one unit is
-  // roughly half a metre.
-  const FIRST_PERSON_GRAVITY = 3.1; // ~1.6 m/s^2 — the Moon's surface gravity
-  const FIRST_PERSON_JUMP_SPEED = 3.6; // apex ~2 units (~1 m), ~2.3 s of air
-  const FIRST_PERSON_WALK_SPEED = 2; // slow, deliberate ~1 m/s lunar shuffle
-  const FIRST_PERSON_SPRINT_SPEED = 10; // shift run, about lunar-rover pace
-  // Suit and regolith inertia: speed eases in and glides out instead of
-  // snapping, and momentum carries through jumps.
-  const FIRST_PERSON_ACCELERATION = 8;
-  const FIRST_PERSON_DECELERATION = 6;
+  const ROVER_TARGET_WIDTH = 3; // Change this value to resize the playable rover.
+  const ROVER_MAX_STEP_HEIGHT = COLLIDE_STEP_HEIGHT + 0.45;
+  // Parked side by side in front of the outpost, nose pointing away from it.
+  const ROVER_SLOTS = [
+    { id: 1, label: 'ROVER 01', offsetX: -10, offsetZ: 0, tint: 0x59e3ff },
+    { id: 2, label: 'ROVER 02', offsetX: 10, offsetZ: -3, tint: 0xffb84d },
+  ];
+  // Aim tolerance for the command center downlink monitors: the two screens
+  // sit ~0.5 units apart, so focus is measured off the aim ray, not a huge cone.
+  const MONITOR_FOCUS_DISTANCE = 22;
+  const MONITOR_FOCUS_MIN_TOLERANCE = 0.8;
+  const MONITOR_FOCUS_TOLERANCE_RATIO = 0.2;
+  // Two different live screens live in the command center:
+  //  • the two small console monitors each show their own rover on the surface,
+  //  • the large wall display (material "large_monitor_mat") shows the outpost.
+  const ROVER_FEED_WIDTH = 256;
+  const ROVER_FEED_FOV = 42;
+  const ROVER_FEED_REFRESH = 0.5; // re-captured only when that rover has moved
+  const ROVER_FEED_MOVE_EPSILON = 0.15;
+  const roverFeedOffset = new THREE.Vector3(7, 4.5, 7); // world-space view angle
+  const OUTPOST_FEED_WIDTH = 320;
+  const OUTPOST_FEED_FOV = 38;
+  const OUTPOST_FEED_REFRESH = 0.25; // seconds between live redraws
+  // Live viewpoint of the wall display, driven by the in-game scaler:
+  //   azimuthDeg   — which side of the base the camera looks from
+  //   elevationDeg — how high it sits (the downward tilt of the picture)
+  //   fov          — lens angle; lower is a flatter, more zoomed-in shot
+  const outpostFeedView = { azimuthDeg: 19, elevationDeg: 24, fov: OUTPOST_FEED_FOV };
+  // Recomputed from outpostFeedView on every capture.
+  const outpostFeedDirection = new THREE.Vector3(0.30, 0.40, 0.87).normalize();
+  // How much of the vertical fit to honour. Below 1 the base's depth runs a
+  // little past the top and bottom of a wide panel, so the horizon reads as a
+  // vista instead of the base shrinking to a stamp in the middle.
+  const OUTPOST_FEED_VERTICAL_FIT = 0.82;
+  const outpostFeedCenter = new THREE.Vector3();
+  const outpostFeedSize = new THREE.Vector3();
+  // The big wall display is the authored "large monitor" panel. The static
+  // screen strip below it is only a fallback if that panel ever goes missing.
+  const OUTPOST_SCREEN_MATERIALS = ['large_monitor_mat', 'CommandCenter_MonitorScreenStatic'];
+  let outpostFeed = null; // { target, camera, plane }
+  let outpostFeedTimer = 0;
+  let roverFeedTimer = 0;
+  // Every overlay plane that samples a render target. All of them are hidden
+  // while any capture runs, so a screen never samples the target it is drawn into.
+  const feedPlanes = [];
+  // The live eye height. Seeded from PLAYER_CAMERA and adjustable at runtime;
+  // every camera measurement below reads this, never a scattered constant.
+  let playerCameraHeight = PLAYER_CAMERA.height;
   // The two scans overlap slightly so the seam between them disappears.
   const SEAM_OVERLAP = 4 * WORLD_SCALE;
   // Default free-camera framing distance, sized to the outpost (not the map).
@@ -1204,6 +1344,794 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const terrainScans = [];
   const moonTerrainMeshes = [];
   let loaded = 0;
+
+  function createRoverRig(root, slot) {
+    const rover = {
+      id: slot.id,
+      label: slot.label,
+      tint: slot.tint,
+      root,
+      // Drive state — every rover keeps its own so a parked one never rolls.
+      speed: 0,
+      heading: 0,
+      steering: 0,
+      wheelAngle: 0,
+      groundOffset: 0,
+      halfLength: 4,
+      halfWidth: 2,
+      // Wheel animation rig, rebuilt per clone so both chassis roll separately.
+      spinBones: [],
+      frontSpinBones: [],
+      steeringBones: [],
+      boneRest: new Map(),
+      spinAxis: new THREE.Vector3(0, 0, 1),
+      steerAxis: new THREE.Vector3(0, 1, 0),
+      boneDelta: new THREE.Quaternion(),
+      steeringDelta: new THREE.Quaternion(),
+    };
+
+    const spinNames = ['RF', 'RM', 'RB', 'LF', 'LM', 'LB']
+      .map(position => `chassis${position}_wheelAxle_SpinZ`);
+    for (const name of spinNames) {
+      const bone = root.getObjectByName(name);
+      if (!bone) continue;
+      rover.spinBones.push(bone);
+      if (name.includes('chassisRF_') || name.includes('chassisLF_')) {
+        rover.frontSpinBones.push(bone);
+      }
+      rover.boneRest.set(bone, bone.quaternion.clone());
+    }
+
+    for (const name of ['chassisRF_wheelAxle_turnY', 'chassisLF_wheelAxle_turnY']) {
+      const bone = root.getObjectByName(name);
+      if (!bone) continue;
+      rover.steeringBones.push(bone);
+      rover.boneRest.set(bone, bone.quaternion.clone());
+    }
+
+    if (rover.spinBones.length !== 6 || rover.steeringBones.length !== 2) {
+      console.warn(
+        '[Rover] Some wheel control bones were not found.',
+        { rover: rover.label, spin: rover.spinBones.length, steering: rover.steeringBones.length },
+      );
+    }
+    return rover;
+  }
+
+  function mountRovers(outpostBounds) {
+    if (rovers.length || isDestroyed) return;
+
+    sharedGltfLoader.load(
+      '/lunar/rover/rover.glb',
+      gltf => {
+        if (isDestroyed) return;
+        const template = gltf.scene;
+        registerCachedScene(template);
+        template.updateMatrixWorld(true);
+
+        // Measure once on the pristine asset, then fit every copy identically.
+        const sourceSize = new THREE.Box3().setFromObject(template).getSize(new THREE.Vector3());
+        const fitScale = ROVER_TARGET_WIDTH / Math.max(sourceSize.x, sourceSize.z, 0.001);
+        const fleetCenterX = (outpostBounds.min.x + outpostBounds.max.x) / 2;
+        const fleetBaseZ = outpostBounds.min.z - 12;
+
+        for (const slot of ROVER_SLOTS) {
+          // cloneSkinnedRig keeps the template untouched and re-binds the new
+          // chassis to its own bones, so wheels never animate in lock-step.
+          const root = cloneSkinnedRig(template);
+          root.name = `Playable Moon Rover ${slot.id}`;
+          root.scale.multiplyScalar(fitScale);
+          root.updateMatrixWorld(true);
+
+          const rover = createRoverRig(root, slot);
+          const bounds = new THREE.Box3().setFromObject(root);
+          const size = bounds.getSize(new THREE.Vector3());
+          const center = bounds.getCenter(new THREE.Vector3());
+          // Keep the entire rover footprint above the sampled terrain, rather
+          // than positioning only its center over the ground.
+          rover.halfLength = Math.max(size.x * 0.46, 0.5);
+          rover.halfWidth = Math.max(size.z * 0.46, 0.5);
+
+          const targetX = fleetCenterX + slot.offsetX;
+          const targetZ = fleetBaseZ + slot.offsetZ;
+          const roverX = targetX - center.x;
+          const roverZ = targetZ - center.z;
+          rover.heading = 0;
+          const groundY = roverSupportHeightAt(roverX, roverZ, rover);
+          root.position.set(
+            roverX,
+            groundY - bounds.min.y + OUTPOST_GROUND_EPSILON,
+            roverZ,
+          );
+          rover.groundOffset = root.position.y - groundY;
+
+          root.traverse(object => {
+            if (object.isMesh) {
+              object.castShadow = true;
+              object.receiveShadow = true;
+            }
+          });
+          scene.add(root);
+          root.updateMatrixWorld(true);
+          rovers.push(rover);
+        }
+
+        console.info('[Rover] Fleet ready. Arrow Up drives; Left/Right steer.', {
+          rovers: rovers.map(rover => ({
+            label: rover.label,
+            spinBones: rover.spinBones.length,
+            steeringBones: rover.steeringBones.length,
+          })),
+        });
+        refreshRoverMonitors();
+        refreshLiveScreens();
+        onRoverReady(true);
+      },
+      undefined,
+      error => console.error('Unable to load /lunar/rover/rover.glb', error),
+    );
+  }
+
+  function mountCommandCenter(outpost, model) {
+    if (isDestroyed) return;
+
+    if (!model) {
+      console.warn('Command center model could not be loaded.');
+      return;
+    }
+
+    model.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(model);
+    const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+    const scale = COMMAND_CENTER_WIDTH / Math.max(sourceSize.x, 1);
+    model.scale.multiplyScalar(scale);
+    model.traverse(object => {
+      if (!object.isMesh) return;
+      object.castShadow = true;
+      object.receiveShadow = true;
+    });
+
+    const commandCenter = new THREE.Group();
+    commandCenter.name = 'Command Center';
+    commandCenter.add(model);
+    commandCenterRoot = commandCenter;
+    commandCenterModelRoot = model;
+    commandCenterExteriorShell = model.getObjectByName('CommandCenter_Exterior_SM');
+    // The full model has its entrance and stairs on +Z; face them away from
+    // the outpost while keeping the authored shell, interior, and stairs aligned.
+    commandCenter.rotation.y = Math.PI / 2;
+    commandCenter.updateMatrixWorld(true);
+    const orientedModelBounds = new THREE.Box3().setFromObject(model);
+    const orientedModelCenter = orientedModelBounds.getCenter(new THREE.Vector3());
+    const outpostBounds = new THREE.Box3().setFromObject(outpost);
+    const outpostCenter = outpostBounds.getCenter(new THREE.Vector3());
+    const targetX = outpostBounds.max.x + COMMAND_CENTER_GAP
+      + orientedModelBounds.getSize(new THREE.Vector3()).x / 2;
+    const targetZ = outpostCenter.z;
+    const groundY = sampleGroundHeight(targetX, targetZ) ?? PLAIN_LEVEL;
+    commandCenter.position.set(
+      targetX - orientedModelCenter.x,
+      groundY - orientedModelBounds.min.y + OUTPOST_GROUND_EPSILON,
+      targetZ - orientedModelCenter.z,
+    );
+
+    scene.add(commandCenter);
+    commandCenter.updateMatrixWorld(true);
+    outpost.attach(commandCenter);
+    outpost.updateMatrixWorld(true);
+    outpostHeightField = buildOutpostHeightField(outpost);
+    componentTargets = buildComponentTargets(outpost);
+    const entrance = model.getObjectByName('commandCenter_Exterior_stairs_SM') || model;
+    const entranceBounds = new THREE.Box3().setFromObject(entrance);
+    if (!entranceBounds.isEmpty()) {
+      const entranceSize = entranceBounds.getSize(new THREE.Vector3());
+      componentTargets.push({
+        id: '024',
+        name: 'Command Center',
+        roomType: 'commandCenter',
+        center: entranceBounds.getCenter(new THREE.Vector3()),
+        bounds: {
+          minX: entranceBounds.min.x,
+          maxX: entranceBounds.max.x,
+          minZ: entranceBounds.min.z,
+          maxZ: entranceBounds.max.z,
+        },
+        radius: Math.max(8, Math.max(entranceSize.x, entranceSize.z) * 1.5),
+      });
+    }
+    mapComponents = buildMapComponents(outpost);
+    addCommandCenterMapComponent();
+    buildRoverMonitors();
+  }
+
+  // The command center is not named like the numbered outpost parts, so it gets
+  // its own map entry. Both the full map and the live minimap read this list.
+  function addCommandCenterMapComponent() {
+    if (!commandCenterRoot) return;
+    const footprint = commandCenterExteriorShell
+      ? new THREE.Box3().setFromObject(commandCenterExteriorShell)
+      : new THREE.Box3().setFromObject(commandCenterRoot);
+    if (footprint.isEmpty()) return;
+    mapComponents = mapComponents.filter(component => component.id !== '024');
+    mapComponents.push({
+      id: '024',
+      name: 'Command Center',
+      category: 'structure',
+      minX: footprint.min.x,
+      maxX: footprint.max.x,
+      minZ: footprint.min.z,
+      maxZ: footprint.max.z,
+      x: (footprint.min.x + footprint.max.x) / 2,
+      z: (footprint.min.z + footprint.max.z) / 2,
+    });
+    refreshMapBounds();
+  }
+
+  function refreshMapBounds() {
+    if (!mapComponents.length) {
+      mapBounds = null;
+      return;
+    }
+    mapBounds = {
+      minX: Math.min(...mapComponents.map(component => component.minX)),
+      maxX: Math.max(...mapComponents.map(component => component.maxX)),
+      minZ: Math.min(...mapComponents.map(component => component.minZ)),
+      maxZ: Math.max(...mapComponents.map(component => component.maxZ)),
+    };
+  }
+
+  // The command center GLB ships a two-screen console: the top and bottom
+  // downlink monitors. Each one is bound to one rover so the player can walk up,
+  // focus a screen, and drive that specific chassis from inside the base.
+  function findCommandCenterMonitors(root) {
+    // The asset names both screens "CommandCenterMonitor" and its frame/screen
+    // meshes "CommandCenterMonitor_1/_2". GLTFLoader force-uniquifies every node
+    // name, so the second screen ends up as "CommandCenterMonitor_1" as well.
+    // Match by prefix, then keep only the outermost match of each assembly so
+    // the meshes inside a monitor are not mistaken for extra monitors.
+    const matches = [];
+    root.traverse(object => {
+      if (object.name?.startsWith('CommandCenterMonitor')) matches.push(object);
+    });
+    return matches.filter((object) => {
+      let parent = object.parent;
+      while (parent) {
+        if (matches.includes(parent)) return false;
+        parent = parent.parent;
+      }
+      return true;
+    });
+  }
+
+  function buildRoverMonitors() {
+    roverMonitors.length = 0;
+    focusedRoverId = null;
+    if (!commandCenterRoot || !commandCenterModelRoot) return;
+
+    const screens = findCommandCenterMonitors(commandCenterModelRoot);
+    if (screens.length < ROVER_SLOTS.length) {
+      console.warn(
+        '[Rover monitor] Expected one screen per rover.',
+        { found: screens.length, names: screens.map(screen => screen.name) },
+      );
+    }
+    if (!screens.length) {
+      console.warn('[Rover monitor] No CommandCenterMonitor nodes found.');
+      return;
+    }
+
+    commandCenterRoot.updateMatrixWorld(true);
+    const placements = screens.map((object) => {
+      const bounds = new THREE.Box3().setFromObject(object);
+      return { object, bounds, center: bounds.getCenter(new THREE.Vector3()) };
+    });
+    // Highest screen gets ROVER 01 so the pair reads top-down like a console.
+    placements.sort((a, b) => b.center.y - a.center.y);
+
+    // The room's centre decides which way a screen should face, so the picture
+    // can never end up painted on the back of the panel.
+    const roomCenter = commandCenterExteriorShell
+      ? new THREE.Box3().setFromObject(commandCenterExteriorShell).getCenter(new THREE.Vector3())
+      : null;
+
+    placements.slice(0, ROVER_SLOTS.length).forEach((placement, index) => {
+      const slot = ROVER_SLOTS[index];
+      const tint = new THREE.Color(slot.tint);
+      // Glow only the inset screen surface (the smallest mesh of the monitor
+      // group), and clone its material so the tint never leaks elsewhere.
+      const meshes = [];
+      placement.object.traverse(child => {
+        if (!child.isMesh || !child.material) return;
+        const bounds = new THREE.Box3().setFromObject(child);
+        const size = bounds.getSize(new THREE.Vector3());
+        meshes.push({ child, volume: size.x * size.y * size.z });
+      });
+      meshes.sort((a, b) => a.volume - b.volume);
+
+      const screenMaterials = [];
+      const screenMesh = meshes.length ? meshes[0].child : null;
+      for (const { child } of meshes.slice(0, 1)) {
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        const cloned = materials.map(material => {
+          const copy = material.clone();
+          screenMaterials.push({
+            material: copy,
+            color: copy.emissive ? copy.emissive.clone() : null,
+            intensity: copy.emissiveIntensity ?? 1,
+          });
+          return copy;
+        });
+        child.material = Array.isArray(child.material) ? cloned : cloned[0];
+      }
+
+      roverMonitors.push({
+        roverId: slot.id,
+        label: slot.label,
+        object: placement.object,
+        center: placement.center,
+        bounds: placement.bounds,
+        tint,
+        screenMaterials,
+        feed: screenMesh ? createRoverFeed(screenMesh, placement.object, roomCenter) : null,
+      });
+    });
+
+    console.info('[Rover monitor] Downlink screens bound.', {
+      monitors: roverMonitors.map(monitor => monitor.label),
+    });
+    refreshRoverMonitors();
+    buildOutpostDisplay(roomCenter);
+    refreshLiveScreens();
+  }
+
+  // ── Live screens ──────────────────────────────────────────────────────────
+  // A capture is only possible when the surface is actually drawable, and the
+  // monitor sits inside a sealed module where the surface is hidden. So every
+  // capture briefly re-exposes the world, renders, then restores the interior
+  // state it replaced — the room looks untouched one frame later.
+  function captureSurfaceView(camera, target) {
+    const restore = {
+      terrain: moonTerrainMeshes.map(terrain => terrain.visible),
+      horizon: horizon.visible,
+      outpost: outpostRoot?.visible ?? false,
+      commandCenter: commandCenterRoot?.visible ?? false,
+      shell: commandCenterExteriorShell?.visible ?? false,
+      background: scene.background,
+    };
+    moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
+    horizon.visible = true;
+    if (outpostRoot) outpostRoot.visible = true;
+    if (commandCenterRoot) commandCenterRoot.visible = true;
+    if (commandCenterExteriorShell) commandCenterExteriorShell.visible = true;
+    scene.background = ASSET_CACHE.skyTexture ?? scene.background;
+
+    // No screen may sample the target it is being drawn into.
+    for (const plane of feedPlanes) plane.visible = false;
+
+    const previousTarget = renderer.getRenderTarget();
+    const previousShadowAutoUpdate = renderer.shadowMap.autoUpdate;
+    renderer.shadowMap.autoUpdate = false;
+    try {
+      renderer.setRenderTarget(target);
+      renderer.render(scene, camera);
+    } finally {
+      renderer.setRenderTarget(previousTarget);
+      renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
+      for (const plane of feedPlanes) plane.visible = true;
+      moonTerrainMeshes.forEach((terrain, index) => {
+        terrain.visible = restore.terrain[index] ?? true;
+      });
+      horizon.visible = restore.horizon;
+      if (outpostRoot) outpostRoot.visible = restore.outpost;
+      if (commandCenterRoot) commandCenterRoot.visible = restore.commandCenter;
+      if (commandCenterExteriorShell) commandCenterExteriorShell.visible = restore.shell;
+      scene.background = restore.background;
+    }
+  }
+
+  // A screen modelled as a slab, or a wall panel tilted downward for viewing,
+  // has its real surface at an angle the bounding box completely hides — the
+  // command center's big display is a single quad pitched ~35 degrees. So measure
+  // the geometry itself: cluster triangles by normal, take the largest face, and
+  // return its exact plane, basis and size. Fitting to that face is what makes a
+  // picture land flat on the glass and cover all of it.
+  function fitPlaneToLargestFace(mesh, roomCenter) {
+    const geometry = mesh.geometry;
+    const position = geometry?.attributes?.position;
+    if (!position) return null;
+    const index = geometry.index;
+    const triangleCount = Math.floor((index ? index.count : position.count) / 3);
+    if (!triangleCount) return null;
+
+    const matrix = mesh.matrixWorld;
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const ab = new THREE.Vector3();
+    const ac = new THREE.Vector3();
+    const normal = new THREE.Vector3();
+    const vertex = (target, i) => target.fromBufferAttribute(position, i).applyMatrix4(matrix);
+
+    const clusters = [];
+    for (let t = 0; t < triangleCount; t += 1) {
+      const i0 = index ? index.getX(t * 3) : t * 3;
+      const i1 = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+      const i2 = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+      vertex(a, i0);
+      vertex(b, i1);
+      vertex(c, i2);
+      ab.subVectors(b, a);
+      ac.subVectors(c, a);
+      normal.crossVectors(ab, ac);
+      const area = normal.length() * 0.5;
+      if (area < 1e-9) continue;
+      normal.normalize();
+      let cluster = null;
+      for (const candidate of clusters) {
+        const magnitude = candidate.sum.length();
+        if (magnitude > 0 && candidate.sum.dot(normal) > 0.99 * magnitude) {
+          cluster = candidate;
+          break;
+        }
+      }
+      if (!cluster) {
+        cluster = { sum: new THREE.Vector3(), area: 0, points: [] };
+        clusters.push(cluster);
+      }
+      cluster.sum.addScaledVector(normal, area);
+      cluster.area += area;
+      cluster.points.push(a.clone(), b.clone(), c.clone());
+    }
+    if (!clusters.length) return null;
+
+    let face = clusters[0];
+    for (const candidate of clusters) if (candidate.area > face.area) face = candidate;
+
+    const facing = face.sum.clone().normalize();
+    const centroid = new THREE.Vector3();
+    for (const point of face.points) centroid.add(point);
+    centroid.divideScalar(face.points.length);
+    if (roomCenter && facing.dot(roomCenter.clone().sub(centroid)) < 0) facing.negate();
+
+    // Orthonormal basis: right across the glass, up the glass, out of it.
+    const reference = Math.abs(facing.y) > 0.95
+      ? new THREE.Vector3(0, 0, 1)
+      : new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(reference, facing).normalize();
+    const up = new THREE.Vector3().crossVectors(facing, right).normalize();
+
+    let uMin = Infinity;
+    let uMax = -Infinity;
+    let vMin = Infinity;
+    let vMax = -Infinity;
+    let depth = 0;
+    for (const point of face.points) {
+      const u = point.dot(right);
+      const v = point.dot(up);
+      if (u < uMin) uMin = u;
+      if (u > uMax) uMax = u;
+      if (v < vMin) vMin = v;
+      if (v > vMax) vMax = v;
+      depth += point.dot(facing);
+    }
+    depth /= face.points.length;
+
+    const center = new THREE.Vector3()
+      .addScaledVector(right, (uMin + uMax) / 2)
+      .addScaledVector(up, (vMin + vMax) / 2)
+      .addScaledVector(facing, depth);
+
+    return {
+      normal: facing,
+      right,
+      up,
+      center,
+      width: Math.max(uMax - uMin, 0.02),
+      height: Math.max(vMax - vMin, 0.02),
+    };
+  }
+
+  // Lay a panel over the display's real face, just clear of it. The size and the
+  // angle both come from that face, so the picture covers the whole screen.
+  function createFeedPlane(screenMesh, bodyObject, roomCenter, texture, face) {
+    if (!face) return null;
+    const normal = face.normal;
+    const bodyBounds = bodyObject === screenMesh
+      ? new THREE.Box3().setFromObject(screenMesh)
+      : new THREE.Box3().setFromObject(bodyObject);
+    const bodySize = bodyBounds.getSize(new THREE.Vector3());
+    const bodyCenter = bodyBounds.getCenter(new THREE.Vector3());
+    const bodyExtent = Math.abs(normal.x) * bodySize.x * 0.5
+      + Math.abs(normal.y) * bodySize.y * 0.5
+      + Math.abs(normal.z) * bodySize.z * 0.5;
+    // How far the glass sits inside its housing along the facing direction. A
+    // flat face has no housing of its own, so a hair of clearance is enough.
+    const flatFace = bodyObject === screenMesh;
+    const faceDepth = flatFace ? 0 : Math.max(face.center.clone().sub(bodyCenter).dot(normal), 0);
+    const clearance = flatFace ? 0.012 : Math.max(0.012, bodyExtent - faceDepth + 0.012);
+
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        map: texture,
+        toneMapped: false,
+        color: 0xffffff,
+        side: THREE.DoubleSide,
+      }),
+    );
+    plane.name = 'Live screen';
+    plane.position.copy(face.center).addScaledVector(normal, clearance);
+    plane.quaternion.setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(face.right, face.up, normal),
+    );
+    plane.scale.set(face.width, face.height, 1);
+    plane.updateMatrixWorld(true);
+    plane.renderOrder = 2;
+
+    // attach() keeps the world placement while making the plane a child of the
+    // command center, so it hides and restores together with the interior.
+    commandCenterRoot.attach(plane);
+    feedPlanes.push(plane);
+    return { plane, panelWidth: face.width, panelHeight: face.height };
+  }
+
+  function feedRenderTarget(panelAspect, baseWidth) {
+    let width = baseWidth;
+    let height = Math.max(48, Math.round(width / Math.max(panelAspect, 0.2)));
+    if (height > 512) {
+      height = 512;
+      width = Math.round(height * Math.max(panelAspect, 0.2));
+    }
+    return new THREE.WebGLRenderTarget(width, height, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      generateMipmaps: false,
+      depthBuffer: true,
+    });
+  }
+
+  // ── Small console monitors: the rover itself, where it is parked ──────────
+  function createRoverFeed(screenMesh, monitorGroup, roomCenter) {
+    const face = fitPlaneToLargestFace(screenMesh, roomCenter);
+    if (!face) return null;
+    // The capture matches the glass aspect exactly, so the picture fills it
+    // without stretching or letterboxing.
+    const target = feedRenderTarget(face.width / face.height, ROVER_FEED_WIDTH);
+    const camera = new THREE.PerspectiveCamera(
+      ROVER_FEED_FOV,
+      face.width / face.height,
+      0.5,
+      900,
+    );
+    const created = createFeedPlane(screenMesh, monitorGroup, roomCenter, target.texture, face);
+    if (!created) return null;
+    return { plane: created.plane, camera, target, pose: null };
+  }
+
+  function renderRoverFeed(feed, rover) {
+    const position = rover.root.position;
+    feed.camera.position.copy(position).add(roverFeedOffset);
+    feed.camera.lookAt(position.x, position.y + 1, position.z);
+    captureSurfaceView(feed.camera, feed.target);
+    feed.pose = { x: position.x, z: position.z, heading: rover.heading };
+  }
+
+  function roverHasMoved(feed, rover) {
+    if (!feed.pose) return true;
+    const position = rover.root.position;
+    return Math.abs(feed.pose.x - position.x) > ROVER_FEED_MOVE_EPSILON
+      || Math.abs(feed.pose.z - position.z) > ROVER_FEED_MOVE_EPSILON
+      || Math.abs(feed.pose.heading - rover.heading) > 0.05;
+  }
+
+  function refreshRoverFeeds(roverFilter = null, force = false) {
+    if (isDestroyed || !roverMonitors.length) return false;
+    let rendered = false;
+    for (const monitor of roverMonitors) {
+      if (!monitor.feed) continue;
+      if (roverFilter !== null && monitor.roverId !== roverFilter) continue;
+      const rover = roverById(monitor.roverId);
+      if (!rover) continue;
+      if (!force && !roverHasMoved(monitor.feed, rover)) continue;
+      renderRoverFeed(monitor.feed, rover);
+      rendered = true;
+    }
+    return rendered;
+  }
+
+  // ── Large wall display: the whole outpost, live ───────────────────────────
+  function buildOutpostDisplay(roomCenter) {
+    if (outpostFeed || !commandCenterModelRoot) return;
+    const screens = [];
+    commandCenterModelRoot.traverse(child => {
+      if (!child.isMesh || !child.material) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      const name = materials.find(material => material?.name)?.name;
+      if (OUTPOST_SCREEN_MATERIALS.includes(name)) screens.push({ mesh: child, name });
+    });
+    if (!screens.length) {
+      console.warn('[Outpost display] No large screen mesh found.', {
+        materials: OUTPOST_SCREEN_MATERIALS,
+      });
+      return;
+    }
+    // Prefer the authored screen material over the fallback panel, then take the
+    // largest match in case the artist reused it.
+    screens.sort((a, b) => {
+      const rank = OUTPOST_SCREEN_MATERIALS.indexOf(a.name)
+        - OUTPOST_SCREEN_MATERIALS.indexOf(b.name);
+      if (rank !== 0) return rank;
+      return new THREE.Box3().setFromObject(b.mesh).getSize(new THREE.Vector3()).length()
+        - new THREE.Box3().setFromObject(a.mesh).getSize(new THREE.Vector3()).length();
+    });
+    const screenMesh = screens[0].mesh;
+    const face = fitPlaneToLargestFace(screenMesh, roomCenter);
+    if (!face) {
+      console.warn('[Outpost display] Could not fit a plane to the screen face.');
+      return;
+    }
+    // Capture at the glass' own aspect so the picture covers the whole screen.
+    const target = feedRenderTarget(face.width / face.height, OUTPOST_FEED_WIDTH);
+    const created = createFeedPlane(screenMesh, screenMesh, roomCenter, target.texture, face);
+    if (!created) return;
+    outpostFeed = {
+      plane: created.plane,
+      target,
+      camera: new THREE.PerspectiveCamera(
+        OUTPOST_FEED_FOV,
+        face.width / face.height,
+        1,
+        30000,
+      ),
+    };
+    console.info('[Outpost display] Large screen bound.', {
+      mesh: screenMesh.name,
+      material: screens[0].name,
+      size: [Math.round(face.width * 100) / 100, Math.round(face.height * 100) / 100],
+      pitchDeg: Math.round(Math.asin(-face.normal.y) * 180 / Math.PI),
+    });
+  }
+
+  function outpostFeedBounds() {
+    if (!outpostRoot) return null;
+    const bounds = new THREE.Box3().setFromObject(outpostRoot);
+    // Inside the command center its root is reparented to the scene, so the
+    // outpost box alone would leave the building out of shot.
+    if (commandCenterRoot) bounds.union(new THREE.Box3().setFromObject(commandCenterRoot));
+    return bounds.isEmpty() ? null : bounds;
+  }
+
+  function refreshOutpostFeed() {
+    if (isDestroyed || !outpostFeed || !outpostRoot) return false;
+    const bounds = outpostFeedBounds();
+    if (!bounds) return false;
+
+    // Comms masts and solar towers dominate the raw bounding box (94 x 72 x 72),
+    // so aiming at its centre would put the camera 36 units above the ground and
+    // shove the whole base to the far distance. Frame the base instead: the full
+    // footprint plus a modest band of height above the deck.
+    const size = bounds.getSize(outpostFeedSize);
+    const heightBand = Math.min(size.y, Math.max(size.x, size.z) * 0.35);
+    const center = bounds.getCenter(outpostFeedCenter);
+    center.y = bounds.min.y + heightBand * 0.5;
+    const groundY = bounds.min.y;
+    const topY = bounds.min.y + heightBand;
+
+    const camera = outpostFeed.camera;
+    // Turn the scaler's azimuth/elevation into the camera direction for this
+    // capture, and apply the lens angle before the fit is solved.
+    const azimuth = THREE.MathUtils.degToRad(outpostFeedView.azimuthDeg);
+    const elevation = THREE.MathUtils.degToRad(outpostFeedView.elevationDeg);
+    const cosElevation = Math.cos(elevation);
+    outpostFeedDirection.set(
+      Math.sin(azimuth) * cosElevation,
+      Math.sin(elevation),
+      Math.cos(azimuth) * cosElevation,
+    ).normalize();
+    camera.fov = outpostFeedView.fov;
+    const tanVertical = Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
+    const tanHorizontal = tanVertical * camera.aspect;
+
+    // Solve the distance that fits every corner of the base rather than guessing
+    // from a bounding radius: on a wide panel the vertical field of view alone
+    // would leave the base as a speck.
+    camera.position.copy(center).addScaledVector(outpostFeedDirection, 1);
+    camera.lookAt(center.x, center.y, center.z);
+    camera.updateMatrixWorld(true);
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+    const back = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2);
+
+    const corner = new THREE.Vector3();
+    let fitWidth = 0;
+    let fitHeight = 0;
+    for (let i = 0; i < 8; i += 1) {
+      corner.set(
+        (i & 1) ? bounds.max.x : bounds.min.x,
+        (i & 2) ? topY : groundY,
+        (i & 4) ? bounds.max.z : bounds.min.z,
+      ).sub(center);
+      const alongView = corner.dot(back);
+      fitWidth = Math.max(fitWidth, alongView + Math.abs(corner.dot(right)) / tanHorizontal);
+      fitHeight = Math.max(fitHeight, alongView + Math.abs(corner.dot(up)) / tanVertical);
+    }
+    // Fill the panel's width and let the depth run slightly past the top and
+    // bottom edges — a wide display should read as a vista, not a stamp.
+    const distance = Math.max(fitWidth, fitHeight * OUTPOST_FEED_VERTICAL_FIT, 8) * 1.02;
+
+    camera.position.copy(center).addScaledVector(outpostFeedDirection, distance);
+    camera.near = Math.max(distance * 0.05, 0.5);
+    camera.far = 30000;
+    camera.updateProjectionMatrix();
+    camera.lookAt(center.x, center.y, center.z);
+
+    captureSurfaceView(camera, outpostFeed.target);
+    return true;
+  }
+
+  // Both screen families refresh together: the wall display is a live view, the
+  // rover screens only re-capture the chassis that actually moved since the last
+  // frame they were drawn.
+  function refreshLiveScreens() {
+    refreshRoverFeeds();
+    refreshOutpostFeed();
+  }
+
+  // In-game scaler for the wall display. Values are stored here and applied on
+  // the next capture — the live timer inside the command center picks them up
+  // within a quarter second, which keeps a dragged slider from queueing a whole
+  // scene render on every input event.
+  function getOutpostFeedView() {
+    return { ...outpostFeedView };
+  }
+
+  function setOutpostFeedView(next = {}) {
+    if (Number.isFinite(next.azimuthDeg)) {
+      outpostFeedView.azimuthDeg = ((next.azimuthDeg % 360) + 360) % 360;
+    }
+    if (Number.isFinite(next.elevationDeg)) {
+      outpostFeedView.elevationDeg = THREE.MathUtils.clamp(next.elevationDeg, 2, 88);
+    }
+    if (Number.isFinite(next.fov)) {
+      outpostFeedView.fov = THREE.MathUtils.clamp(next.fov, 15, 90);
+    }
+    return getOutpostFeedView();
+  }
+
+  function resetOutpostFeedView() {
+    outpostFeedView.azimuthDeg = 19;
+    outpostFeedView.elevationDeg = 24;
+    outpostFeedView.fov = OUTPOST_FEED_FOV;
+    return getOutpostFeedView();
+  }
+
+  // The picture now covers the whole glass, so the focus cue rides on its
+  // brightness: dim while idle, brighter when aimed at, brightest while linked.
+  function refreshRoverMonitors() {
+    for (const monitor of roverMonitors) {
+      const linked = roverCameraActive && activeRover?.id === monitor.roverId;
+      const focused = focusedRoverId === monitor.roverId;
+      for (const entry of monitor.screenMaterials) {
+        const material = entry.material;
+        if (!material.emissive) continue;
+        if (entry.color) material.emissive.copy(entry.color);
+        material.emissive.lerp(monitor.tint, linked ? 0.9 : focused ? 0.55 : 0.2);
+        material.emissiveIntensity = entry.intensity * (linked ? 2.4 : focused ? 1.6 : 1);
+      }
+      if (monitor.feed?.plane) {
+        monitor.feed.plane.material.color.setScalar(linked ? 1 : focused ? 0.94 : 0.85);
+      }
+    }
+  }
+
+  function loadCommandCenter(outpost) {
+    loadCachedGLTF(
+      '/lunar/Command_Center/Command%20center%20full.glb',
+      model => mountCommandCenter(outpost, model),
+      undefined,
+      error => console.warn('Command center model could not be loaded.', error),
+    );
+  }
 
   function onTerrainGeometryReady(entry, geometry) {
     if (isDestroyed) return;
@@ -1306,9 +2234,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
           const viewOffset = Math.max(outpostSize.x, outpostSize.z) * 0.78;
           firstPersonStart.set(
             outpostCenter.x + viewOffset * 0.7,
-            surfaceY + FIRST_PERSON_EYE_HEIGHT,
+            surfaceY + playerCameraHeight,
             outpostCenter.z + viewOffset * 0.7
           );
+          firstPersonStartGroundY = surfaceY;
           firstPersonLookAt.set(outpostCenter.x, outpostBounds.min.y + outpostSize.y * 0.45, outpostCenter.z);
 
           // Keep a close, elevated overview ready for the initial arrival and
@@ -1343,20 +2272,17 @@ export function createLunarEngine(canvas, callbacks = {}) {
           scene.add(outpost);
           outpost.updateMatrixWorld(true);
           outpostRoot = outpost;
+          mountRovers(outpostBounds);
+          loadCommandCenter(outpost);
+          buildEventVisualization();
+
           addOutpostPartLabels(outpost);
           componentTargets = buildComponentTargets(outpost);
           mapComponents = buildMapComponents(outpost);
           // Rasterize the component surfaces into walker collision: their
           // walls stop the walker, while ramps and low decks stay climbable.
           outpostHeightField = buildOutpostHeightField(outpost);
-          if (mapComponents.length) {
-            mapBounds = {
-              minX: Math.min(...mapComponents.map(component => component.minX)),
-              maxX: Math.max(...mapComponents.map(component => component.maxX)),
-              minZ: Math.min(...mapComponents.map(component => component.minZ)),
-              maxZ: Math.max(...mapComponents.map(component => component.maxZ))
-            };
-          }
+          refreshMapBounds();
           setChallengeFlags(challengeReadinessFlags);
           startNextEventPresentation();
 
@@ -2075,9 +3001,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
     } catch (error) {
       console.error('[TaskConsole] mount failed, entry continues without console.', error);
     }
-    camera.position.set(0, FIRST_PERSON_EYE_HEIGHT, 2.55);
+    camera.position.set(0, playerCameraHeight, 2.55);
     camera.rotation.order = 'YXZ';
-    camera.lookAt(0, FIRST_PERSON_EYE_HEIGHT, -1.5);
+    camera.lookAt(0, playerCameraHeight, -1.5);
     firstPersonYaw = camera.rotation.y;
     firstPersonPitch = camera.rotation.x;
     activeModuleInteriorLight = new THREE.PointLight(0xe4edff, 14, 24);
@@ -2098,9 +3024,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function exitModuleInterior() {
     if (!activeModuleInterior) return;
-    scene.remove(activeModuleInterior);
+    if (commandCenterInteriorActive) {
+      if (commandCenterExteriorShell) commandCenterExteriorShell.visible = true;
+      if (outpostRoot && commandCenterRoot) outpostRoot.attach(commandCenterRoot);
+      commandCenterInteriorActive = false;
+    } else {
+      scene.remove(activeModuleInterior);
+      disposeModuleInterior(activeModuleInterior);
+    }
     scene.remove(activeModuleInteriorLight);
-    disposeModuleInterior(activeModuleInterior);
     unmountTaskConsole();
     consoleEditMode = false;
     consoleDragging = false;
@@ -2143,6 +3075,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (cameraMode !== 'first-person' || !activeComponentTarget) return;
     const target = activeComponentTarget;
     moduleReturnMode = 'exterior';
+    if (target.roomType === 'commandCenter') {
+      enterCommandCenterInterior(target);
+      return;
+    }
     if (target.roomType === 'greenhouse') {
       enterGreenhouseFromExterior();
       return;
@@ -2152,6 +3088,74 @@ export function createLunarEngine(canvas, callbacks = {}) {
     } else {
       ensureComponentInteriorKit(() => enterModuleInterior(target));
     }
+  }
+
+  function enterCommandCenterInterior(target) {
+    if (!commandCenterRoot || !commandCenterModelRoot || activeModuleInterior) return;
+    // Capture the downlink images while the surface is still on screen — once
+    // the shell closes in, the last known rover positions are what the console
+    // shows until the player links up again.
+    refreshLiveScreens();
+    outsideCameraPosition = camera.position.clone();
+    outsideCameraYaw = firstPersonYaw;
+    outsideCameraPitch = firstPersonPitch;
+    outsideBackground = scene.background;
+
+    // Keep the full GLB in the scene while hiding only its opaque exterior
+    // shell, so the authored interior equipment remains visible around the player.
+    scene.attach(commandCenterRoot);
+    commandCenterRoot.visible = true;
+    if (outpostRoot) outpostRoot.visible = false;
+    moonTerrainMeshes.forEach(terrain => { terrain.visible = false; });
+    horizon.visible = false;
+    if (commandCenterExteriorShell) commandCenterExteriorShell.visible = false;
+    scene.background = new THREE.Color(0x10151b);
+
+    activeModuleInterior = commandCenterRoot;
+    commandCenterInteriorActive = true;
+    const interiorNode = commandCenterModelRoot.getObjectByName('CC_Module') || commandCenterModelRoot;
+    commandCenterRoot.updateMatrixWorld(true);
+    // CC_Module's box starts well above the room floor, so clamping to it would
+    // pin the eye ~1.5 units too high and read as a floating free camera. The
+    // exterior shell is the actual room: its min.y is the deck the player stands
+    // on, and its plan is the walkable footprint the player camera expects.
+    const shellBounds = commandCenterExteriorShell
+      ? new THREE.Box3().setFromObject(commandCenterExteriorShell)
+      : null;
+    activeModuleInteriorBounds = shellBounds && !shellBounds.isEmpty()
+      ? shellBounds
+      : new THREE.Box3().setFromObject(interiorNode);
+
+    // Stand on the deck at the same eye height the player camera uses outside.
+    const interiorSpawn = commandCenterRoot.localToWorld(new THREE.Vector3(0, 0, 1.8));
+    interiorSpawn.y = activeModuleInteriorBounds.min.y + playerCameraHeight;
+    camera.position.copy(interiorSpawn);
+    camera.rotation.order = 'YXZ';
+    // Walk in facing the rover downlink console when the model exposes it, so
+    // the monitors are immediately in view instead of behind the player.
+    const monitorAim = roverMonitors.length
+      ? roverMonitors
+        .reduce((sum, monitor) => sum.add(monitor.center), new THREE.Vector3())
+        .divideScalar(roverMonitors.length)
+      : null;
+    if (monitorAim) camera.lookAt(monitorAim);
+    else camera.rotation.set(0, Math.PI / 2, 0);
+    firstPersonYaw = camera.rotation.y;
+    firstPersonPitch = camera.rotation.x;
+    activeModuleInteriorLight = new THREE.PointLight(0xe4edff, 16, 26);
+    activeModuleInteriorLight.position.copy(interiorSpawn).add(new THREE.Vector3(-1, 1, 0));
+    scene.add(activeModuleInteriorLight);
+    cameraMode = 'interior';
+    onModeChange(cameraMode);
+    controls.enabled = false;
+    ensurePointerLocked();
+    setPrompt(null);
+    onInsidePanelChange({
+      visible: true,
+      label: 'INSIDE COMMAND CENTER · E TO EXIT',
+      buttonText: 'EXIT COMMAND CENTER',
+      componentId: target.id,
+    });
   }
 
   function prepareAirlockInterior(gltfScene) {
@@ -2198,7 +3202,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
     const roomSize = airlockInteriorBounds.getSize(new THREE.Vector3());
     const cameraY = Math.min(
-      airlockInteriorBounds.min.y + FIRST_PERSON_EYE_HEIGHT,
+      airlockInteriorBounds.min.y + playerCameraHeight,
       airlockInteriorBounds.max.y - 0.3
     );
     const entryInset = Math.max(0.8, Math.max(roomSize.x, roomSize.z) * 0.12);
@@ -2366,7 +3370,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (airlockInteriorLight) scene.remove(airlockInteriorLight);
     const size = greenhouseInteriorBounds.getSize(new THREE.Vector3());
     const y = Math.min(
-      greenhouseInteriorBounds.min.y + FIRST_PERSON_EYE_HEIGHT,
+      greenhouseInteriorBounds.min.y + playerCameraHeight,
       greenhouseInteriorBounds.max.y - 0.3
     );
     const inset = Math.max(0.8, Math.max(size.x, size.z) * 0.12);
@@ -2520,15 +3524,191 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   // Camera & Mode Controls
+  function roverById(roverId) {
+    return rovers.find(rover => rover.id === roverId) ?? null;
+  }
+
+  function nearestRoverTo(position) {
+    let best = rovers[0] ?? null;
+    let bestDistance = Infinity;
+    for (const rover of rovers) {
+      const distance = rover.root.position.distanceTo(position);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = rover;
+      }
+    }
+    return best;
+  }
+
+  // Remote links are started from a command center monitor; the interior is
+  // hidden for the duration while the real moon and outpost come back on the
+  // feed, then everything is restored exactly as it was on disconnect.
+  function beginRoverControl(roverId, options = {}) {
+    const remote = Boolean(options.remote);
+    if (!rovers.length || eventCinematic || dayStartCameraTransition) return false;
+    if (roverCameraActive) stopRoverControl({ silent: true });
+    if (!remote && cameraMode === 'interior') return false;
+
+    const rover = roverId != null ? roverById(roverId) : nearestRoverTo(camera.position);
+    if (!rover) return false;
+
+    releaseAllKeys();
+    firstPersonVelocity.set(0, 0, 0);
+    airborne = false;
+    jumpVelocity = 0;
+    roverCameraSavedPosition.copy(camera.position);
+    roverCameraSavedQuaternion.copy(camera.quaternion);
+    roverCameraSavedTarget.copy(controls.target);
+    roverCameraWasPointerLocked = document.pointerLockElement === canvas;
+    if (roverCameraWasPointerLocked) document.exitPointerLock?.();
+
+    if (remote) {
+      remoteControlReturn = {
+        position: camera.position.clone(),
+        quaternion: camera.quaternion.clone(),
+        yaw: firstPersonYaw,
+        pitch: firstPersonPitch,
+        // Two different skies: the interior colour to hand back on disconnect,
+        // and the real lunar sky to show while the downlink is live.
+        background: scene.background,
+        feedBackground: outsideBackground ?? scene.background,
+        terrainVisibility: moonTerrainMeshes.map(terrain => terrain.visible),
+        horizonVisibility: horizon.visible,
+        outpostVisibility: outpostRoot?.visible ?? true,
+        commandCenterVisibility: commandCenterRoot?.visible ?? true,
+        shellVisibility: commandCenterExteriorShell?.visible ?? true,
+      };
+      // Put the moon back on screen: the monitor feed is the real rover out on
+      // the surface, so the interior shell must not sit in front of the camera.
+      moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
+      horizon.visible = true;
+      if (outpostRoot) outpostRoot.visible = true;
+      if (commandCenterRoot) commandCenterRoot.visible = false;
+      scene.background = remoteControlReturn.feedBackground;
+      // Hide the inside panel so the HUD falls back to the rover controls.
+      onInsidePanelChange({ visible: false, label: '', buttonText: '' });
+    }
+
+    controls.enabled = false;
+    roverCameraOrbitYaw = 0;
+    roverCameraOrbitPitch = 0.28;
+    roverCameraDistance = 12;
+    if (canvas) canvas.style.cursor = 'grab';
+    setPrompt(null);
+    focusedRoverId = null;
+    roverMonitorPromptDismissed = false;
+    rover.speed = 0;
+    rover.steering = 0;
+    activeRover = rover;
+    roverCameraActive = true;
+    roverRemoteControl = remote;
+    updateRoverCamera(0);
+    refreshRoverMonitors();
+    onRoverCameraChange(true, { roverId: rover.id, roverLabel: rover.label, remote });
+    return true;
+  }
+
+  function stopRoverControl(options = {}) {
+    if (!roverCameraActive) return;
+    // Final capture while the rover is still lit by the open surface: this is
+    // the picture the console keeps after the player lets go of the controls.
+    refreshLiveScreens();
+    const silent = Boolean(options.silent);
+    const previousRover = activeRover;
+    const wasRemote = roverRemoteControl;
+    const restore = remoteControlReturn;
+    remoteControlReturn = null;
+
+    roverCameraActive = false;
+    roverRemoteControl = false;
+    roverCameraDragging = false;
+    activeRover = null;
+    if (previousRover) {
+      previousRover.speed = 0;
+      previousRover.steering = 0;
+    }
+    if (canvas) canvas.style.cursor = '';
+    releaseAllKeys();
+    firstPersonVelocity.set(0, 0, 0);
+    focusedRoverId = null;
+    roverMonitorPromptDismissed = false;
+    refreshRoverMonitors();
+    onRoverCameraChange(false, {
+      roverId: previousRover?.id ?? null,
+      roverLabel: previousRover?.label ?? '',
+      remote: wasRemote,
+    });
+
+    if (wasRemote && restore) {
+      moonTerrainMeshes.forEach((terrain, index) => {
+        terrain.visible = restore.terrainVisibility[index] ?? false;
+      });
+      horizon.visible = restore.horizonVisibility;
+      if (outpostRoot) outpostRoot.visible = restore.outpostVisibility;
+      if (commandCenterRoot) commandCenterRoot.visible = restore.commandCenterVisibility;
+      if (commandCenterExteriorShell) commandCenterExteriorShell.visible = restore.shellVisibility;
+      scene.background = restore.background;
+      camera.position.copy(restore.position);
+      camera.quaternion.copy(restore.quaternion);
+      firstPersonYaw = restore.yaw;
+      firstPersonPitch = restore.pitch;
+      camera.rotation.order = 'YXZ';
+      camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
+      cameraMode = 'interior';
+      controls.enabled = false;
+      onModeChange(cameraMode);
+      onInsidePanelChange({
+        visible: true,
+        label: 'INSIDE COMMAND CENTER · E TO EXIT',
+        buttonText: 'EXIT COMMAND CENTER',
+        componentId: '024',
+      });
+      if (!silent) ensurePointerLocked();
+      return;
+    }
+
+    if (silent) return;
+
+    camera.position.copy(roverCameraSavedPosition);
+    camera.quaternion.copy(roverCameraSavedQuaternion);
+    controls.target.copy(roverCameraSavedTarget);
+    controls.enabled = cameraMode === 'free';
+    if (controls.enabled) controls.update();
+    if (cameraMode === 'first-person' && roverCameraWasPointerLocked) {
+      canvas.requestPointerLock?.();
+    }
+  }
+
+  function toggleRoverCamera() {
+    if (roverCameraActive) {
+      stopRoverControl();
+      return;
+    }
+    if (eventCinematic || dayStartCameraTransition || cameraMode === 'interior') return;
+    beginRoverControl(null, { remote: false });
+  }
+
+  // Called by the proximity prompt: link the focused command center monitor.
+  function controlFocusedRover() {
+    if (focusedRoverId == null) return false;
+    return beginRoverControl(focusedRoverId, { remote: commandCenterInteriorActive });
+  }
+
+  // Called from the HUD / prompt button with an explicit rover id.
+  function controlRover(roverId) {
+    return beginRoverControl(roverId, { remote: commandCenterInteriorActive });
+  }
+
   function toggleCameraMode() {
-    if (eventCinematic) return;
+    if (eventCinematic || roverCameraActive) return;
     if (cameraMode === 'free' && (!outpostRoot || !heightGrid)) return;
     if (cameraMode === 'free') {
       savedFreePosition.copy(camera.position);
       savedFreeTarget.copy(controls.target);
       cameraMode = 'first-person';
       controls.enabled = false;
-      camera.position.copy(firstPersonStart);
+      camera.position.copy(playerStandPosition());
       camera.rotation.order = 'YXZ';
       camera.lookAt(firstPersonLookAt);
       firstPersonYaw = camera.rotation.y;
@@ -2547,7 +3727,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function toggleEarthView() {
-    if (eventCinematic) return;
+    if (eventCinematic || roverCameraActive) return;
     if (!earthMesh || cameraMode !== 'free') return;
     if (earthViewActive) {
       camera.position.copy(savedEarthViewPosition);
@@ -2570,7 +3750,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     savedEarthFov = camera.fov;
     savedEarthScale = earthMesh.scale.x;
 
-    camera.position.copy(firstPersonStart);
+    camera.position.copy(playerStandPosition());
     camera.fov = 120;
     camera.updateProjectionMatrix();
     controls.maxPolarAngle = Math.PI * 0.95;
@@ -2639,6 +3819,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleConsolePointerDown(event) {
+    if (roverCameraActive && event.button === 0) {
+      event.preventDefault();
+      roverCameraDragging = true;
+      roverCameraPointerX = event.clientX;
+      roverCameraPointerY = event.clientY;
+      try { canvas.setPointerCapture?.(event.pointerId); } catch (error) { /* noop */ }
+      canvas.style.cursor = 'grabbing';
+      return;
+    }
     if (!consoleEditMode || !taskConsoleGroup || event.button !== 0) return;
     taskRaycaster.setFromCamera(consolePointerNdcFromEvent(event), camera);
     const hits = taskRaycaster.intersectObjects(taskConsoleGroup.children, true);
@@ -2656,6 +3845,20 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleConsolePointerMove(event) {
+    if (roverCameraActive && roverCameraDragging) {
+      const deltaX = event.clientX - roverCameraPointerX;
+      const deltaY = event.clientY - roverCameraPointerY;
+      roverCameraPointerX = event.clientX;
+      roverCameraPointerY = event.clientY;
+      roverCameraOrbitYaw -= deltaX * 0.006;
+      roverCameraOrbitPitch = THREE.MathUtils.clamp(
+        roverCameraOrbitPitch - deltaY * 0.004,
+        0.04,
+        1.05,
+      );
+      event.preventDefault();
+      return;
+    }
     if (!consoleEditMode || !consoleDragging || !taskConsoleGroup) return;
     event.preventDefault();
     taskRaycaster.setFromCamera(consolePointerNdcFromEvent(event), camera);
@@ -2680,6 +3883,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleConsolePointerUp() {
+    if (roverCameraDragging) {
+      roverCameraDragging = false;
+      if (canvas) canvas.style.cursor = roverCameraActive ? 'grab' : '';
+    }
     if (!consoleDragging) return;
     consoleDragging = false;
     if (canvas) canvas.style.cursor = consoleEditMode ? 'move' : '';
@@ -2688,6 +3895,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleConsoleWheel(event) {
+    if (roverCameraActive) {
+      event.preventDefault();
+      roverCameraDistance = THREE.MathUtils.clamp(
+        roverCameraDistance * (event.deltaY < 0 ? 0.9 : 1 / 0.9),
+        5,
+        28,
+      );
+      return;
+    }
     if (!consoleEditMode || !taskConsoleInner || !taskConsoleGroup) return;
     event.preventDefault();
     const next = THREE.MathUtils.clamp(
@@ -2700,7 +3916,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleCanvasClick() {
-    if (eventCinematic) return;
+    if (eventCinematic || roverCameraActive) return;
     if (consoleEditMode) return;
     if (['first-person', 'interior'].includes(cameraMode) && document.pointerLockElement !== canvas) {
       canvas.requestPointerLock?.();
@@ -2732,7 +3948,106 @@ export function createLunarEngine(canvas, callbacks = {}) {
   function handleMouseMove(event) {
     if (eventCinematic || !['first-person', 'interior'].includes(cameraMode) || document.pointerLockElement !== canvas) return;
     firstPersonYaw -= event.movementX * 0.0022;
-    firstPersonPitch = THREE.MathUtils.clamp(firstPersonPitch - event.movementY * 0.0018, -1.45, 1.45);
+    firstPersonPitch = THREE.MathUtils.clamp(
+      firstPersonPitch - event.movementY * 0.0018,
+      -PLAYER_CAMERA.pitchLimit,
+      PLAYER_CAMERA.pitchLimit,
+    );
+  }
+
+  function updateRoverCamera(dt) {
+    if (!activeRover) return;
+    const chassis = activeRover.root;
+    // This rover model's nose points along local +X. Use its world-space
+    // forward vector so the chase camera stays centered behind the chassis.
+    roverCameraForward.set(1, 0, 0).applyQuaternion(chassis.quaternion).normalize();
+    roverCameraDesiredPosition.set(-Math.cos(roverCameraOrbitYaw), 0, Math.sin(roverCameraOrbitYaw))
+      .applyQuaternion(chassis.quaternion)
+      .multiplyScalar(roverCameraDistance * Math.cos(roverCameraOrbitPitch));
+    roverCameraDesiredPosition.add(chassis.position);
+    roverCameraDesiredPosition.y += roverCameraDistance * Math.sin(roverCameraOrbitPitch) + 0.5;
+    const followBlend = dt > 0 ? 1 - Math.exp(-6 * dt) : 1;
+    camera.position.lerp(roverCameraDesiredPosition, followBlend);
+
+    roverCameraLookAt.copy(chassis.position)
+      .addScaledVector(roverCameraForward, 2.5);
+    roverCameraLookAt.y += 1.4;
+    camera.lookAt(roverCameraLookAt);
+    controls.target.copy(roverCameraLookAt);
+  }
+
+  function stepRover(rover, dt, driving, steerInput, throttleInput) {
+    const targetSpeed = driving
+      ? (throttleInput > 0 ? 8 : throttleInput < 0 ? -3 : 0)
+      : 0;
+    rover.speed = THREE.MathUtils.damp(rover.speed, targetSpeed, driving && throttleInput ? 2.8 : 4.5, dt);
+    rover.steering = THREE.MathUtils.damp(rover.steering, driving ? steerInput * 0.3 : 0, 9, dt);
+
+    if (Math.abs(rover.speed) > 0.01) {
+      rover.heading += rover.steering * 0.55 * Math.sign(rover.speed) * dt;
+      rover.root.rotation.y = rover.heading;
+
+      // This extracted rover faces local +X. Arrow Up drives along its nose;
+      // side keys steer, turning the chassis while it is moving.
+      const nextX = rover.root.position.x + Math.cos(rover.heading) * rover.speed * dt;
+      const nextZ = rover.root.position.z - Math.sin(rover.heading) * rover.speed * dt;
+      const nextGround = roverSupportHeightAt(nextX, nextZ, rover);
+      const currentGround = rover.root.position.y - rover.groundOffset;
+      if (isRoverBlockedAt(nextX, nextZ, rover, currentGround)) {
+        rover.speed = 0;
+      } else {
+        rover.root.position.x = nextX;
+        rover.root.position.z = nextZ;
+        rover.root.position.y = nextGround + rover.groundOffset;
+      }
+    }
+
+    // Terrain can finish loading after the rover model. Keep clamping its
+    // underside above the terrain every frame, including while it is parked.
+    const minimumRoverY = roverSupportHeightAt(
+      rover.root.position.x,
+      rover.root.position.z,
+      rover,
+    ) + rover.groundOffset;
+    rover.root.position.y = Math.max(rover.root.position.y, minimumRoverY);
+
+    // The exported wheel joints use the opposite local axle sign from the
+    // rover's +X travel direction, so negate speed to make tire roll match it.
+    rover.wheelAngle -= rover.speed * 0.9 * dt;
+    rover.boneDelta.setFromAxisAngle(rover.spinAxis, rover.wheelAngle);
+    rover.steeringDelta.setFromAxisAngle(rover.steerAxis, rover.steering);
+    for (const bone of rover.spinBones) {
+      bone.quaternion.copy(rover.boneRest.get(bone));
+      if (rover.frontSpinBones.includes(bone)) {
+        // The turnY bones animate the suspension links. Steer the actual front
+        // tire joints too, then keep their rolling motion on the axle axis.
+        bone.quaternion.multiply(rover.steeringDelta);
+      }
+      bone.quaternion.multiply(rover.boneDelta);
+    }
+
+    for (const bone of rover.steeringBones) {
+      bone.quaternion.copy(rover.boneRest.get(bone)).multiply(rover.steeringDelta);
+    }
+  }
+
+  function updateRoverDrive(dt) {
+    if (!rovers.length) return;
+
+    const canDrive = roverCameraActive
+      && !eventCinematic
+      && !dayStartCameraTransition
+      && (roverRemoteControl || cameraMode === 'free' || cameraMode === 'first-person');
+    const steerInput = canDrive
+      ? (keys.has('arrowleft') || keys.has('a') ? 1 : 0) - (keys.has('arrowright') || keys.has('d') ? 1 : 0)
+      : 0;
+    const throttleInput = canDrive
+      ? (keys.has('arrowup') || keys.has('w') ? 1 : 0) - (keys.has('arrowdown') || keys.has('s') ? 1 : 0)
+      : 0;
+
+    for (const rover of rovers) {
+      stepRover(rover, dt, canDrive && rover === activeRover, steerInput, throttleInput);
+    }
   }
 
   function handleKeyDown(event) {
@@ -2743,12 +4058,43 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const rawKey = event.key || '';
     const key = rawKey.toLowerCase();
     const code = event.code || '';
+    if (roverCameraActive) {
+      // V always disconnects. From a command center monitor, Escape and E also
+      // drop the remote link and hand the player back to the interior.
+      const disconnects = key === 'v'
+        || (roverRemoteControl && (key === 'escape' || key === 'e'));
+      if (disconnects && !event.repeat) {
+        event.preventDefault();
+        stopRoverControl();
+        return;
+      }
+      const driveKey = code.startsWith('Arrow') || ['w', 'a', 's', 'd'].includes(key);
+      if (driveKey) {
+        event.preventDefault();
+        keys.add(key);
+        const alias = KEY_CODE_ALIASES[code];
+        if (alias) keys.add(alias);
+      }
+      return;
+    }
+    const target = event.target;
+    const typing = target && (
+      target.tagName === 'INPUT'
+      || target.tagName === 'TEXTAREA'
+      || target.isContentEditable
+    );
+    if (key === 'v' && !event.repeat && !typing) {
+      event.preventDefault();
+      toggleRoverCamera();
+      return;
+    }
     const isEnter = key === 'enter' || code === 'Enter' || code === 'NumpadEnter';
     const isJump = key === ' ' || code === 'Space';
     const isConfirm = key === 'e' || isEnter;
     if (isConfirm && cameraMode === 'interior') {
       event.preventDefault();
-      if (currentPromptType === 'component') enterNearbyComponent();
+      if (currentPromptType === 'roverMonitor') controlFocusedRover();
+      else if (currentPromptType === 'component') enterNearbyComponent();
       else if (currentPromptType === 'greenhouseDoor') returnToAirlock();
       else if (activeModuleInterior?.visible) exitModuleInterior();
       else if (greenhouseInterior?.visible) returnToAirlock();
@@ -2796,19 +4142,26 @@ export function createLunarEngine(canvas, callbacks = {}) {
       airlockPromptDismissed = true;
       return;
     }
+    if ((key === 'escape' || key === 'n') && currentPromptType === 'roverMonitor') {
+      event.preventDefault();
+      setPrompt(null);
+      roverMonitorPromptDismissed = true;
+      return;
+    }
     if ((key === 'escape' || key === 'n') && currentPromptType === 'component') {
       event.preventDefault();
       setPrompt(null);
       dismissedComponentId = activeComponentTarget?.id ?? null;
       return;
     }
-    if (isJump && cameraMode === 'first-person') {
+    if (isJump && ['first-person', 'interior'].includes(cameraMode)) {
       event.preventDefault();
       // A fresh press launches the hop; holding the key does not re-launch
-      // on landing, so jumps stay deliberate.
+      // on landing, so jumps stay deliberate. Interiors use the same launch and
+      // the room ceiling caps the arc.
       if (!event.repeat && !airborne) {
         airborne = true;
-        jumpVelocity = FIRST_PERSON_JUMP_SPEED;
+        jumpVelocity = PLAYER_CAMERA.jumpSpeed;
       }
       return;
     }
@@ -2844,6 +4197,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   canvas.addEventListener('pointerdown', handleConsolePointerDown);
   canvas.addEventListener('pointermove', handleConsolePointerMove);
   canvas.addEventListener('pointerup', handleConsolePointerUp);
+  canvas.addEventListener('pointercancel', handleConsolePointerUp);
   canvas.addEventListener('wheel', handleConsoleWheel, { passive: false });
   document.addEventListener('mousemove', handleMouseMove);
   document.addEventListener('keydown', handleKeyDown);
@@ -2962,6 +4316,72 @@ export function createLunarEngine(canvas, callbacks = {}) {
       id: nearest.id,
       title: `Enter the ${nearest.name}?`,
       message: `You are near the ${nearest.name.toLowerCase()}. Enter to explore its interior.`
+    });
+  }
+
+  // Focus a command center downlink monitor by aiming at it. The two screens
+  // are stacked closely, so the scorer uses the off-axis distance from the aim
+  // ray: whichever screen the crosshair is actually on wins, without jitter.
+  function updateRoverMonitorPrompt() {
+    if (roverCameraActive || !commandCenterInteriorActive || cameraMode !== 'interior' || !roverMonitors.length) {
+      if (currentPromptType === 'roverMonitor') setPrompt(null);
+      if (focusedRoverId !== null) {
+        focusedRoverId = null;
+        refreshRoverMonitors();
+      }
+      return;
+    }
+
+    camera.getWorldDirection(monitorFocusDirection);
+    let best = null;
+    let bestScore = Infinity;
+    for (const monitor of roverMonitors) {
+      monitorFocusOffset.copy(monitor.center).sub(camera.position);
+      const distance = monitorFocusOffset.length();
+      if (distance < 0.05 || distance > MONITOR_FOCUS_DISTANCE) continue;
+      const alignment = monitorFocusOffset.divideScalar(distance).dot(monitorFocusDirection);
+      if (alignment <= 0.05) continue;
+      // Closest point on the aim ray to this screen's centre.
+      monitorFocusNearest.copy(monitorFocusDirection)
+        .multiplyScalar(distance * alignment)
+        .add(camera.position);
+      const offAxis = monitorFocusNearest.distanceTo(monitor.center);
+      const tolerance = Math.max(
+        MONITOR_FOCUS_MIN_TOLERANCE,
+        distance * MONITOR_FOCUS_TOLERANCE_RATIO,
+      );
+      if (offAxis > tolerance) continue;
+      if (offAxis < bestScore) {
+        bestScore = offAxis;
+        best = monitor;
+      }
+    }
+
+    if (!best) {
+      if (currentPromptType === 'roverMonitor') setPrompt(null);
+      if (focusedRoverId !== null) {
+        focusedRoverId = null;
+        refreshRoverMonitors();
+      }
+      roverMonitorPromptDismissed = false;
+      return;
+    }
+
+    if (focusedRoverId !== best.roverId) {
+      focusedRoverId = best.roverId;
+      refreshRoverMonitors();
+    }
+    if (roverMonitorPromptDismissed) {
+      if (currentPromptType === 'roverMonitor') setPrompt(null);
+      return;
+    }
+
+    setPrompt('roverMonitor', {
+      id: `cc-monitor-${best.roverId}`,
+      roverId: best.roverId,
+      roverLabel: best.label,
+      title: `Link to ${best.label}?`,
+      message: `You are facing the ${best.label.toLowerCase()} downlink monitor. Link in to drive it from here.`
     });
   }
 
@@ -3250,6 +4670,69 @@ export function createLunarEngine(canvas, callbacks = {}) {
     return outpostTop === null ? terrain : Math.max(terrain, outpostTop);
   }
 
+  function roverSupportHeightAt(x, z, rover) {
+    const heading = rover.heading;
+    const halfLength = rover.halfLength;
+    const halfWidth = rover.halfWidth;
+    const forwardX = Math.cos(heading);
+    const forwardZ = -Math.sin(heading);
+    const sideX = Math.sin(heading);
+    const sideZ = Math.cos(heading);
+    let highest = -Infinity;
+
+    // Sample the whole footprint at sub-meter intervals. The terrain height
+    // grid is one meter wide, so sparse corner-only samples could miss bumps
+    // between the wheels and let the chassis clip through them.
+    const lengthSteps = Math.max(2, Math.ceil((halfLength * 2) / 0.75));
+    const widthSteps = Math.max(2, Math.ceil((halfWidth * 2) / 0.75));
+    for (let i = 0; i <= lengthSteps; i++) {
+      const along = (i / lengthSteps) * 2 - 1;
+      for (let j = 0; j <= widthSteps; j++) {
+        const across = (j / widthSteps) * 2 - 1;
+        const sampleX = x + forwardX * halfLength * along + sideX * halfWidth * across;
+        const sampleZ = z + forwardZ * halfLength * along + sideZ * halfWidth * across;
+        const terrain = sampleGroundHeight(sampleX, sampleZ) ?? sampleOuterHeight(sampleX, sampleZ);
+        const deck = sampleOutpostTop(outpostHeightField, sampleX, sampleZ);
+        // Ramps and low obstacles can support the rover, but tall walls and
+        // roofs remain obstacles rather than lifting the vehicle onto them.
+        const height = deck !== null && deck >= terrain && deck - terrain <= ROVER_MAX_STEP_HEIGHT
+          ? deck
+          : terrain;
+        if (Number.isFinite(height)) highest = Math.max(highest, height);
+      }
+    }
+
+    return Number.isFinite(highest) ? highest : PLAIN_LEVEL;
+  }
+
+  function isRoverBlockedAt(x, z, rover, groundY) {
+    if (!outpostHeightField) return false;
+    const heading = rover.heading;
+    const halfLength = rover.halfLength;
+    const halfWidth = rover.halfWidth;
+    const forwardX = Math.cos(heading);
+    const forwardZ = -Math.sin(heading);
+    const sideX = Math.sin(heading);
+    const sideZ = Math.cos(heading);
+    // Sweep the rover's oriented footprint in steps at least as fine as the
+    // outpost collision grid, so its long chassis cannot pass through walls,
+    // habitat modules, or supports between frames.
+    const spacing = 0.38;
+    const lengthSteps = Math.max(1, Math.ceil((halfLength * 2) / spacing));
+    const widthSteps = Math.max(1, Math.ceil((halfWidth * 2) / spacing));
+    for (let i = 0; i <= lengthSteps; i++) {
+      const along = (i / lengthSteps) * 2 - 1;
+      for (let j = 0; j <= widthSteps; j++) {
+        const across = (j / widthSteps) * 2 - 1;
+        const sampleX = x + forwardX * halfLength * along + sideX * halfWidth * across;
+        const sampleZ = z + forwardZ * halfLength * along + sideZ * halfWidth * across;
+        const obstacleTop = sampleOutpostTop(outpostHeightField, sampleX, sampleZ);
+        if (obstacleTop !== null && obstacleTop - groundY > ROVER_MAX_STEP_HEIGHT) return true;
+      }
+    }
+    return false;
+  }
+
   function moveFirstPersonWithCollisions(stepX, stepZ) {
     if (!outpostHeightField) {
       camera.position.x += stepX;
@@ -3261,7 +4744,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     // the walker's real body height counts instead, so a hop can carry over
     // low obstacles instead of snagging on the ground far below.
     const feetY = airborne
-      ? camera.position.y - FIRST_PERSON_EYE_HEIGHT
+      ? camera.position.y - playerCameraHeight
       : supportHeightAt(camera.position.x, camera.position.z);
     const startX = camera.position.x;
     const startZ = camera.position.z;
@@ -3296,11 +4779,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
       outerRect.minZ - OUTER_WALK_LIMIT,
       outerRect.maxZ + OUTER_WALK_LIMIT
     );
-    const targetY = supportHeightAt(camera.position.x, camera.position.z) + FIRST_PERSON_EYE_HEIGHT;
+    const targetY = supportHeightAt(camera.position.x, camera.position.z) + playerCameraHeight;
     if (airborne) {
       // Ballistic hop: gravity pulls the walker back down, and whatever
       // surface (terrain, ramp or ledge top) catches up first is the landing.
-      jumpVelocity -= FIRST_PERSON_GRAVITY * dt;
+      jumpVelocity -= PLAYER_CAMERA.gravity * dt;
       camera.position.y += jumpVelocity * dt;
       if (camera.position.y <= targetY) {
         camera.position.y = targetY;
@@ -3317,11 +4800,157 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function keepCameraInsideVerticalBounds(bounds) {
     if (!bounds) return;
-    const floor = bounds.min.y + FIRST_PERSON_EYE_HEIGHT;
+    const floor = bounds.min.y + playerCameraHeight;
     const ceiling = bounds.max.y - 0.2;
     camera.position.y = floor <= ceiling
       ? THREE.MathUtils.clamp(camera.position.y, floor, ceiling)
       : (bounds.min.y + bounds.max.y) / 2;
+  }
+
+  // ── The player camera ──────────────────────────────────────────────────────
+  // One controller for the whole game. Looking, walking and standing all go
+  // through here whether the player is on the regolith or inside a component;
+  // the only thing the space changes is the "support": what the deck is, what
+  // stops horizontal movement, and whether there is a sky to fall out of.
+  function currentPlayerSpace() {
+    if (cameraMode !== 'interior') return { kind: 'surface', bounds: null, clampPlan: false };
+    // Command center / habitats / workshop / greenhouse: a boxed room.
+    if (greenhouseInterior?.visible && greenhouseInteriorBounds) {
+      return { kind: 'interior', bounds: greenhouseInteriorBounds, clampPlan: true };
+    }
+    if (activeModuleInterior?.visible && activeModuleInteriorBounds) {
+      return { kind: 'interior', bounds: activeModuleInteriorBounds, clampPlan: true };
+    }
+    // The airlock is a corridor with its own walls; only its deck is enforced.
+    if (airlockInterior && airlockInteriorBounds) {
+      return { kind: 'interior', bounds: airlockInteriorBounds, clampPlan: false };
+    }
+    return { kind: 'interior', bounds: null, clampPlan: false };
+  }
+
+  function updatePlayerCamera(dt) {
+    const space = currentPlayerSpace();
+
+    // Look: one yaw/pitch pair drives every player view.
+    camera.rotation.order = 'YXZ';
+    camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
+
+    const forward = (keys.has('w') || keys.has('arrowup') ? 1 : 0)
+      - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+    const side = (keys.has('d') || keys.has('arrowright') ? 1 : 0)
+      - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+    camera.getWorldDirection(firstPersonForward).normalize();
+    firstPersonRight.set(Math.cos(firstPersonYaw), 0, Math.sin(firstPersonYaw));
+    firstPersonDirection.copy(firstPersonForward).multiplyScalar(forward).addScaledVector(firstPersonRight, side);
+    const wantsMove = firstPersonDirection.lengthSq() > 0;
+    if (wantsMove) firstPersonDirection.normalize();
+
+    // Gait: identical acceleration and glide in every space. Shift runs, which
+    // matters on the surface and keeps the feel consistent indoors.
+    const moveSpeed = keys.has('shift') ? PLAYER_CAMERA.sprintSpeed : PLAYER_CAMERA.walkSpeed;
+    const desiredX = wantsMove ? firstPersonDirection.x * moveSpeed : 0;
+    const desiredZ = wantsMove ? firstPersonDirection.z * moveSpeed : 0;
+    const rateStep = (wantsMove ? PLAYER_CAMERA.acceleration : PLAYER_CAMERA.deceleration) * dt;
+    firstPersonVelocity.x = THREE.MathUtils.clamp(
+      desiredX,
+      firstPersonVelocity.x - rateStep,
+      firstPersonVelocity.x + rateStep,
+    );
+    firstPersonVelocity.z = THREE.MathUtils.clamp(
+      desiredZ,
+      firstPersonVelocity.z - rateStep,
+      firstPersonVelocity.z + rateStep,
+    );
+
+    const stepX = firstPersonVelocity.x * dt;
+    const stepZ = firstPersonVelocity.z * dt;
+    if (stepX !== 0 || stepZ !== 0) {
+      if (space.kind === 'surface') {
+        // The height field rasterized from the outpost stops the walker.
+        moveFirstPersonWithCollisions(stepX, stepZ);
+      } else {
+        // Authored interiors have no walkable height field, so the same gait
+        // slides inside the room box instead.
+        camera.position.x += stepX;
+        camera.position.z += stepZ;
+      }
+    }
+
+    if (space.kind === 'surface') {
+      keepCameraAboveSurface(dt);
+      return;
+    }
+
+    if (space.clampPlan && space.bounds) {
+      const wallInset = 0.8;
+      camera.position.x = THREE.MathUtils.clamp(
+        camera.position.x,
+        space.bounds.min.x + wallInset,
+        space.bounds.max.x - wallInset,
+      );
+      camera.position.z = THREE.MathUtils.clamp(
+        camera.position.z,
+        space.bounds.min.z + wallInset,
+        space.bounds.max.z - wallInset,
+      );
+    }
+    settleInteriorCameraHeight(space.bounds, dt);
+  }
+
+  // Hopping works indoors too: same launch, same lunar gravity, and the room
+  // ceiling catches the apex instead of the player leaving the module.
+  function settleInteriorCameraHeight(bounds, dt) {
+    if (!bounds) return;
+    const floor = bounds.min.y + playerCameraHeight;
+    if (airborne) {
+      jumpVelocity -= PLAYER_CAMERA.gravity * dt;
+      camera.position.y += jumpVelocity * dt;
+      if (camera.position.y <= floor) {
+        camera.position.y = floor;
+        airborne = false;
+        jumpVelocity = 0;
+      }
+    }
+    keepCameraInsideVerticalBounds(bounds);
+  }
+
+  // Drop the eye exactly onto the current deck — used when the camera height is
+  // changed at runtime or a space is entered, so the view never lerps from a
+  // stale height.
+  function reseatPlayerCamera() {
+    const space = currentPlayerSpace();
+    if (space.kind === 'surface') {
+      airborne = false;
+      jumpVelocity = 0;
+      if (!heightGrid) return;
+      camera.position.y = supportHeightAt(camera.position.x, camera.position.z) + playerCameraHeight;
+      return;
+    }
+    airborne = false;
+    jumpVelocity = 0;
+    if (!space.bounds) return;
+    const floor = space.bounds.min.y + playerCameraHeight;
+    const ceiling = space.bounds.max.y - 0.2;
+    camera.position.y = floor <= ceiling ? floor : (space.bounds.min.y + space.bounds.max.y) / 2;
+  }
+
+  // The single knob for how high the player's eyes are. Every space reads it.
+  function setPlayerCameraHeight(height) {
+    const next = Number(height);
+    if (!Number.isFinite(next)) return playerCameraHeight;
+    playerCameraHeight = THREE.MathUtils.clamp(next, PLAYER_CAMERA.minHeight, PLAYER_CAMERA.maxHeight);
+    // Only re-seat a live player camera — never yank the free camera, a rover
+    // chase view, or a running cinematic.
+    const playerCameraLive = (cameraMode === 'first-person' || cameraMode === 'interior')
+      && !roverCameraActive
+      && !eventCinematic
+      && !dayStartCameraTransition;
+    if (playerCameraLive) reseatPlayerCamera();
+    return playerCameraHeight;
+  }
+
+  function getPlayerCameraHeight() {
+    return playerCameraHeight;
   }
 
   function animateEventCamera(delta) {
@@ -3393,9 +5022,40 @@ export function createLunarEngine(canvas, callbacks = {}) {
     animId = requestAnimationFrame(animate);
 
     const dt = Math.min(clock.getDelta(), 0.05);
+    updateRoverDrive(dt);
+
+    // The screens are only on screen while the player stands in the command
+    // center, so that is the only time they are worth updating. Each redraw is a
+    // whole extra scene render, hence the throttles: the big wall display runs as
+    // a live view, while a rover screen only re-captures when that rover moved.
+    if (commandCenterInteriorActive && !roverCameraActive) {
+      outpostFeedTimer += dt;
+      if (outpostFeedTimer >= OUTPOST_FEED_REFRESH) {
+        outpostFeedTimer = 0;
+        refreshOutpostFeed();
+      }
+      roverFeedTimer += dt;
+      if (roverFeedTimer >= ROVER_FEED_REFRESH) {
+        roverFeedTimer = 0;
+        refreshRoverFeeds();
+      }
+    } else {
+      outpostFeedTimer = 0;
+      roverFeedTimer = 0;
+    }
+
+    if (cameraMode !== previousCameraMode) {
+      // Every mode switch teleports the camera, so never carry gait momentum or
+      // a half-finished hop across one: stepping through an airlock must not
+      // fire the walker off or leave it falling.
+      previousCameraMode = cameraMode;
+      firstPersonVelocity.set(0, 0, 0);
+      airborne = false;
+      jumpVelocity = 0;
+    }
 
     promptCheckTimer += dt;
-    if (!eventCinematic && !dayStartCameraTransition && promptCheckTimer >= 0.1) {
+    if (!eventCinematic && !dayStartCameraTransition && !roverCameraActive && promptCheckTimer >= 0.1) {
       promptCheckTimer = 0;
       if (cameraMode === 'first-person') {
         updateAirlockPrompt();
@@ -3403,6 +5063,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       } else if (cameraMode === 'interior') {
         updateAirlockEndPrompt();
         updateGreenhouseDoorPrompt();
+        updateRoverMonitorPrompt();
       }
     }
 
@@ -3429,84 +5090,19 @@ export function createLunarEngine(canvas, callbacks = {}) {
           controls.update();
         }
       }
+    } else if (roverCameraActive) {
+      updateRoverCamera(dt);
     } else if (cameraMode === 'free') {
       controls.update();
     } else {
-      const forward = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
-      const side = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
-      camera.rotation.order = 'YXZ';
-      camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
-      camera.getWorldDirection(firstPersonForward).normalize();
-      firstPersonRight.set(Math.cos(firstPersonYaw), 0, Math.sin(firstPersonYaw));
-      firstPersonDirection.copy(firstPersonForward).multiplyScalar(forward).addScaledVector(firstPersonRight, side);
-      const wantsMove = firstPersonDirection.lengthSq() > 0;
-      if (wantsMove) firstPersonDirection.normalize();
-      // Shift runs so the much bigger terrain stays crossable; the default
-      // pace is the slow lunar shuffle.
-      const moveSpeed = keys.has('shift') ? FIRST_PERSON_SPRINT_SPEED : FIRST_PERSON_WALK_SPEED;
-      if (cameraMode === 'first-person') {
-        // Moon gait: ease into the target speed and glide to a stop, so the
-        // walker carries momentum like a suit on regolith. While airborne the
-        // same horizontal momentum keeps travelling with the hop.
-        const desiredX = wantsMove ? firstPersonDirection.x * moveSpeed : 0;
-        const desiredZ = wantsMove ? firstPersonDirection.z * moveSpeed : 0;
-        const rateStep = (wantsMove ? FIRST_PERSON_ACCELERATION : FIRST_PERSON_DECELERATION) * dt;
-        firstPersonVelocity.x = THREE.MathUtils.clamp(
-          desiredX,
-          firstPersonVelocity.x - rateStep,
-          firstPersonVelocity.x + rateStep,
-        );
-        firstPersonVelocity.z = THREE.MathUtils.clamp(
-          desiredZ,
-          firstPersonVelocity.z - rateStep,
-          firstPersonVelocity.z + rateStep,
-        );
-        if (firstPersonVelocity.x !== 0 || firstPersonVelocity.z !== 0) {
-          moveFirstPersonWithCollisions(firstPersonVelocity.x * dt, firstPersonVelocity.z * dt);
-        }
-      } else if (wantsMove) {
-        // Inside modules the walker has full traction: direct, tight control.
-        camera.position.addScaledVector(firstPersonDirection, dt * moveSpeed);
-      }
-      if (greenhouseInterior?.visible && greenhouseInteriorBounds) {
-        const wallInset = 0.8;
-        camera.position.x = THREE.MathUtils.clamp(
-          camera.position.x,
-          greenhouseInteriorBounds.min.x + wallInset,
-          greenhouseInteriorBounds.max.x - wallInset
-        );
-        camera.position.z = THREE.MathUtils.clamp(
-          camera.position.z,
-          greenhouseInteriorBounds.min.z + wallInset,
-          greenhouseInteriorBounds.max.z - wallInset
-        );
-        keepCameraInsideVerticalBounds(greenhouseInteriorBounds);
-      }
-      if (activeModuleInterior?.visible && activeModuleInteriorBounds) {
-        const wallInset = 0.8;
-        camera.position.x = THREE.MathUtils.clamp(
-          camera.position.x,
-          activeModuleInteriorBounds.min.x + wallInset,
-          activeModuleInteriorBounds.max.x - wallInset
-        );
-        camera.position.z = THREE.MathUtils.clamp(
-          camera.position.z,
-          activeModuleInteriorBounds.min.z + wallInset,
-          activeModuleInteriorBounds.max.z - wallInset
-        );
-        keepCameraInsideVerticalBounds(activeModuleInteriorBounds);
-      }
-      if (cameraMode === 'interior' && airlockInterior && !greenhouseInterior?.visible && !activeModuleInterior?.visible) {
-        keepCameraInsideVerticalBounds(airlockInteriorBounds);
-      } else if (cameraMode === 'first-person') {
-        keepCameraAboveSurface(dt);
-      }
+      updatePlayerCamera(dt);
     }
 
-    // Horizontal momentum only belongs to the walking first-person view; every
-    // other mode (free camera, interiors, event cinematics) resets it so the
-    // walker never glides off after switching.
-    if (cameraMode !== 'first-person' || eventCinematic) {
+    // Horizontal momentum belongs to the walking views only — both the surface
+    // walk and the interior walk share one gait. Every other mode (free camera,
+    // rover chase, event cinematics) resets it so the walker never glides off
+    // after switching.
+    if (!['first-person', 'interior'].includes(cameraMode) || eventCinematic || roverCameraActive) {
       firstPersonVelocity.set(0, 0, 0);
     }
 
@@ -3584,11 +5180,30 @@ export function createLunarEngine(canvas, callbacks = {}) {
       }
     }
 
+    // The live fleet rides on top of the outpost bounds so both the full map and
+    // the minimap always keep the rovers in frame, wherever they were driven.
+    const fleet = rovers.map(rover => ({
+      id: rover.id,
+      label: rover.label,
+      tint: `#${rover.tint.toString(16).padStart(6, '0')}`,
+      x: rover.root.position.x,
+      z: rover.root.position.z,
+      heading: rover.heading,
+    }));
+    const bounds = { ...mapBounds };
+    for (const rover of fleet) {
+      if (rover.x < bounds.minX) bounds.minX = rover.x;
+      if (rover.x > bounds.maxX) bounds.maxX = rover.x;
+      if (rover.z < bounds.minZ) bounds.minZ = rover.z;
+      if (rover.z > bounds.maxZ) bounds.maxZ = rover.z;
+    }
+
     return {
       components: mapComponents,
-      bounds: mapBounds,
+      bounds,
       player,
-      cameraMode
+      cameraMode,
+      rovers: fleet,
     };
   }
 
@@ -3606,6 +5221,29 @@ export function createLunarEngine(canvas, callbacks = {}) {
     returnFromEvent,
     returnToOutpostOverview,
     toggleCameraMode,
+    toggleRoverCamera,
+    // The player camera is one camera everywhere. This is the knob for how high
+    // the player's eyes sit above the deck they are standing on; the surface and
+    // every interior read it live, and changing it re-seats the view at once.
+    setPlayerCameraHeight,
+    getPlayerCameraHeight,
+    playerCamera: PLAYER_CAMERA,
+    // Link straight into a specific chassis. Inside the command center this is
+    // a remote downlink (the interior is swapped for the live surface view);
+    // outside it is the normal chase camera.
+    controlRover,
+    controlFocusedRover,
+    exitRoverControl: () => stopRoverControl(),
+    getRoverFleet: () => rovers.map(rover => ({
+      id: rover.id,
+      label: rover.label,
+      x: rover.root.position.x,
+      z: rover.root.position.z,
+    })),
+    // Live viewpoint of the command center wall display.
+    getOutpostFeedView,
+    setOutpostFeedView,
+    resetOutpostFeedView,
     toggleEarthView,
     enterAirlock,
     dismissAirlock: () => {
@@ -3643,6 +5281,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       canvas.removeEventListener('pointerdown', handleConsolePointerDown);
       canvas.removeEventListener('pointermove', handleConsolePointerMove);
       canvas.removeEventListener('pointerup', handleConsolePointerUp);
+      canvas.removeEventListener('pointercancel', handleConsolePointerUp);
       canvas.removeEventListener('wheel', handleConsoleWheel);
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('keydown', handleKeyDown);
@@ -3671,6 +5310,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
       }
 
       unmountTaskConsole();
+
+      // Live screens own GPU textures outside the scene graph.
+      outpostFeed?.target.dispose();
+      outpostFeed = null;
+      for (const monitor of roverMonitors) monitor.feed?.target.dispose();
+      roverMonitors.length = 0;
+      feedPlanes.length = 0;
 
       // Dispose label sprites
       for (let i = 0; i < labelTextures.length; i++) labelTextures[i].dispose();

@@ -109,6 +109,53 @@
   pointer-events: none;
 }
 
+.lunar-rover-help {
+  position: absolute;
+  right: clamp(12px, 3vw, 28px);
+  bottom: clamp(12px, 2.5vh, 22px);
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid rgba(127, 240, 255, 0.25);
+  border-radius: 5px;
+  background: rgba(8, 13, 20, 0.78);
+  color: rgba(242, 245, 245, 0.82);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+
+@media (max-width: 520px) {
+  .lunar-rover-help {
+    left: 12px;
+    right: 12px;
+    justify-content: center;
+    gap: 7px;
+    padding: 8px;
+    font-size: 0.54rem;
+  }
+}
+
+.lunar-rover-help strong {
+  color: var(--lunar-cyan);
+  font-family: var(--lunar-font-tech);
+}
+
+.lunar-rover-help kbd {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 2px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 3px;
+  color: #fff;
+  font: inherit;
+  text-align: center;
+}
+
 .lunar-event-alert-button {
   display: inline-flex;
   align-items: center;
@@ -268,6 +315,122 @@
 }
 
 /* ---------- LIVE MINIMAP (top-left, under Mission Control) ---------- */
+/* Wall display viewpoint scaler (command center only) */
+.lunar-display-tuner {
+  position: absolute;
+  z-index: 6;
+  left: clamp(12px, 3vw, 28px);
+  bottom: clamp(96px, 18vh, 150px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 248px;
+  max-height: min(64vh, 560px);
+  overflow-y: auto;
+  padding: 10px 12px 11px;
+  border: 1px solid rgba(127, 240, 255, 0.34);
+  border-radius: 8px;
+  background: rgba(5, 12, 20, 0.72);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  color: #dff3f5;
+  font-family: var(--lunar-font-mono);
+  user-select: none;
+}
+
+.lunar-display-tuner header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--lunar-cyan);
+  font-size: 0.58rem;
+  letter-spacing: 0.16em;
+}
+
+.lunar-display-tuner header button {
+  padding: 3px 7px;
+  border: 1px solid rgba(127, 240, 255, 0.4);
+  border-radius: 3px;
+  color: var(--lunar-cyan);
+  background: rgba(10, 24, 34, 0.7);
+  font-family: inherit;
+  font-size: 0.5rem;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+
+.lunar-display-tuner label {
+  display: grid;
+  grid-template-columns: 62px 1fr 34px;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.5rem;
+  letter-spacing: 0.1em;
+  color: #9fb6bd;
+}
+
+.lunar-display-tuner label b {
+  color: #d8f4a8;
+  font-size: 0.54rem;
+  font-weight: 600;
+  text-align: right;
+}
+
+.lunar-display-tuner input[type="range"] {
+  width: 100%;
+  height: 3px;
+  appearance: none;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(127, 240, 255, 0.55), rgba(200, 237, 139, 0.5));
+  cursor: pointer;
+}
+
+.lunar-display-tuner input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border: 1px solid rgba(5, 12, 20, 0.9);
+  border-radius: 50%;
+  background: #d8f4a8;
+  box-shadow: 0 0 6px rgba(200, 237, 139, 0.7);
+}
+
+.lunar-display-tuner input[type="range"]::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: 1px solid rgba(5, 12, 20, 0.9);
+  border-radius: 50%;
+  background: #d8f4a8;
+}
+
+.lunar-display-tuner footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.lunar-display-tuner footer button {
+  padding: 4px 9px;
+  border: 1px solid rgba(200, 237, 139, 0.45);
+  border-radius: 3px;
+  color: #d8f4a8;
+  background: rgba(24, 34, 20, 0.7);
+  font-family: inherit;
+  font-size: 0.5rem;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+
+.lunar-display-tuner footer small {
+  color: #8a9aa3;
+  font-size: 0.46rem;
+  letter-spacing: 0.06em;
+  text-align: right;
+}
+
 .lunar-minimap {
   position: absolute;
   z-index: 5;
@@ -388,6 +551,31 @@
   font-size: 0.52rem;
   letter-spacing: 0.14em;
   text-align: center;
+}
+
+/* Rover fleet: tinted per chassis so both monitors and map markers agree. */
+.lunar-minimap-rover-halo {
+  fill: rgba(140, 228, 255, 0.18);
+  stroke: currentColor;
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.lunar-minimap-rover-arrow {
+  fill: currentColor;
+  stroke: rgba(3, 12, 18, 0.9);
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.lunar-minimap-structure .lunar-minimap-footprint {
+  fill: rgba(126, 96, 214, 0.3);
+  stroke: rgba(184, 162, 255, 0.9);
+  stroke-dasharray: 1.4 0.8;
+}
+
+.lunar-minimap-structure .lunar-minimap-room-label {
+  fill: #e2d8ff;
 }
 
 .lunar-mission-status {
@@ -630,6 +818,63 @@
   vector-effect: non-scaling-stroke;
 }
 
+/* Rover fleet: each marker is tinted with that chassis' own accent colour. */
+.lunar-map-rover-halo {
+  fill: rgba(140, 228, 255, 0.16);
+  stroke: currentColor;
+  stroke-width: 0.35;
+  vector-effect: non-scaling-stroke;
+}
+
+.lunar-map-rover-arrow {
+  fill: currentColor;
+  stroke: rgba(3, 12, 18, 0.9);
+  stroke-width: 0.3;
+  vector-effect: non-scaling-stroke;
+}
+
+.lunar-map-structure .lunar-map-footprint {
+  fill: rgba(126, 96, 214, 0.28);
+  stroke: rgba(184, 162, 255, 0.9);
+  stroke-dasharray: 1.4 0.8;
+}
+
+.lunar-map-structure .lunar-map-room-label {
+  fill: #e2d8ff;
+}
+
+.lunar-map-rover-list > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lunar-map-rover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px;
+  border-radius: 3px;
+  color: #c4d5d9;
+  background: rgba(16, 29, 38, 0.48);
+  font-family: var(--lunar-font-mono);
+  font-size: 0.53rem;
+}
+
+.lunar-map-rover-row i {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.lunar-map-rover-row small {
+  margin-left: auto;
+  color: #849aa3;
+  font-size: 0.48rem;
+}
+
 .lunar-map-details {
   min-height: 0;
   overflow-y: auto;
@@ -766,6 +1011,18 @@
   border-color: #ffe177;
   background: #ffe177;
   clip-path: polygon(50% 0, 100% 100%, 50% 74%, 0 100%);
+}
+
+.lunar-map-legend .legend-rover {
+  border-color: #8ce4ff;
+  background: #8ce4ff;
+  clip-path: polygon(50% 0, 100% 100%, 50% 74%, 0 100%);
+}
+
+.lunar-map-legend .legend-structure {
+  border-radius: 2px;
+  border-color: #b8a2ff;
+  background: rgba(126, 96, 214, 0.55);
 }
 
 .lunar-map-legend .legend-available { background: #64b9ff; }
