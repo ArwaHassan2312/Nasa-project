@@ -143,6 +143,17 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   };
   const [consoleEdit, setConsoleEdit] = useState(false);
   const [consoleInfo, setConsoleInfo] = useState(null);
+  // Wall display viewpoint scaler, only available inside the command center.
+  const [displayView, setDisplayView] = useState(null);
+  const [displayTunerOpen, setDisplayTunerOpen] = useState(false);
+  const displayTunerVisible = displayTunerOpen
+    && insidePanel.visible
+    && insidePanel.componentId === '024';
+
+  const applyDisplayView = (patch) => {
+    const next = engineRef.current?.setOutpostFeedView?.(patch);
+    if (next) setDisplayView(next);
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -189,6 +200,29 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   useEffect(() => {
     engineRef.current?.setEventEffect(simulation.eventEffectId);
   }, [simulation.eventEffectId]);
+
+  // Press C inside the command center to open the display scaler. The pointer
+  // lock has to be released so the sliders are actually clickable.
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.repeat) return;
+      if ((event.key || '').toLowerCase() !== 'c') return;
+      const target = event.target;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      if (!insidePanel.visible || insidePanel.componentId !== '024') return;
+      event.preventDefault();
+      setDisplayTunerOpen((open) => {
+        if (open) return false;
+        // Seed the sliders from the engine's current viewpoint on open.
+        const view = engineRef.current?.getOutpostFeedView?.();
+        if (view) setDisplayView(view);
+        if (document.pointerLockElement) document.exitPointerLock?.();
+        return true;
+      });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [insidePanel.visible, insidePanel.componentId]);
 
   useEffect(() => {
     if (simulation.dayPhase !== 'transition') {
@@ -685,6 +719,64 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             RESET POSITION
           </button>
         </div>
+      )}
+
+      {/* Wall display scaler — command center only, toggled with C */}
+      {displayTunerVisible && displayView && (
+        <aside className="lunar-display-tuner" aria-label="Wall display scaler">
+          <header>
+            <span>DISPLAY VIEW</span>
+            <button type="button" onClick={() => setDisplayTunerOpen(false)}>CLOSE</button>
+          </header>
+          <label>
+            <span>AZIMUTH</span>
+            <input
+              type="range"
+              min="0"
+              max="360"
+              step="1"
+              value={Math.round(displayView.azimuthDeg)}
+              onChange={(event) => applyDisplayView({ azimuthDeg: Number(event.target.value) })}
+            />
+            <b>{Math.round(displayView.azimuthDeg)}°</b>
+          </label>
+          <label>
+            <span>ELEVATION</span>
+            <input
+              type="range"
+              min="2"
+              max="88"
+              step="1"
+              value={Math.round(displayView.elevationDeg)}
+              onChange={(event) => applyDisplayView({ elevationDeg: Number(event.target.value) })}
+            />
+            <b>{Math.round(displayView.elevationDeg)}°</b>
+          </label>
+          <label>
+            <span>LENS</span>
+            <input
+              type="range"
+              min="15"
+              max="90"
+              step="1"
+              value={Math.round(displayView.fov)}
+              onChange={(event) => applyDisplayView({ fov: Number(event.target.value) })}
+            />
+            <b>{Math.round(displayView.fov)}°</b>
+          </label>
+          <footer>
+            <button
+              type="button"
+              onClick={() => {
+                const next = engineRef.current?.resetOutpostFeedView?.();
+                if (next) setDisplayView(next);
+              }}
+            >
+              RESET VIEW
+            </button>
+            <small><kbd>C</kbd> to close · click the view to look around</small>
+          </footer>
+        </aside>
       )}
 
       {/* Live opacity minimap - top-left under Mission Control, realtime player tracking */}

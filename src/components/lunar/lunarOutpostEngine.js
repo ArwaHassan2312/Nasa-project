@@ -1180,16 +1180,39 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const MONITOR_FOCUS_DISTANCE = 22;
   const MONITOR_FOCUS_MIN_TOLERANCE = 0.8;
   const MONITOR_FOCUS_TOLERANCE_RATIO = 0.2;
-  // Downlink image painted on each monitor: a real capture of that rover sitting
-  // on the surface. Refreshed while the rover is being driven and once more when
-  // the player disconnects, so the console always shows where the rover is now.
-  // The capture is sized to the panel's own aspect, so the picture fills the
-  // whole screen with no letterboxing and no stretching.
-  const ROVER_FEED_WIDTH = 256; // capture resolution along the screen's long axis
+  // Two different live screens live in the command center:
+  //  • the two small console monitors each show their own rover on the surface,
+  //  • the large wall display (material "large_monitor_mat") shows the outpost.
+  const ROVER_FEED_WIDTH = 256;
   const ROVER_FEED_FOV = 42;
-  const ROVER_FEED_REFRESH = 0.3; // seconds between live captures while driving
+  const ROVER_FEED_REFRESH = 0.5; // re-captured only when that rover has moved
+  const ROVER_FEED_MOVE_EPSILON = 0.15;
   const roverFeedOffset = new THREE.Vector3(7, 4.5, 7); // world-space view angle
+  const OUTPOST_FEED_WIDTH = 320;
+  const OUTPOST_FEED_FOV = 38;
+  const OUTPOST_FEED_REFRESH = 0.25; // seconds between live redraws
+  // Live viewpoint of the wall display, driven by the in-game scaler:
+  //   azimuthDeg   — which side of the base the camera looks from
+  //   elevationDeg — how high it sits (the downward tilt of the picture)
+  //   fov          — lens angle; lower is a flatter, more zoomed-in shot
+  const outpostFeedView = { azimuthDeg: 19, elevationDeg: 24, fov: OUTPOST_FEED_FOV };
+  // Recomputed from outpostFeedView on every capture.
+  const outpostFeedDirection = new THREE.Vector3(0.30, 0.40, 0.87).normalize();
+  // How much of the vertical fit to honour. Below 1 the base's depth runs a
+  // little past the top and bottom of a wide panel, so the horizon reads as a
+  // vista instead of the base shrinking to a stamp in the middle.
+  const OUTPOST_FEED_VERTICAL_FIT = 0.82;
+  const outpostFeedCenter = new THREE.Vector3();
+  const outpostFeedSize = new THREE.Vector3();
+  // The big wall display is the authored "large monitor" panel. The static
+  // screen strip below it is only a fallback if that panel ever goes missing.
+  const OUTPOST_SCREEN_MATERIALS = ['large_monitor_mat', 'CommandCenter_MonitorScreenStatic'];
+  let outpostFeed = null; // { target, camera, plane }
+  let outpostFeedTimer = 0;
   let roverFeedTimer = 0;
+  // Every overlay plane that samples a render target. All of them are hidden
+  // while any capture runs, so a screen never samples the target it is drawn into.
+  const feedPlanes = [];
   // The live eye height. Seeded from PLAYER_CAMERA and adjustable at runtime;
   // every camera measurement below reads this, never a scattered constant.
   let playerCameraHeight = PLAYER_CAMERA.height;
@@ -1367,7 +1390,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           })),
         });
         refreshRoverMonitors();
-        refreshRoverFeeds();
+        refreshLiveScreens();
         onRoverReady(true);
       },
       undefined,
@@ -1552,6 +1575,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       meshes.sort((a, b) => a.volume - b.volume);
 
       const screenMaterials = [];
+      const screenMesh = meshes.length ? meshes[0].child : null;
       for (const { child } of meshes.slice(0, 1)) {
         const materials = Array.isArray(child.material) ? child.material : [child.material];
         const cloned = materials.map(material => {
@@ -1574,8 +1598,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         bounds: placement.bounds,
         tint,
         screenMaterials,
-        // The visible picture of the rover, painted on its own screen.
-        feed: meshes.length ? createRoverFeed(meshes[0].child, roomCenter) : null,
+        feed: screenMesh ? createRoverFeed(screenMesh, placement.object, roomCenter) : null,
       });
     });
 
@@ -1583,138 +1606,429 @@ export function createLunarEngine(canvas, callbacks = {}) {
       monitors: roverMonitors.map(monitor => monitor.label),
     });
     refreshRoverMonitors();
-    refreshRoverFeeds();
+    buildOutpostDisplay(roomCenter);
+    refreshLiveScreens();
   }
 
-  // A downlink screen is its own little camera looking at the rover, rendered
-  // into a texture and laid over the monitor's inset panel. Rebuilding the image
-  // only when the rover moves keeps the cost off the main render path.
-  function createRoverFeed(screenMesh, roomCenter) {
-    const bounds = new THREE.Box3().setFromObject(screenMesh);
-    const size = bounds.getSize(new THREE.Vector3());
-    const center = bounds.getCenter(new THREE.Vector3());
+  // ── Live screens ──────────────────────────────────────────────────────────
+  // A capture is only possible when the surface is actually drawable, and the
+  // monitor sits inside a sealed module where the surface is hidden. So every
+  // capture briefly re-exposes the world, renders, then restores the interior
+  // state it replaced — the room looks untouched one frame later.
+  function captureSurfaceView(camera, target) {
+    const restore = {
+      terrain: moonTerrainMeshes.map(terrain => terrain.visible),
+      horizon: horizon.visible,
+      outpost: outpostRoot?.visible ?? false,
+      commandCenter: commandCenterRoot?.visible ?? false,
+      shell: commandCenterExteriorShell?.visible ?? false,
+      background: scene.background,
+    };
+    moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
+    horizon.visible = true;
+    if (outpostRoot) outpostRoot.visible = true;
+    if (commandCenterRoot) commandCenterRoot.visible = true;
+    if (commandCenterExteriorShell) commandCenterExteriorShell.visible = true;
+    scene.background = ASSET_CACHE.skyTexture ?? scene.background;
 
-    // The averaged surface normal of the inset mesh says which way the screen
-    // faces; it is a flat panel, so every vertex points the same way.
-    const normal = new THREE.Vector3();
-    const normals = screenMesh.geometry?.attributes?.normal;
-    if (normals) {
-      const normalMatrix = new THREE.Matrix3().getNormalMatrix(screenMesh.matrixWorld);
-      const scratch = new THREE.Vector3();
-      for (let i = 0; i < normals.count; i++) {
-        scratch.fromBufferAttribute(normals, i).applyMatrix3(normalMatrix);
-        normal.add(scratch);
-      }
+    // No screen may sample the target it is being drawn into.
+    for (const plane of feedPlanes) plane.visible = false;
+
+    const previousTarget = renderer.getRenderTarget();
+    const previousShadowAutoUpdate = renderer.shadowMap.autoUpdate;
+    renderer.shadowMap.autoUpdate = false;
+    try {
+      renderer.setRenderTarget(target);
+      renderer.render(scene, camera);
+    } finally {
+      renderer.setRenderTarget(previousTarget);
+      renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
+      for (const plane of feedPlanes) plane.visible = true;
+      moonTerrainMeshes.forEach((terrain, index) => {
+        terrain.visible = restore.terrain[index] ?? true;
+      });
+      horizon.visible = restore.horizon;
+      if (outpostRoot) outpostRoot.visible = restore.outpost;
+      if (commandCenterRoot) commandCenterRoot.visible = restore.commandCenter;
+      if (commandCenterExteriorShell) commandCenterExteriorShell.visible = restore.shell;
+      scene.background = restore.background;
     }
-    if (normal.lengthSq() < 1e-8) normal.set(1, 0, 0);
-    normal.normalize();
-    if (roomCenter && normal.dot(roomCenter.clone().sub(center)) < 0) normal.negate();
+  }
+
+  // A screen modelled as a slab, or a wall panel tilted downward for viewing,
+  // has its real surface at an angle the bounding box completely hides — the
+  // command center's big display is a single quad pitched ~35 degrees. So measure
+  // the geometry itself: cluster triangles by normal, take the largest face, and
+  // return its exact plane, basis and size. Fitting to that face is what makes a
+  // picture land flat on the glass and cover all of it.
+  function fitPlaneToLargestFace(mesh, roomCenter) {
+    const geometry = mesh.geometry;
+    const position = geometry?.attributes?.position;
+    if (!position) return null;
+    const index = geometry.index;
+    const triangleCount = Math.floor((index ? index.count : position.count) / 3);
+    if (!triangleCount) return null;
+
+    const matrix = mesh.matrixWorld;
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const ab = new THREE.Vector3();
+    const ac = new THREE.Vector3();
+    const normal = new THREE.Vector3();
+    const vertex = (target, i) => target.fromBufferAttribute(position, i).applyMatrix4(matrix);
+
+    const clusters = [];
+    for (let t = 0; t < triangleCount; t += 1) {
+      const i0 = index ? index.getX(t * 3) : t * 3;
+      const i1 = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+      const i2 = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+      vertex(a, i0);
+      vertex(b, i1);
+      vertex(c, i2);
+      ab.subVectors(b, a);
+      ac.subVectors(c, a);
+      normal.crossVectors(ab, ac);
+      const area = normal.length() * 0.5;
+      if (area < 1e-9) continue;
+      normal.normalize();
+      let cluster = null;
+      for (const candidate of clusters) {
+        const magnitude = candidate.sum.length();
+        if (magnitude > 0 && candidate.sum.dot(normal) > 0.99 * magnitude) {
+          cluster = candidate;
+          break;
+        }
+      }
+      if (!cluster) {
+        cluster = { sum: new THREE.Vector3(), area: 0, points: [] };
+        clusters.push(cluster);
+      }
+      cluster.sum.addScaledVector(normal, area);
+      cluster.area += area;
+      cluster.points.push(a.clone(), b.clone(), c.clone());
+    }
+    if (!clusters.length) return null;
+
+    let face = clusters[0];
+    for (const candidate of clusters) if (candidate.area > face.area) face = candidate;
+
+    const facing = face.sum.clone().normalize();
+    const centroid = new THREE.Vector3();
+    for (const point of face.points) centroid.add(point);
+    centroid.divideScalar(face.points.length);
+    if (roomCenter && facing.dot(roomCenter.clone().sub(centroid)) < 0) facing.negate();
+
+    // Orthonormal basis: right across the glass, up the glass, out of it.
+    const reference = Math.abs(facing.y) > 0.95
+      ? new THREE.Vector3(0, 0, 1)
+      : new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(reference, facing).normalize();
+    const up = new THREE.Vector3().crossVectors(facing, right).normalize();
+
+    let uMin = Infinity;
+    let uMax = -Infinity;
+    let vMin = Infinity;
+    let vMax = -Infinity;
+    let depth = 0;
+    for (const point of face.points) {
+      const u = point.dot(right);
+      const v = point.dot(up);
+      if (u < uMin) uMin = u;
+      if (u > uMax) uMax = u;
+      if (v < vMin) vMin = v;
+      if (v > vMax) vMax = v;
+      depth += point.dot(facing);
+    }
+    depth /= face.points.length;
+
+    const center = new THREE.Vector3()
+      .addScaledVector(right, (uMin + uMax) / 2)
+      .addScaledVector(up, (vMin + vMax) / 2)
+      .addScaledVector(facing, depth);
+
+    return {
+      normal: facing,
+      right,
+      up,
+      center,
+      width: Math.max(uMax - uMin, 0.02),
+      height: Math.max(vMax - vMin, 0.02),
+    };
+  }
+
+  // Lay a panel over the display's real face, just clear of it. The size and the
+  // angle both come from that face, so the picture covers the whole screen.
+  function createFeedPlane(screenMesh, bodyObject, roomCenter, texture, face) {
+    if (!face) return null;
+    const normal = face.normal;
+    const bodyBounds = bodyObject === screenMesh
+      ? new THREE.Box3().setFromObject(screenMesh)
+      : new THREE.Box3().setFromObject(bodyObject);
+    const bodySize = bodyBounds.getSize(new THREE.Vector3());
+    const bodyCenter = bodyBounds.getCenter(new THREE.Vector3());
+    const bodyExtent = Math.abs(normal.x) * bodySize.x * 0.5
+      + Math.abs(normal.y) * bodySize.y * 0.5
+      + Math.abs(normal.z) * bodySize.z * 0.5;
+    // How far the glass sits inside its housing along the facing direction. A
+    // flat face has no housing of its own, so a hair of clearance is enough.
+    const flatFace = bodyObject === screenMesh;
+    const faceDepth = flatFace ? 0 : Math.max(face.center.clone().sub(bodyCenter).dot(normal), 0);
+    const clearance = flatFace ? 0.012 : Math.max(0.012, bodyExtent - faceDepth + 0.012);
 
     const plane = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       new THREE.MeshBasicMaterial({
+        map: texture,
         toneMapped: false,
         color: 0xffffff,
-        // Visible whichever way the authored panel happens to be wound.
         side: THREE.DoubleSide,
       }),
     );
-    plane.name = 'Rover downlink feed';
-    // Sit just proud of the glass so it never z-fights with the authored screen.
-    plane.position.copy(center).addScaledVector(normal, Math.abs(size.dot(normal)) * 0.5 + 0.012);
-    plane.lookAt(center.clone().add(normal));
+    plane.name = 'Live screen';
+    plane.position.copy(face.center).addScaledVector(normal, clearance);
+    plane.quaternion.setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(face.right, face.up, normal),
+    );
+    plane.scale.set(face.width, face.height, 1);
     plane.updateMatrixWorld(true);
+    plane.renderOrder = 2;
 
-    // Fill the panel edge to edge. Its own aspect becomes the capture aspect, so
-    // the picture covers the whole screen without stretching or letterboxing.
-    const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(plane.quaternion);
-    const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(plane.quaternion);
-    const half = size.clone().multiplyScalar(0.5);
-    const extentAlong = axis => Math.abs(axis.x) * half.x
-      + Math.abs(axis.y) * half.y
-      + Math.abs(axis.z) * half.z;
-    const panelWidth = Math.max(extentAlong(axisX) * 2, 0.02);
-    const panelHeight = Math.max(extentAlong(axisY) * 2, 0.02);
-    plane.scale.set(panelWidth, panelHeight, 1);
+    // attach() keeps the world placement while making the plane a child of the
+    // command center, so it hides and restores together with the interior.
+    commandCenterRoot.attach(plane);
+    feedPlanes.push(plane);
+    return { plane, panelWidth: face.width, panelHeight: face.height };
+  }
 
-    const panelAspect = panelWidth / panelHeight;
-    let feedWidth = ROVER_FEED_WIDTH;
-    let feedHeight = Math.max(48, Math.round(feedWidth / panelAspect));
-    if (feedHeight > 512) {
-      feedHeight = 512;
-      feedWidth = Math.round(feedHeight * panelAspect);
+  function feedRenderTarget(panelAspect, baseWidth) {
+    let width = baseWidth;
+    let height = Math.max(48, Math.round(width / Math.max(panelAspect, 0.2)));
+    if (height > 512) {
+      height = 512;
+      width = Math.round(height * Math.max(panelAspect, 0.2));
     }
-
-    const target = new THREE.WebGLRenderTarget(feedWidth, feedHeight, {
+    return new THREE.WebGLRenderTarget(width, height, {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
       generateMipmaps: false,
       depthBuffer: true,
     });
-    plane.material.map = target.texture;
-    plane.material.needsUpdate = true;
-
-    // attach() keeps the world placement while making the plane a child of the
-    // command center, so it hides and restores together with the interior.
-    commandCenterRoot.attach(plane);
-
-    const camera = new THREE.PerspectiveCamera(
-      ROVER_FEED_FOV,
-      feedWidth / feedHeight,
-      0.5,
-      800,
-    );
-
-    return { plane, target, camera };
   }
 
-  function canRenderRoverFeeds() {
-    if (isDestroyed || !roverMonitors.length || !rovers.length) return false;
-    // A downlink image is a capture of the live moon, so it can only be taken
-    // while the surface is on screen: outside, or during a remote link.
-    return moonTerrainMeshes.some(terrain => terrain.visible);
+  // ── Small console monitors: the rover itself, where it is parked ──────────
+  function createRoverFeed(screenMesh, monitorGroup, roomCenter) {
+    const face = fitPlaneToLargestFace(screenMesh, roomCenter);
+    if (!face) return null;
+    // The capture matches the glass aspect exactly, so the picture fills it
+    // without stretching or letterboxing.
+    const target = feedRenderTarget(face.width / face.height, ROVER_FEED_WIDTH);
+    const camera = new THREE.PerspectiveCamera(
+      ROVER_FEED_FOV,
+      face.width / face.height,
+      0.5,
+      900,
+    );
+    const created = createFeedPlane(screenMesh, monitorGroup, roomCenter, target.texture, face);
+    if (!created) return null;
+    return { plane: created.plane, camera, target, pose: null };
   }
 
   function renderRoverFeed(feed, rover) {
     const position = rover.root.position;
     feed.camera.position.copy(position).add(roverFeedOffset);
     feed.camera.lookAt(position.x, position.y + 1, position.z);
-
-    const previousTarget = renderer.getRenderTarget();
-    // Shadows are already resolved for this frame; re-rendering the map for a
-    // 256px thumbnail would be the expensive part of the capture.
-    const previousShadowAutoUpdate = renderer.shadowMap.autoUpdate;
-    renderer.shadowMap.autoUpdate = false;
-    renderer.setRenderTarget(feed.target);
-    renderer.render(scene, feed.camera);
-    renderer.setRenderTarget(previousTarget);
-    renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
+    captureSurfaceView(feed.camera, feed.target);
+    feed.pose = { x: position.x, z: position.z, heading: rover.heading };
   }
 
-  function refreshRoverFeeds(roverFilter = null) {
-    if (!canRenderRoverFeeds()) return false;
-    // A screen cannot sample the very target it is being drawn into, so hide
-    // every downlink panel for the duration of the capture.
-    const planes = [];
+  function roverHasMoved(feed, rover) {
+    if (!feed.pose) return true;
+    const position = rover.root.position;
+    return Math.abs(feed.pose.x - position.x) > ROVER_FEED_MOVE_EPSILON
+      || Math.abs(feed.pose.z - position.z) > ROVER_FEED_MOVE_EPSILON
+      || Math.abs(feed.pose.heading - rover.heading) > 0.05;
+  }
+
+  function refreshRoverFeeds(roverFilter = null, force = false) {
+    if (isDestroyed || !roverMonitors.length) return false;
+    let rendered = false;
     for (const monitor of roverMonitors) {
       if (!monitor.feed) continue;
-      planes.push(monitor.feed.plane);
-      monitor.feed.plane.visible = false;
-    }
-    let rendered = false;
-    try {
-      for (const monitor of roverMonitors) {
-        if (!monitor.feed) continue;
-        if (roverFilter !== null && monitor.roverId !== roverFilter) continue;
-        const rover = roverById(monitor.roverId);
-        if (!rover) continue;
-        renderRoverFeed(monitor.feed, rover);
-        rendered = true;
-      }
-    } finally {
-      for (const plane of planes) plane.visible = true;
+      if (roverFilter !== null && monitor.roverId !== roverFilter) continue;
+      const rover = roverById(monitor.roverId);
+      if (!rover) continue;
+      if (!force && !roverHasMoved(monitor.feed, rover)) continue;
+      renderRoverFeed(monitor.feed, rover);
+      rendered = true;
     }
     return rendered;
+  }
+
+  // ── Large wall display: the whole outpost, live ───────────────────────────
+  function buildOutpostDisplay(roomCenter) {
+    if (outpostFeed || !commandCenterModelRoot) return;
+    const screens = [];
+    commandCenterModelRoot.traverse(child => {
+      if (!child.isMesh || !child.material) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      const name = materials.find(material => material?.name)?.name;
+      if (OUTPOST_SCREEN_MATERIALS.includes(name)) screens.push({ mesh: child, name });
+    });
+    if (!screens.length) {
+      console.warn('[Outpost display] No large screen mesh found.', {
+        materials: OUTPOST_SCREEN_MATERIALS,
+      });
+      return;
+    }
+    // Prefer the authored screen material over the fallback panel, then take the
+    // largest match in case the artist reused it.
+    screens.sort((a, b) => {
+      const rank = OUTPOST_SCREEN_MATERIALS.indexOf(a.name)
+        - OUTPOST_SCREEN_MATERIALS.indexOf(b.name);
+      if (rank !== 0) return rank;
+      return new THREE.Box3().setFromObject(b.mesh).getSize(new THREE.Vector3()).length()
+        - new THREE.Box3().setFromObject(a.mesh).getSize(new THREE.Vector3()).length();
+    });
+    const screenMesh = screens[0].mesh;
+    const face = fitPlaneToLargestFace(screenMesh, roomCenter);
+    if (!face) {
+      console.warn('[Outpost display] Could not fit a plane to the screen face.');
+      return;
+    }
+    // Capture at the glass' own aspect so the picture covers the whole screen.
+    const target = feedRenderTarget(face.width / face.height, OUTPOST_FEED_WIDTH);
+    const created = createFeedPlane(screenMesh, screenMesh, roomCenter, target.texture, face);
+    if (!created) return;
+    outpostFeed = {
+      plane: created.plane,
+      target,
+      camera: new THREE.PerspectiveCamera(
+        OUTPOST_FEED_FOV,
+        face.width / face.height,
+        1,
+        30000,
+      ),
+    };
+    console.info('[Outpost display] Large screen bound.', {
+      mesh: screenMesh.name,
+      material: screens[0].name,
+      size: [Math.round(face.width * 100) / 100, Math.round(face.height * 100) / 100],
+      pitchDeg: Math.round(Math.asin(-face.normal.y) * 180 / Math.PI),
+    });
+  }
+
+  function outpostFeedBounds() {
+    if (!outpostRoot) return null;
+    const bounds = new THREE.Box3().setFromObject(outpostRoot);
+    // Inside the command center its root is reparented to the scene, so the
+    // outpost box alone would leave the building out of shot.
+    if (commandCenterRoot) bounds.union(new THREE.Box3().setFromObject(commandCenterRoot));
+    return bounds.isEmpty() ? null : bounds;
+  }
+
+  function refreshOutpostFeed() {
+    if (isDestroyed || !outpostFeed || !outpostRoot) return false;
+    const bounds = outpostFeedBounds();
+    if (!bounds) return false;
+
+    // Comms masts and solar towers dominate the raw bounding box (94 x 72 x 72),
+    // so aiming at its centre would put the camera 36 units above the ground and
+    // shove the whole base to the far distance. Frame the base instead: the full
+    // footprint plus a modest band of height above the deck.
+    const size = bounds.getSize(outpostFeedSize);
+    const heightBand = Math.min(size.y, Math.max(size.x, size.z) * 0.35);
+    const center = bounds.getCenter(outpostFeedCenter);
+    center.y = bounds.min.y + heightBand * 0.5;
+    const groundY = bounds.min.y;
+    const topY = bounds.min.y + heightBand;
+
+    const camera = outpostFeed.camera;
+    // Turn the scaler's azimuth/elevation into the camera direction for this
+    // capture, and apply the lens angle before the fit is solved.
+    const azimuth = THREE.MathUtils.degToRad(outpostFeedView.azimuthDeg);
+    const elevation = THREE.MathUtils.degToRad(outpostFeedView.elevationDeg);
+    const cosElevation = Math.cos(elevation);
+    outpostFeedDirection.set(
+      Math.sin(azimuth) * cosElevation,
+      Math.sin(elevation),
+      Math.cos(azimuth) * cosElevation,
+    ).normalize();
+    camera.fov = outpostFeedView.fov;
+    const tanVertical = Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
+    const tanHorizontal = tanVertical * camera.aspect;
+
+    // Solve the distance that fits every corner of the base rather than guessing
+    // from a bounding radius: on a wide panel the vertical field of view alone
+    // would leave the base as a speck.
+    camera.position.copy(center).addScaledVector(outpostFeedDirection, 1);
+    camera.lookAt(center.x, center.y, center.z);
+    camera.updateMatrixWorld(true);
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+    const back = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2);
+
+    const corner = new THREE.Vector3();
+    let fitWidth = 0;
+    let fitHeight = 0;
+    for (let i = 0; i < 8; i += 1) {
+      corner.set(
+        (i & 1) ? bounds.max.x : bounds.min.x,
+        (i & 2) ? topY : groundY,
+        (i & 4) ? bounds.max.z : bounds.min.z,
+      ).sub(center);
+      const alongView = corner.dot(back);
+      fitWidth = Math.max(fitWidth, alongView + Math.abs(corner.dot(right)) / tanHorizontal);
+      fitHeight = Math.max(fitHeight, alongView + Math.abs(corner.dot(up)) / tanVertical);
+    }
+    // Fill the panel's width and let the depth run slightly past the top and
+    // bottom edges — a wide display should read as a vista, not a stamp.
+    const distance = Math.max(fitWidth, fitHeight * OUTPOST_FEED_VERTICAL_FIT, 8) * 1.02;
+
+    camera.position.copy(center).addScaledVector(outpostFeedDirection, distance);
+    camera.near = Math.max(distance * 0.05, 0.5);
+    camera.far = 30000;
+    camera.updateProjectionMatrix();
+    camera.lookAt(center.x, center.y, center.z);
+
+    captureSurfaceView(camera, outpostFeed.target);
+    return true;
+  }
+
+  // Both screen families refresh together: the wall display is a live view, the
+  // rover screens only re-capture the chassis that actually moved since the last
+  // frame they were drawn.
+  function refreshLiveScreens() {
+    refreshRoverFeeds();
+    refreshOutpostFeed();
+  }
+
+  // In-game scaler for the wall display. Values are stored here and applied on
+  // the next capture — the live timer inside the command center picks them up
+  // within a quarter second, which keeps a dragged slider from queueing a whole
+  // scene render on every input event.
+  function getOutpostFeedView() {
+    return { ...outpostFeedView };
+  }
+
+  function setOutpostFeedView(next = {}) {
+    if (Number.isFinite(next.azimuthDeg)) {
+      outpostFeedView.azimuthDeg = ((next.azimuthDeg % 360) + 360) % 360;
+    }
+    if (Number.isFinite(next.elevationDeg)) {
+      outpostFeedView.elevationDeg = THREE.MathUtils.clamp(next.elevationDeg, 2, 88);
+    }
+    if (Number.isFinite(next.fov)) {
+      outpostFeedView.fov = THREE.MathUtils.clamp(next.fov, 15, 90);
+    }
+    return getOutpostFeedView();
+  }
+
+  function resetOutpostFeedView() {
+    outpostFeedView.azimuthDeg = 19;
+    outpostFeedView.elevationDeg = 24;
+    outpostFeedView.fov = OUTPOST_FEED_FOV;
+    return getOutpostFeedView();
   }
 
   // The picture now covers the whole glass, so the focus cue rides on its
@@ -1730,7 +2044,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         material.emissive.lerp(monitor.tint, linked ? 0.9 : focused ? 0.55 : 0.2);
         material.emissiveIntensity = entry.intensity * (linked ? 2.4 : focused ? 1.6 : 1);
       }
-      if (monitor.feed) {
+      if (monitor.feed?.plane) {
         monitor.feed.plane.material.color.setScalar(linked ? 1 : focused ? 0.94 : 0.85);
       }
     }
@@ -2701,7 +3015,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     // Capture the downlink images while the surface is still on screen — once
     // the shell closes in, the last known rover positions are what the console
     // shows until the player links up again.
-    refreshRoverFeeds();
+    refreshLiveScreens();
     outsideCameraPosition = camera.position.clone();
     outsideCameraYaw = firstPersonYaw;
     outsideCameraPitch = firstPersonPitch;
@@ -3219,7 +3533,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (!roverCameraActive) return;
     // Final capture while the rover is still lit by the open surface: this is
     // the picture the console keeps after the player lets go of the controls.
-    refreshRoverFeeds();
+    refreshLiveScreens();
     const silent = Boolean(options.silent);
     const previousRover = activeRover;
     const wasRemote = roverRemoteControl;
@@ -4628,15 +4942,23 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const dt = Math.min(clock.getDelta(), 0.05);
     updateRoverDrive(dt);
 
-    // Keep the console picture of the rover being driven roughly in step with
-    // where it actually is. Throttled: a capture is a whole extra scene render.
-    if (roverCameraActive) {
+    // The screens are only on screen while the player stands in the command
+    // center, so that is the only time they are worth updating. Each redraw is a
+    // whole extra scene render, hence the throttles: the big wall display runs as
+    // a live view, while a rover screen only re-captures when that rover moved.
+    if (commandCenterInteriorActive && !roverCameraActive) {
+      outpostFeedTimer += dt;
+      if (outpostFeedTimer >= OUTPOST_FEED_REFRESH) {
+        outpostFeedTimer = 0;
+        refreshOutpostFeed();
+      }
       roverFeedTimer += dt;
       if (roverFeedTimer >= ROVER_FEED_REFRESH) {
         roverFeedTimer = 0;
-        refreshRoverFeeds(activeRover?.id ?? null);
+        refreshRoverFeeds();
       }
     } else {
+      outpostFeedTimer = 0;
       roverFeedTimer = 0;
     }
 
@@ -4808,6 +5130,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
       x: rover.root.position.x,
       z: rover.root.position.z,
     })),
+    // Live viewpoint of the command center wall display.
+    getOutpostFeedView,
+    setOutpostFeedView,
+    resetOutpostFeedView,
     toggleEarthView,
     enterAirlock,
     dismissAirlock: () => {
@@ -4875,9 +5201,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
       unmountTaskConsole();
 
-      // Downlink captures own GPU textures outside the scene graph.
+      // Live screens own GPU textures outside the scene graph.
+      outpostFeed?.target.dispose();
+      outpostFeed = null;
       for (const monitor of roverMonitors) monitor.feed?.target.dispose();
       roverMonitors.length = 0;
+      feedPlanes.length = 0;
 
       // Dispose label sprites
       for (let i = 0; i < labelTextures.length; i++) labelTextures[i].dispose();
