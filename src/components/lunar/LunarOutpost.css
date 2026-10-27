@@ -362,6 +362,31 @@
   text-align: center;
 }
 
+/* Rover fleet: tinted per chassis so both monitors and map markers agree. */
+.lunar-minimap-rover-halo {
+  fill: rgba(140, 228, 255, 0.18);
+  stroke: currentColor;
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.lunar-minimap-rover-arrow {
+  fill: currentColor;
+  stroke: rgba(3, 12, 18, 0.9);
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.lunar-minimap-structure .lunar-minimap-footprint {
+  fill: rgba(126, 96, 214, 0.3);
+  stroke: rgba(184, 162, 255, 0.9);
+  stroke-dasharray: 1.4 0.8;
+}
+
+.lunar-minimap-structure .lunar-minimap-room-label {
+  fill: #e2d8ff;
+}
+
 .lunar-mission-status {
   position: static;
   transform: none;
@@ -602,6 +627,63 @@
   vector-effect: non-scaling-stroke;
 }
 
+/* Rover fleet: each marker is tinted with that chassis' own accent colour. */
+.lunar-map-rover-halo {
+  fill: rgba(140, 228, 255, 0.16);
+  stroke: currentColor;
+  stroke-width: 0.35;
+  vector-effect: non-scaling-stroke;
+}
+
+.lunar-map-rover-arrow {
+  fill: currentColor;
+  stroke: rgba(3, 12, 18, 0.9);
+  stroke-width: 0.3;
+  vector-effect: non-scaling-stroke;
+}
+
+.lunar-map-structure .lunar-map-footprint {
+  fill: rgba(126, 96, 214, 0.28);
+  stroke: rgba(184, 162, 255, 0.9);
+  stroke-dasharray: 1.4 0.8;
+}
+
+.lunar-map-structure .lunar-map-room-label {
+  fill: #e2d8ff;
+}
+
+.lunar-map-rover-list > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lunar-map-rover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px;
+  border-radius: 3px;
+  color: #c4d5d9;
+  background: rgba(16, 29, 38, 0.48);
+  font-family: var(--lunar-font-mono);
+  font-size: 0.53rem;
+}
+
+.lunar-map-rover-row i {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.lunar-map-rover-row small {
+  margin-left: auto;
+  color: #849aa3;
+  font-size: 0.48rem;
+}
+
 .lunar-map-details {
   min-height: 0;
   overflow-y: auto;
@@ -738,6 +820,18 @@
   border-color: #ffe177;
   background: #ffe177;
   clip-path: polygon(50% 0, 100% 100%, 50% 74%, 0 100%);
+}
+
+.lunar-map-legend .legend-rover {
+  border-color: #8ce4ff;
+  background: #8ce4ff;
+  clip-path: polygon(50% 0, 100% 100%, 50% 74%, 0 100%);
+}
+
+.lunar-map-legend .legend-structure {
+  border-radius: 2px;
+  border-color: #b8a2ff;
+  background: rgba(126, 96, 214, 0.55);
 }
 
 .lunar-map-legend .legend-available { background: #64b9ff; }

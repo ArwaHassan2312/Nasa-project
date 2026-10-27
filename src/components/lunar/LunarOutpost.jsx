@@ -43,6 +43,38 @@ function formatRemainingTime(milliseconds) {
   return `${minutes}:${seconds}`;
 }
 
+// Both maps poll the engine on a timer. Ignore sub-cell jitter in the player and
+// the rover fleet so an idle frame never re-renders an unchanged map.
+const SNAPSHOT_PLAYER_TOLERANCE = 0.35;
+const SNAPSHOT_YAW_TOLERANCE = 0.06;
+
+function snapshotsMatch(current, next) {
+  if (!current || !next) return false;
+  if (current.components !== next.components || current.cameraMode !== next.cameraMode) return false;
+
+  const currentPlayer = current.player;
+  const nextPlayer = next.player;
+  const samePlayer = (currentPlayer === null && nextPlayer === null)
+    || Boolean(currentPlayer && nextPlayer
+      && Math.abs(currentPlayer.x - nextPlayer.x) < SNAPSHOT_PLAYER_TOLERANCE
+      && Math.abs(currentPlayer.z - nextPlayer.z) < SNAPSHOT_PLAYER_TOLERANCE
+      && Math.abs(currentPlayer.yaw - nextPlayer.yaw) < SNAPSHOT_YAW_TOLERANCE
+      && currentPlayer.location === nextPlayer.location);
+  if (!samePlayer) return false;
+
+  const currentRovers = current.rovers ?? [];
+  const nextRovers = next.rovers ?? [];
+  if (currentRovers.length !== nextRovers.length) return false;
+  for (let index = 0; index < currentRovers.length; index += 1) {
+    const a = currentRovers[index];
+    const b = nextRovers[index];
+    if (Math.abs(a.x - b.x) >= SNAPSHOT_PLAYER_TOLERANCE) return false;
+    if (Math.abs(a.z - b.z) >= SNAPSHOT_PLAYER_TOLERANCE) return false;
+    if (Math.abs(a.heading - b.heading) >= SNAPSHOT_YAW_TOLERANCE) return false;
+  }
+  return true;
+}
+
 export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const containerRef = useRef(null);
   const engineRef = useRef(null);
@@ -254,23 +286,10 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
 
     const updateMiniSnapshot = () => {
       const nextSnapshot = engineRef.current?.getMapSnapshot() ?? null;
-      setMiniSnapshot((currentSnapshot) => {
-        if (!nextSnapshot) return currentSnapshot;
-        const samePlayer = currentSnapshot?.player === null && nextSnapshot.player === null
-          || currentSnapshot?.player && nextSnapshot.player
-            && Math.abs(currentSnapshot.player.x - nextSnapshot.player.x) < 0.3
-            && Math.abs(currentSnapshot.player.z - nextSnapshot.player.z) < 0.3
-            && Math.abs(currentSnapshot.player.yaw - nextSnapshot.player.yaw) < 0.05
-            && currentSnapshot.player.location === nextSnapshot.player.location;
-        if (
-          currentSnapshot?.components === nextSnapshot.components
-          && currentSnapshot.cameraMode === nextSnapshot.cameraMode
-          && samePlayer
-        ) {
-          return currentSnapshot;
-        }
-        return nextSnapshot;
-      });
+      if (!nextSnapshot) return;
+      setMiniSnapshot((currentSnapshot) => (
+        snapshotsMatch(currentSnapshot, nextSnapshot) ? currentSnapshot : nextSnapshot
+      ));
     };
 
     updateMiniSnapshot();
@@ -288,22 +307,10 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
 
     const updateMapSnapshot = () => {
       const nextSnapshot = engineRef.current?.getMapSnapshot() ?? null;
-      setMapSnapshot((currentSnapshot) => {
-        if (!nextSnapshot) return currentSnapshot;
-        const samePlayer = currentSnapshot?.player === null && nextSnapshot.player === null
-          || currentSnapshot?.player && nextSnapshot.player
-            && Math.abs(currentSnapshot.player.x - nextSnapshot.player.x) < 0.35
-            && Math.abs(currentSnapshot.player.z - nextSnapshot.player.z) < 0.35
-            && Math.abs(currentSnapshot.player.yaw - nextSnapshot.player.yaw) < 0.06;
-        if (
-          currentSnapshot?.components === nextSnapshot.components
-          && currentSnapshot.cameraMode === nextSnapshot.cameraMode
-          && samePlayer
-        ) {
-          return currentSnapshot;
-        }
-        return nextSnapshot;
-      });
+      if (!nextSnapshot) return;
+      setMapSnapshot((currentSnapshot) => (
+        snapshotsMatch(currentSnapshot, nextSnapshot) ? currentSnapshot : nextSnapshot
+      ));
     };
 
     updateMapSnapshot();
@@ -747,6 +754,22 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 </g>
               );
             })}
+            {miniSnapshot.rovers?.map((rover) => (
+              <g
+                key={`rover-${rover.id}`}
+                className="lunar-minimap-rover"
+                transform={`translate(${rover.x} ${-rover.z})`}
+                style={{ color: rover.tint }}
+              >
+                <title>{rover.label} · x {Math.round(rover.x)} · z {Math.round(rover.z)}</title>
+                <circle r={miniSpan * 0.045} className="lunar-minimap-rover-halo" />
+                <path
+                  d="M 0 -1.7 L 1.15 0.95 L 0.5 0.95 L 0 0.45 L -0.5 0.95 L -1.15 0.95 Z"
+                  transform={`rotate(${rover.heading * 180 / Math.PI + 90}) scale(${miniSpan * 0.022})`}
+                  className="lunar-minimap-rover-arrow"
+                />
+              </g>
+            ))}
             {miniSnapshot.player && miniFitBounds && (
               <g
                 className="lunar-minimap-player"
@@ -902,6 +925,23 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                       );
                     })}
 
+                    {mapSnapshot.rovers?.map((rover) => (
+                      <g
+                        key={`rover-${rover.id}`}
+                        className="lunar-map-rover"
+                        transform={`translate(${rover.x} ${-rover.z})`}
+                        style={{ color: rover.tint }}
+                      >
+                        <title>{rover.label} · x {Math.round(rover.x)} · z {Math.round(rover.z)}</title>
+                        <circle r={mapSpan * 0.019} className="lunar-map-rover-halo" />
+                        <path
+                          d="M 0 -1.7 L 1.15 0.95 L 0.5 0.95 L 0 0.45 L -0.5 0.95 L -1.15 0.95 Z"
+                          transform={`rotate(${rover.heading * 180 / Math.PI + 90}) scale(${mapSpan * 0.011})`}
+                          className="lunar-map-rover-arrow"
+                        />
+                      </g>
+                    ))}
+
                     {mapSnapshot.player && (
                       <g
                         className="lunar-map-player"
@@ -971,9 +1011,25 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                     </div>
                   </div>
                 )}
+                {mapSnapshot?.rovers?.length > 0 && (
+                  <div className="lunar-map-location-list lunar-map-rover-list">
+                    <h3>Rover fleet</h3>
+                    <div>
+                      {mapSnapshot.rovers.map((rover) => (
+                        <span key={rover.id} className="lunar-map-rover-row">
+                          <i style={{ background: rover.tint, color: rover.tint }} />
+                          <span>{rover.label}</span>
+                          <small>x {Math.round(rover.x)} · z {Math.round(rover.z)}</small>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="lunar-map-legend" aria-label="Map legend">
                   <h3>Legend</h3>
                   <span><i className="legend-player" /> You · facing direction</span>
+                  <span><i className="legend-rover" /> Rover · facing direction</span>
+                  <span><i className="legend-structure" /> Command center</span>
                   <span><i className="legend-task legend-available" /> Available task</span>
                   <span><i className="legend-task legend-progress" /> In progress</span>
                   <span><i className="legend-task legend-overdue" /> Overdue (still completable)</span>

@@ -1180,6 +1180,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const MONITOR_FOCUS_DISTANCE = 22;
   const MONITOR_FOCUS_MIN_TOLERANCE = 0.8;
   const MONITOR_FOCUS_TOLERANCE_RATIO = 0.2;
+  // Downlink image painted on each monitor: a real capture of that rover sitting
+  // on the surface. Refreshed while the rover is being driven and once more when
+  // the player disconnects, so the console always shows where the rover is now.
+  // The capture is sized to the panel's own aspect, so the picture fills the
+  // whole screen with no letterboxing and no stretching.
+  const ROVER_FEED_WIDTH = 256; // capture resolution along the screen's long axis
+  const ROVER_FEED_FOV = 42;
+  const ROVER_FEED_REFRESH = 0.3; // seconds between live captures while driving
+  const roverFeedOffset = new THREE.Vector3(7, 4.5, 7); // world-space view angle
+  let roverFeedTimer = 0;
   // The live eye height. Seeded from PLAYER_CAMERA and adjustable at runtime;
   // every camera measurement below reads this, never a scattered constant.
   let playerCameraHeight = PLAYER_CAMERA.height;
@@ -1357,6 +1367,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           })),
         });
         refreshRoverMonitors();
+        refreshRoverFeeds();
         onRoverReady(true);
       },
       undefined,
@@ -1432,7 +1443,44 @@ export function createLunarEngine(canvas, callbacks = {}) {
       });
     }
     mapComponents = buildMapComponents(outpost);
+    addCommandCenterMapComponent();
     buildRoverMonitors();
+  }
+
+  // The command center is not named like the numbered outpost parts, so it gets
+  // its own map entry. Both the full map and the live minimap read this list.
+  function addCommandCenterMapComponent() {
+    if (!commandCenterRoot) return;
+    const footprint = commandCenterExteriorShell
+      ? new THREE.Box3().setFromObject(commandCenterExteriorShell)
+      : new THREE.Box3().setFromObject(commandCenterRoot);
+    if (footprint.isEmpty()) return;
+    mapComponents = mapComponents.filter(component => component.id !== '024');
+    mapComponents.push({
+      id: '024',
+      name: 'Command Center',
+      category: 'structure',
+      minX: footprint.min.x,
+      maxX: footprint.max.x,
+      minZ: footprint.min.z,
+      maxZ: footprint.max.z,
+      x: (footprint.min.x + footprint.max.x) / 2,
+      z: (footprint.min.z + footprint.max.z) / 2,
+    });
+    refreshMapBounds();
+  }
+
+  function refreshMapBounds() {
+    if (!mapComponents.length) {
+      mapBounds = null;
+      return;
+    }
+    mapBounds = {
+      minX: Math.min(...mapComponents.map(component => component.minX)),
+      maxX: Math.max(...mapComponents.map(component => component.maxX)),
+      minZ: Math.min(...mapComponents.map(component => component.minZ)),
+      maxZ: Math.max(...mapComponents.map(component => component.maxZ)),
+    };
   }
 
   // The command center GLB ships a two-screen console: the top and bottom
@@ -1483,6 +1531,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
     // Highest screen gets ROVER 01 so the pair reads top-down like a console.
     placements.sort((a, b) => b.center.y - a.center.y);
 
+    // The room's centre decides which way a screen should face, so the picture
+    // can never end up painted on the back of the panel.
+    const roomCenter = commandCenterExteriorShell
+      ? new THREE.Box3().setFromObject(commandCenterExteriorShell).getCenter(new THREE.Vector3())
+      : null;
+
     placements.slice(0, ROVER_SLOTS.length).forEach((placement, index) => {
       const slot = ROVER_SLOTS[index];
       const tint = new THREE.Color(slot.tint);
@@ -1520,6 +1574,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
         bounds: placement.bounds,
         tint,
         screenMaterials,
+        // The visible picture of the rover, painted on its own screen.
+        feed: meshes.length ? createRoverFeed(meshes[0].child, roomCenter) : null,
       });
     });
 
@@ -1527,10 +1583,142 @@ export function createLunarEngine(canvas, callbacks = {}) {
       monitors: roverMonitors.map(monitor => monitor.label),
     });
     refreshRoverMonitors();
+    refreshRoverFeeds();
   }
 
-  // Screens glow in their rover's colour: dim while idle, brighter while the
-  // player is aiming at them, and brightest while that rover is being driven.
+  // A downlink screen is its own little camera looking at the rover, rendered
+  // into a texture and laid over the monitor's inset panel. Rebuilding the image
+  // only when the rover moves keeps the cost off the main render path.
+  function createRoverFeed(screenMesh, roomCenter) {
+    const bounds = new THREE.Box3().setFromObject(screenMesh);
+    const size = bounds.getSize(new THREE.Vector3());
+    const center = bounds.getCenter(new THREE.Vector3());
+
+    // The averaged surface normal of the inset mesh says which way the screen
+    // faces; it is a flat panel, so every vertex points the same way.
+    const normal = new THREE.Vector3();
+    const normals = screenMesh.geometry?.attributes?.normal;
+    if (normals) {
+      const normalMatrix = new THREE.Matrix3().getNormalMatrix(screenMesh.matrixWorld);
+      const scratch = new THREE.Vector3();
+      for (let i = 0; i < normals.count; i++) {
+        scratch.fromBufferAttribute(normals, i).applyMatrix3(normalMatrix);
+        normal.add(scratch);
+      }
+    }
+    if (normal.lengthSq() < 1e-8) normal.set(1, 0, 0);
+    normal.normalize();
+    if (roomCenter && normal.dot(roomCenter.clone().sub(center)) < 0) normal.negate();
+
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        toneMapped: false,
+        color: 0xffffff,
+        // Visible whichever way the authored panel happens to be wound.
+        side: THREE.DoubleSide,
+      }),
+    );
+    plane.name = 'Rover downlink feed';
+    // Sit just proud of the glass so it never z-fights with the authored screen.
+    plane.position.copy(center).addScaledVector(normal, Math.abs(size.dot(normal)) * 0.5 + 0.012);
+    plane.lookAt(center.clone().add(normal));
+    plane.updateMatrixWorld(true);
+
+    // Fill the panel edge to edge. Its own aspect becomes the capture aspect, so
+    // the picture covers the whole screen without stretching or letterboxing.
+    const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(plane.quaternion);
+    const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(plane.quaternion);
+    const half = size.clone().multiplyScalar(0.5);
+    const extentAlong = axis => Math.abs(axis.x) * half.x
+      + Math.abs(axis.y) * half.y
+      + Math.abs(axis.z) * half.z;
+    const panelWidth = Math.max(extentAlong(axisX) * 2, 0.02);
+    const panelHeight = Math.max(extentAlong(axisY) * 2, 0.02);
+    plane.scale.set(panelWidth, panelHeight, 1);
+
+    const panelAspect = panelWidth / panelHeight;
+    let feedWidth = ROVER_FEED_WIDTH;
+    let feedHeight = Math.max(48, Math.round(feedWidth / panelAspect));
+    if (feedHeight > 512) {
+      feedHeight = 512;
+      feedWidth = Math.round(feedHeight * panelAspect);
+    }
+
+    const target = new THREE.WebGLRenderTarget(feedWidth, feedHeight, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      generateMipmaps: false,
+      depthBuffer: true,
+    });
+    plane.material.map = target.texture;
+    plane.material.needsUpdate = true;
+
+    // attach() keeps the world placement while making the plane a child of the
+    // command center, so it hides and restores together with the interior.
+    commandCenterRoot.attach(plane);
+
+    const camera = new THREE.PerspectiveCamera(
+      ROVER_FEED_FOV,
+      feedWidth / feedHeight,
+      0.5,
+      800,
+    );
+
+    return { plane, target, camera };
+  }
+
+  function canRenderRoverFeeds() {
+    if (isDestroyed || !roverMonitors.length || !rovers.length) return false;
+    // A downlink image is a capture of the live moon, so it can only be taken
+    // while the surface is on screen: outside, or during a remote link.
+    return moonTerrainMeshes.some(terrain => terrain.visible);
+  }
+
+  function renderRoverFeed(feed, rover) {
+    const position = rover.root.position;
+    feed.camera.position.copy(position).add(roverFeedOffset);
+    feed.camera.lookAt(position.x, position.y + 1, position.z);
+
+    const previousTarget = renderer.getRenderTarget();
+    // Shadows are already resolved for this frame; re-rendering the map for a
+    // 256px thumbnail would be the expensive part of the capture.
+    const previousShadowAutoUpdate = renderer.shadowMap.autoUpdate;
+    renderer.shadowMap.autoUpdate = false;
+    renderer.setRenderTarget(feed.target);
+    renderer.render(scene, feed.camera);
+    renderer.setRenderTarget(previousTarget);
+    renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
+  }
+
+  function refreshRoverFeeds(roverFilter = null) {
+    if (!canRenderRoverFeeds()) return false;
+    // A screen cannot sample the very target it is being drawn into, so hide
+    // every downlink panel for the duration of the capture.
+    const planes = [];
+    for (const monitor of roverMonitors) {
+      if (!monitor.feed) continue;
+      planes.push(monitor.feed.plane);
+      monitor.feed.plane.visible = false;
+    }
+    let rendered = false;
+    try {
+      for (const monitor of roverMonitors) {
+        if (!monitor.feed) continue;
+        if (roverFilter !== null && monitor.roverId !== roverFilter) continue;
+        const rover = roverById(monitor.roverId);
+        if (!rover) continue;
+        renderRoverFeed(monitor.feed, rover);
+        rendered = true;
+      }
+    } finally {
+      for (const plane of planes) plane.visible = true;
+    }
+    return rendered;
+  }
+
+  // The picture now covers the whole glass, so the focus cue rides on its
+  // brightness: dim while idle, brighter when aimed at, brightest while linked.
   function refreshRoverMonitors() {
     for (const monitor of roverMonitors) {
       const linked = roverCameraActive && activeRover?.id === monitor.roverId;
@@ -1541,6 +1729,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
         if (entry.color) material.emissive.copy(entry.color);
         material.emissive.lerp(monitor.tint, linked ? 0.9 : focused ? 0.55 : 0.2);
         material.emissiveIntensity = entry.intensity * (linked ? 2.4 : focused ? 1.6 : 1);
+      }
+      if (monitor.feed) {
+        monitor.feed.plane.material.color.setScalar(linked ? 1 : focused ? 0.94 : 0.85);
       }
     }
   }
@@ -1692,14 +1883,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           // Rasterize the component surfaces into walker collision: their
           // walls stop the walker, while ramps and low decks stay climbable.
           outpostHeightField = buildOutpostHeightField(outpost);
-          if (mapComponents.length) {
-            mapBounds = {
-              minX: Math.min(...mapComponents.map(component => component.minX)),
-              maxX: Math.max(...mapComponents.map(component => component.maxX)),
-              minZ: Math.min(...mapComponents.map(component => component.minZ)),
-              maxZ: Math.max(...mapComponents.map(component => component.maxZ))
-            };
-          }
+          refreshMapBounds();
           setChallengeFlags(challengeReadinessFlags);
           if (queuedEventPresentation) {
             beginEventPresentation(
@@ -2514,6 +2698,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function enterCommandCenterInterior(target) {
     if (!commandCenterRoot || !commandCenterModelRoot || activeModuleInterior) return;
+    // Capture the downlink images while the surface is still on screen — once
+    // the shell closes in, the last known rover positions are what the console
+    // shows until the player links up again.
+    refreshRoverFeeds();
     outsideCameraPosition = camera.position.clone();
     outsideCameraYaw = firstPersonYaw;
     outsideCameraPitch = firstPersonPitch;
@@ -3029,6 +3217,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function stopRoverControl(options = {}) {
     if (!roverCameraActive) return;
+    // Final capture while the rover is still lit by the open surface: this is
+    // the picture the console keeps after the player lets go of the controls.
+    refreshRoverFeeds();
     const silent = Boolean(options.silent);
     const previousRover = activeRover;
     const wasRemote = roverRemoteControl;
@@ -4437,6 +4628,18 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const dt = Math.min(clock.getDelta(), 0.05);
     updateRoverDrive(dt);
 
+    // Keep the console picture of the rover being driven roughly in step with
+    // where it actually is. Throttled: a capture is a whole extra scene render.
+    if (roverCameraActive) {
+      roverFeedTimer += dt;
+      if (roverFeedTimer >= ROVER_FEED_REFRESH) {
+        roverFeedTimer = 0;
+        refreshRoverFeeds(activeRover?.id ?? null);
+      }
+    } else {
+      roverFeedTimer = 0;
+    }
+
     if (cameraMode !== previousCameraMode) {
       // Every mode switch teleports the camera, so never carry gait momentum or
       // a half-finished hop across one: stepping through an airlock must not
@@ -4545,11 +4748,30 @@ export function createLunarEngine(canvas, callbacks = {}) {
       }
     }
 
+    // The live fleet rides on top of the outpost bounds so both the full map and
+    // the minimap always keep the rovers in frame, wherever they were driven.
+    const fleet = rovers.map(rover => ({
+      id: rover.id,
+      label: rover.label,
+      tint: `#${rover.tint.toString(16).padStart(6, '0')}`,
+      x: rover.root.position.x,
+      z: rover.root.position.z,
+      heading: rover.heading,
+    }));
+    const bounds = { ...mapBounds };
+    for (const rover of fleet) {
+      if (rover.x < bounds.minX) bounds.minX = rover.x;
+      if (rover.x > bounds.maxX) bounds.maxX = rover.x;
+      if (rover.z < bounds.minZ) bounds.minZ = rover.z;
+      if (rover.z > bounds.maxZ) bounds.maxZ = rover.z;
+    }
+
     return {
       components: mapComponents,
-      bounds: mapBounds,
+      bounds,
       player,
-      cameraMode
+      cameraMode,
+      rovers: fleet,
     };
   }
 
@@ -4652,6 +4874,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
       }
 
       unmountTaskConsole();
+
+      // Downlink captures own GPU textures outside the scene graph.
+      for (const monitor of roverMonitors) monitor.feed?.target.dispose();
+      roverMonitors.length = 0;
 
       // Dispose label sprites
       for (let i = 0; i < labelTextures.length; i++) labelTextures[i].dispose();
