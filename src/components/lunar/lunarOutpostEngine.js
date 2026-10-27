@@ -15,6 +15,27 @@ import { clone as cloneSkinnedRig } from 'three/examples/jsm/utils/SkeletonUtils
 import { DAILY_CHALLENGES } from '../../data/dailyChallenges';
 import { loadDownscaledTexture } from '../../utils/textureUtils';
 
+// ─── Player camera ───────────────────────────────────────────────────────────
+// One camera for the whole game. The same look, eye height and gait are used on
+// the lunar surface and inside every outpost component, so stepping through an
+// airlock never changes how the player sees or moves. Everything that measures
+// the view from the player's eyes reads this object — change `height` here (or
+// call engine.setPlayerCameraHeight()) and the surface, the airlock, the
+// greenhouse, workshop, habitats and the command center all follow.
+// Scale: an eye height of 3.2 units is roughly 1.7 m, so one unit ≈ half a metre.
+export const PLAYER_CAMERA = {
+  height: 4.2, // eye height above whatever the player stands on
+  minHeight: 0.5, // guard rails for setPlayerCameraHeight()
+  maxHeight: 40,
+  walkSpeed: 2, // slow, deliberate ~1 m/s lunar shuffle
+  sprintSpeed: 10, // shift run, about lunar-rover pace
+  acceleration: 8, // suit + regolith inertia: ease into the target speed
+  deceleration: 6, // and glide to a stop instead of snapping
+  gravity: 3.1, // ~1.6 m/s^2 — the Moon's surface gravity
+  jumpSpeed: 3.6, // apex ~2 units (~1 m), ~2.3 s of air
+  pitchLimit: 1.45, // radians of look up/down travel
+};
+
 // Module-level caches: raw asset buffers loaded once to prevent memory leaks and repeated downloads
 const ASSET_CACHE = {
   skyTexture: null,
@@ -175,6 +196,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   };
   const releaseAllKeys = () => keys.clear();
   const firstPersonStart = new THREE.Vector3();
+  // Ground level under firstPersonStart, kept apart from the eye height so the
+  // spawn point follows PLAYER_CAMERA.height when it changes at runtime.
+  let firstPersonStartGroundY = 0;
   const firstPersonLookAt = new THREE.Vector3();
   const savedFreePosition = new THREE.Vector3();
   const savedFreeTarget = new THREE.Vector3();
@@ -987,16 +1011,27 @@ export function createLunarEngine(canvas, callbacks = {}) {
     consoleDragging = false;
     if (canvas) canvas.style.cursor = '';
 
+    const standPosition = playerStandPosition();
     const looker = new THREE.PerspectiveCamera();
-    looker.position.copy(firstPersonStart);
+    looker.position.copy(standPosition);
     looker.lookAt(firstPersonLookAt);
     dayStartCameraTransition = {
       elapsed: 0,
       startPosition: camera.position.clone(),
       startQuaternion: camera.quaternion.clone(),
-      destination: firstPersonStart.clone(),
+      destination: standPosition,
       destinationQuaternion: looker.quaternion.clone(),
     };
+  }
+
+  // Where the player stands when dropped back onto the surface, resolved against
+  // the current camera height so a runtime height change re-seats the view.
+  function playerStandPosition() {
+    return new THREE.Vector3(
+      firstPersonStart.x,
+      firstPersonStartGroundY + playerCameraHeight,
+      firstPersonStart.z,
+    );
   }
 
   // Milky Way Skybox: cached, mipmap-free, downscaled to 4K at decode time
@@ -1145,19 +1180,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const MONITOR_FOCUS_DISTANCE = 22;
   const MONITOR_FOCUS_MIN_TOLERANCE = 0.8;
   const MONITOR_FOCUS_TOLERANCE_RATIO = 0.2;
-  const FIRST_PERSON_EYE_HEIGHT = 3.2;
-  // Lunar motion: gravity is about a sixth of Earth's, so the walker shuffles
-  // slowly and jumps arc high and float for a couple of seconds instead of
-  // snapping back down. Scale: eye height 3.2 units ~ 1.7 m, so one unit is
-  // roughly half a metre.
-  const FIRST_PERSON_GRAVITY = 3.1; // ~1.6 m/s^2 — the Moon's surface gravity
-  const FIRST_PERSON_JUMP_SPEED = 3.6; // apex ~2 units (~1 m), ~2.3 s of air
-  const FIRST_PERSON_WALK_SPEED = 2; // slow, deliberate ~1 m/s lunar shuffle
-  const FIRST_PERSON_SPRINT_SPEED = 10; // shift run, about lunar-rover pace
-  // Suit and regolith inertia: speed eases in and glides out instead of
-  // snapping, and momentum carries through jumps.
-  const FIRST_PERSON_ACCELERATION = 8;
-  const FIRST_PERSON_DECELERATION = 6;
+  // The live eye height. Seeded from PLAYER_CAMERA and adjustable at runtime;
+  // every camera measurement below reads this, never a scattered constant.
+  let playerCameraHeight = PLAYER_CAMERA.height;
   // The two scans overlap slightly so the seam between them disappears.
   const SEAM_OVERLAP = 4 * WORLD_SCALE;
   // Default free-camera framing distance, sized to the outpost (not the map).
@@ -1630,9 +1655,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
           const viewOffset = Math.max(outpostSize.x, outpostSize.z) * 0.78;
           firstPersonStart.set(
             outpostCenter.x + viewOffset * 0.7,
-            surfaceY + FIRST_PERSON_EYE_HEIGHT,
+            surfaceY + playerCameraHeight,
             outpostCenter.z + viewOffset * 0.7
           );
+          firstPersonStartGroundY = surfaceY;
           firstPersonLookAt.set(outpostCenter.x, outpostBounds.min.y + outpostSize.y * 0.45, outpostCenter.z);
 
           // Frame the landed outpost for the free camera so the base stays the
@@ -2397,9 +2423,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
     } catch (error) {
       console.error('[TaskConsole] mount failed, entry continues without console.', error);
     }
-    camera.position.set(0, FIRST_PERSON_EYE_HEIGHT, 2.55);
+    camera.position.set(0, playerCameraHeight, 2.55);
     camera.rotation.order = 'YXZ';
-    camera.lookAt(0, FIRST_PERSON_EYE_HEIGHT, -1.5);
+    camera.lookAt(0, playerCameraHeight, -1.5);
     firstPersonYaw = camera.rotation.y;
     firstPersonPitch = camera.rotation.x;
     activeModuleInteriorLight = new THREE.PointLight(0xe4edff, 14, 24);
@@ -2520,7 +2546,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
     // Stand on the deck at the same eye height the player camera uses outside.
     const interiorSpawn = commandCenterRoot.localToWorld(new THREE.Vector3(0, 0, 1.8));
-    interiorSpawn.y = activeModuleInteriorBounds.min.y + FIRST_PERSON_EYE_HEIGHT;
+    interiorSpawn.y = activeModuleInteriorBounds.min.y + playerCameraHeight;
     camera.position.copy(interiorSpawn);
     camera.rotation.order = 'YXZ';
     // Walk in facing the rover downlink console when the model exposes it, so
@@ -2594,7 +2620,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
     const roomSize = airlockInteriorBounds.getSize(new THREE.Vector3());
     const cameraY = Math.min(
-      airlockInteriorBounds.min.y + FIRST_PERSON_EYE_HEIGHT,
+      airlockInteriorBounds.min.y + playerCameraHeight,
       airlockInteriorBounds.max.y - 0.3
     );
     const entryInset = Math.max(0.8, Math.max(roomSize.x, roomSize.z) * 0.12);
@@ -2762,7 +2788,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (airlockInteriorLight) scene.remove(airlockInteriorLight);
     const size = greenhouseInteriorBounds.getSize(new THREE.Vector3());
     const y = Math.min(
-      greenhouseInteriorBounds.min.y + FIRST_PERSON_EYE_HEIGHT,
+      greenhouseInteriorBounds.min.y + playerCameraHeight,
       greenhouseInteriorBounds.max.y - 0.3
     );
     const inset = Math.max(0.8, Math.max(size.x, size.z) * 0.12);
@@ -2947,6 +2973,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
     releaseAllKeys();
     firstPersonVelocity.set(0, 0, 0);
+    airborne = false;
+    jumpVelocity = 0;
     roverCameraSavedPosition.copy(camera.position);
     roverCameraSavedQuaternion.copy(camera.quaternion);
     roverCameraSavedTarget.copy(controls.target);
@@ -3095,7 +3123,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       savedFreeTarget.copy(controls.target);
       cameraMode = 'first-person';
       controls.enabled = false;
-      camera.position.copy(firstPersonStart);
+      camera.position.copy(playerStandPosition());
       camera.rotation.order = 'YXZ';
       camera.lookAt(firstPersonLookAt);
       firstPersonYaw = camera.rotation.y;
@@ -3137,7 +3165,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     savedEarthFov = camera.fov;
     savedEarthScale = earthMesh.scale.x;
 
-    camera.position.copy(firstPersonStart);
+    camera.position.copy(playerStandPosition());
     camera.fov = 120;
     camera.updateProjectionMatrix();
     controls.maxPolarAngle = Math.PI * 0.95;
@@ -3334,7 +3362,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
   function handleMouseMove(event) {
     if (eventCinematic || !['first-person', 'interior'].includes(cameraMode) || document.pointerLockElement !== canvas) return;
     firstPersonYaw -= event.movementX * 0.0022;
-    firstPersonPitch = THREE.MathUtils.clamp(firstPersonPitch - event.movementY * 0.0018, -1.45, 1.45);
+    firstPersonPitch = THREE.MathUtils.clamp(
+      firstPersonPitch - event.movementY * 0.0018,
+      -PLAYER_CAMERA.pitchLimit,
+      PLAYER_CAMERA.pitchLimit,
+    );
   }
 
   function updateRoverCamera(dt) {
@@ -3536,13 +3568,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
       dismissedComponentId = activeComponentTarget?.id ?? null;
       return;
     }
-    if (isJump && cameraMode === 'first-person') {
+    if (isJump && ['first-person', 'interior'].includes(cameraMode)) {
       event.preventDefault();
       // A fresh press launches the hop; holding the key does not re-launch
-      // on landing, so jumps stay deliberate.
+      // on landing, so jumps stay deliberate. Interiors use the same launch and
+      // the room ceiling caps the arc.
       if (!event.repeat && !airborne) {
         airborne = true;
-        jumpVelocity = FIRST_PERSON_JUMP_SPEED;
+        jumpVelocity = PLAYER_CAMERA.jumpSpeed;
       }
       return;
     }
@@ -4125,7 +4158,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     // the walker's real body height counts instead, so a hop can carry over
     // low obstacles instead of snagging on the ground far below.
     const feetY = airborne
-      ? camera.position.y - FIRST_PERSON_EYE_HEIGHT
+      ? camera.position.y - playerCameraHeight
       : supportHeightAt(camera.position.x, camera.position.z);
     const startX = camera.position.x;
     const startZ = camera.position.z;
@@ -4160,11 +4193,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
       outerRect.minZ - OUTER_WALK_LIMIT,
       outerRect.maxZ + OUTER_WALK_LIMIT
     );
-    const targetY = supportHeightAt(camera.position.x, camera.position.z) + FIRST_PERSON_EYE_HEIGHT;
+    const targetY = supportHeightAt(camera.position.x, camera.position.z) + playerCameraHeight;
     if (airborne) {
       // Ballistic hop: gravity pulls the walker back down, and whatever
       // surface (terrain, ramp or ledge top) catches up first is the landing.
-      jumpVelocity -= FIRST_PERSON_GRAVITY * dt;
+      jumpVelocity -= PLAYER_CAMERA.gravity * dt;
       camera.position.y += jumpVelocity * dt;
       if (camera.position.y <= targetY) {
         camera.position.y = targetY;
@@ -4181,11 +4214,157 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
   function keepCameraInsideVerticalBounds(bounds) {
     if (!bounds) return;
-    const floor = bounds.min.y + FIRST_PERSON_EYE_HEIGHT;
+    const floor = bounds.min.y + playerCameraHeight;
     const ceiling = bounds.max.y - 0.2;
     camera.position.y = floor <= ceiling
       ? THREE.MathUtils.clamp(camera.position.y, floor, ceiling)
       : (bounds.min.y + bounds.max.y) / 2;
+  }
+
+  // ── The player camera ──────────────────────────────────────────────────────
+  // One controller for the whole game. Looking, walking and standing all go
+  // through here whether the player is on the regolith or inside a component;
+  // the only thing the space changes is the "support": what the deck is, what
+  // stops horizontal movement, and whether there is a sky to fall out of.
+  function currentPlayerSpace() {
+    if (cameraMode !== 'interior') return { kind: 'surface', bounds: null, clampPlan: false };
+    // Command center / habitats / workshop / greenhouse: a boxed room.
+    if (greenhouseInterior?.visible && greenhouseInteriorBounds) {
+      return { kind: 'interior', bounds: greenhouseInteriorBounds, clampPlan: true };
+    }
+    if (activeModuleInterior?.visible && activeModuleInteriorBounds) {
+      return { kind: 'interior', bounds: activeModuleInteriorBounds, clampPlan: true };
+    }
+    // The airlock is a corridor with its own walls; only its deck is enforced.
+    if (airlockInterior && airlockInteriorBounds) {
+      return { kind: 'interior', bounds: airlockInteriorBounds, clampPlan: false };
+    }
+    return { kind: 'interior', bounds: null, clampPlan: false };
+  }
+
+  function updatePlayerCamera(dt) {
+    const space = currentPlayerSpace();
+
+    // Look: one yaw/pitch pair drives every player view.
+    camera.rotation.order = 'YXZ';
+    camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
+
+    const forward = (keys.has('w') || keys.has('arrowup') ? 1 : 0)
+      - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+    const side = (keys.has('d') || keys.has('arrowright') ? 1 : 0)
+      - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+    camera.getWorldDirection(firstPersonForward).normalize();
+    firstPersonRight.set(Math.cos(firstPersonYaw), 0, Math.sin(firstPersonYaw));
+    firstPersonDirection.copy(firstPersonForward).multiplyScalar(forward).addScaledVector(firstPersonRight, side);
+    const wantsMove = firstPersonDirection.lengthSq() > 0;
+    if (wantsMove) firstPersonDirection.normalize();
+
+    // Gait: identical acceleration and glide in every space. Shift runs, which
+    // matters on the surface and keeps the feel consistent indoors.
+    const moveSpeed = keys.has('shift') ? PLAYER_CAMERA.sprintSpeed : PLAYER_CAMERA.walkSpeed;
+    const desiredX = wantsMove ? firstPersonDirection.x * moveSpeed : 0;
+    const desiredZ = wantsMove ? firstPersonDirection.z * moveSpeed : 0;
+    const rateStep = (wantsMove ? PLAYER_CAMERA.acceleration : PLAYER_CAMERA.deceleration) * dt;
+    firstPersonVelocity.x = THREE.MathUtils.clamp(
+      desiredX,
+      firstPersonVelocity.x - rateStep,
+      firstPersonVelocity.x + rateStep,
+    );
+    firstPersonVelocity.z = THREE.MathUtils.clamp(
+      desiredZ,
+      firstPersonVelocity.z - rateStep,
+      firstPersonVelocity.z + rateStep,
+    );
+
+    const stepX = firstPersonVelocity.x * dt;
+    const stepZ = firstPersonVelocity.z * dt;
+    if (stepX !== 0 || stepZ !== 0) {
+      if (space.kind === 'surface') {
+        // The height field rasterized from the outpost stops the walker.
+        moveFirstPersonWithCollisions(stepX, stepZ);
+      } else {
+        // Authored interiors have no walkable height field, so the same gait
+        // slides inside the room box instead.
+        camera.position.x += stepX;
+        camera.position.z += stepZ;
+      }
+    }
+
+    if (space.kind === 'surface') {
+      keepCameraAboveSurface(dt);
+      return;
+    }
+
+    if (space.clampPlan && space.bounds) {
+      const wallInset = 0.8;
+      camera.position.x = THREE.MathUtils.clamp(
+        camera.position.x,
+        space.bounds.min.x + wallInset,
+        space.bounds.max.x - wallInset,
+      );
+      camera.position.z = THREE.MathUtils.clamp(
+        camera.position.z,
+        space.bounds.min.z + wallInset,
+        space.bounds.max.z - wallInset,
+      );
+    }
+    settleInteriorCameraHeight(space.bounds, dt);
+  }
+
+  // Hopping works indoors too: same launch, same lunar gravity, and the room
+  // ceiling catches the apex instead of the player leaving the module.
+  function settleInteriorCameraHeight(bounds, dt) {
+    if (!bounds) return;
+    const floor = bounds.min.y + playerCameraHeight;
+    if (airborne) {
+      jumpVelocity -= PLAYER_CAMERA.gravity * dt;
+      camera.position.y += jumpVelocity * dt;
+      if (camera.position.y <= floor) {
+        camera.position.y = floor;
+        airborne = false;
+        jumpVelocity = 0;
+      }
+    }
+    keepCameraInsideVerticalBounds(bounds);
+  }
+
+  // Drop the eye exactly onto the current deck — used when the camera height is
+  // changed at runtime or a space is entered, so the view never lerps from a
+  // stale height.
+  function reseatPlayerCamera() {
+    const space = currentPlayerSpace();
+    if (space.kind === 'surface') {
+      airborne = false;
+      jumpVelocity = 0;
+      if (!heightGrid) return;
+      camera.position.y = supportHeightAt(camera.position.x, camera.position.z) + playerCameraHeight;
+      return;
+    }
+    airborne = false;
+    jumpVelocity = 0;
+    if (!space.bounds) return;
+    const floor = space.bounds.min.y + playerCameraHeight;
+    const ceiling = space.bounds.max.y - 0.2;
+    camera.position.y = floor <= ceiling ? floor : (space.bounds.min.y + space.bounds.max.y) / 2;
+  }
+
+  // The single knob for how high the player's eyes are. Every space reads it.
+  function setPlayerCameraHeight(height) {
+    const next = Number(height);
+    if (!Number.isFinite(next)) return playerCameraHeight;
+    playerCameraHeight = THREE.MathUtils.clamp(next, PLAYER_CAMERA.minHeight, PLAYER_CAMERA.maxHeight);
+    // Only re-seat a live player camera — never yank the free camera, a rover
+    // chase view, or a running cinematic.
+    const playerCameraLive = (cameraMode === 'first-person' || cameraMode === 'interior')
+      && !roverCameraActive
+      && !eventCinematic
+      && !dayStartCameraTransition;
+    if (playerCameraLive) reseatPlayerCamera();
+    return playerCameraHeight;
+  }
+
+  function getPlayerCameraHeight() {
+    return playerCameraHeight;
   }
 
   function animateEventCamera(delta) {
@@ -4259,10 +4438,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
     updateRoverDrive(dt);
 
     if (cameraMode !== previousCameraMode) {
-      // Every mode switch teleports the camera, so never carry gait momentum
-      // across one: stepping through an airlock must not fire the walker off.
+      // Every mode switch teleports the camera, so never carry gait momentum or
+      // a half-finished hop across one: stepping through an airlock must not
+      // fire the walker off or leave it falling.
       previousCameraMode = cameraMode;
       firstPersonVelocity.set(0, 0, 0);
+      airborne = false;
+      jumpVelocity = 0;
     }
 
     promptCheckTimer += dt;
@@ -4301,80 +4483,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     } else if (cameraMode === 'free') {
       controls.update();
     } else {
-      const forward = (keys.has('w') || keys.has('arrowup') ? 1 : 0)
-        - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
-      const side = (keys.has('d') || keys.has('arrowright') ? 1 : 0)
-        - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
-      camera.rotation.order = 'YXZ';
-      camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
-      camera.getWorldDirection(firstPersonForward).normalize();
-      firstPersonRight.set(Math.cos(firstPersonYaw), 0, Math.sin(firstPersonYaw));
-      firstPersonDirection.copy(firstPersonForward).multiplyScalar(forward).addScaledVector(firstPersonRight, side);
-      const wantsMove = firstPersonDirection.lengthSq() > 0;
-      if (wantsMove) firstPersonDirection.normalize();
-      // Shift runs so the much bigger terrain stays crossable; the default
-      // pace is the slow lunar shuffle.
-      const moveSpeed = keys.has('shift') ? FIRST_PERSON_SPRINT_SPEED : FIRST_PERSON_WALK_SPEED;
-      // One gait everywhere: ease into the target speed and glide to a stop, so
-      // the suit carries the same momentum through an airlock as it does across
-      // the regolith instead of sliding like a detached free camera.
-      const desiredX = wantsMove ? firstPersonDirection.x * moveSpeed : 0;
-      const desiredZ = wantsMove ? firstPersonDirection.z * moveSpeed : 0;
-      const rateStep = (wantsMove ? FIRST_PERSON_ACCELERATION : FIRST_PERSON_DECELERATION) * dt;
-      firstPersonVelocity.x = THREE.MathUtils.clamp(
-        desiredX,
-        firstPersonVelocity.x - rateStep,
-        firstPersonVelocity.x + rateStep,
-      );
-      firstPersonVelocity.z = THREE.MathUtils.clamp(
-        desiredZ,
-        firstPersonVelocity.z - rateStep,
-        firstPersonVelocity.z + rateStep,
-      );
-      if (firstPersonVelocity.x !== 0 || firstPersonVelocity.z !== 0) {
-        if (cameraMode === 'first-person') {
-          // Outside, the walker collides with whatever the height field rasterized.
-          moveFirstPersonWithCollisions(firstPersonVelocity.x * dt, firstPersonVelocity.z * dt);
-        } else {
-          // Interiors are authored spaces with no walkable height field, so the
-          // same gait slides inside the room box instead.
-          camera.position.x += firstPersonVelocity.x * dt;
-          camera.position.z += firstPersonVelocity.z * dt;
-        }
-      }
-      if (greenhouseInterior?.visible && greenhouseInteriorBounds) {
-        const wallInset = 0.8;
-        camera.position.x = THREE.MathUtils.clamp(
-          camera.position.x,
-          greenhouseInteriorBounds.min.x + wallInset,
-          greenhouseInteriorBounds.max.x - wallInset
-        );
-        camera.position.z = THREE.MathUtils.clamp(
-          camera.position.z,
-          greenhouseInteriorBounds.min.z + wallInset,
-          greenhouseInteriorBounds.max.z - wallInset
-        );
-        keepCameraInsideVerticalBounds(greenhouseInteriorBounds);
-      }
-      if (activeModuleInterior?.visible && activeModuleInteriorBounds) {
-        const wallInset = 0.8;
-        camera.position.x = THREE.MathUtils.clamp(
-          camera.position.x,
-          activeModuleInteriorBounds.min.x + wallInset,
-          activeModuleInteriorBounds.max.x - wallInset
-        );
-        camera.position.z = THREE.MathUtils.clamp(
-          camera.position.z,
-          activeModuleInteriorBounds.min.z + wallInset,
-          activeModuleInteriorBounds.max.z - wallInset
-        );
-        keepCameraInsideVerticalBounds(activeModuleInteriorBounds);
-      }
-      if (cameraMode === 'interior' && airlockInterior && !greenhouseInterior?.visible && !activeModuleInterior?.visible) {
-        keepCameraInsideVerticalBounds(airlockInteriorBounds);
-      } else if (cameraMode === 'first-person') {
-        keepCameraAboveSurface(dt);
-      }
+      updatePlayerCamera(dt);
     }
 
     // Horizontal momentum belongs to the walking views only — both the surface
@@ -4459,6 +4568,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
     returnToFirstPersonStart,
     toggleCameraMode,
     toggleRoverCamera,
+    // The player camera is one camera everywhere. This is the knob for how high
+    // the player's eyes sit above the deck they are standing on; the surface and
+    // every interior read it live, and changing it re-seats the view at once.
+    setPlayerCameraHeight,
+    getPlayerCameraHeight,
+    playerCamera: PLAYER_CAMERA,
     // Link straight into a specific chassis. Inside the command center this is
     // a remote downlink (the interior is swapped for the live surface view);
     // outside it is the normal chase camera.
