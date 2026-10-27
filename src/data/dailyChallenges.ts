@@ -4,6 +4,7 @@ export type DailyChallengePriority = 'critical' | 'high' | 'normal';
 
 export interface DailyChallengeDefinition {
   id: string;
+  taskType: 'resource-protection' | 'event-prevention';
   title: string;
   description: string;
   objective: string;
@@ -16,6 +17,8 @@ export interface DailyChallengeDefinition {
   deadlineDay: number;
   affectedSystem: SystemKey;
   conditionRecovery: number;
+  completionResourceEffects?: Partial<Record<ResourceKey, number>>;
+  missedResourceEffects?: Partial<Record<ResourceKey, number>>;
   overdueConditionLoss: number;
   responseDeadlineMs?: number;
   escalationDelayMs?: number;
@@ -36,6 +39,7 @@ export interface DailyChallengeDefinition {
 export const DAILY_CHALLENGES: DailyChallengeDefinition[] = [
   {
     id: 'battery-readiness-check',
+    taskType: 'resource-protection',
     title: 'Battery Readiness Check',
     description: 'Verify the reserve battery system before it is needed.',
     objective: 'Reach the Battery Container and run its reserve readiness check.',
@@ -48,9 +52,9 @@ export const DAILY_CHALLENGES: DailyChallengeDefinition[] = [
     deadlineDay: 3,
     affectedSystem: 'power',
     conditionRecovery: 8,
+    completionResourceEffects: { battery: 2 },
+    missedResourceEffects: { battery: -7 },
     overdueConditionLoss: 6,
-    responseDeadlineMs: 180_000,
-    escalationDelayMs: 90_000,
     urgentConditionLoss: 4,
     urgentResourceEffects: { battery: -4 },
     escalationConditionAtOrBelow: 82,
@@ -65,6 +69,7 @@ export const DAILY_CHALLENGES: DailyChallengeDefinition[] = [
   },
   {
     id: 'workshop-equipment-maintenance',
+    taskType: 'event-prevention',
     title: 'Workshop Equipment Maintenance',
     description: 'Calibrate workshop equipment while the outpost is operating normally.',
     objective: 'Reach the Workshop and complete the equipment calibration.',
@@ -78,6 +83,7 @@ export const DAILY_CHALLENGES: DailyChallengeDefinition[] = [
     affectedSystem: 'equipment',
     conditionRecovery: 7,
     overdueConditionLoss: 5,
+    responseDeadlineMs: 60_000,
     riskIfDelayed: 'If this task becomes overdue, unmaintained workshop equipment can trigger a habitat fire.',
     postponement: {
       warning: 'Calibration can wait, but equipment readiness will remain lower.',
@@ -86,6 +92,7 @@ export const DAILY_CHALLENGES: DailyChallengeDefinition[] = [
   },
   {
     id: 'habitat-waterline-inspection',
+    taskType: 'event-prevention',
     title: 'Habitat Waterline Inspection',
     description: 'Inspect habitat water-system connections and identify the repair points.',
     objective: 'Reach the Cylinder Habitat and complete the waterline inspection.',
@@ -99,6 +106,7 @@ export const DAILY_CHALLENGES: DailyChallengeDefinition[] = [
     affectedSystem: 'water',
     conditionRecovery: 8,
     overdueConditionLoss: 6,
+    responseDeadlineMs: 60_000,
     riskIfDelayed: 'If this task becomes overdue, an unchecked habitat joint can trigger a water leak.',
     postponement: {
       warning: 'Uninspected joints make a leak harder to contain.',
@@ -107,6 +115,7 @@ export const DAILY_CHALLENGES: DailyChallengeDefinition[] = [
   },
   {
     id: 'habitat-air-seal-check',
+    taskType: 'resource-protection',
     title: 'Habitat Air-Seal Check',
     description: 'Inspect habitat seals and verify that the crew can isolate a damaged module safely.',
     objective: 'Reach the Cylinder Habitat and complete the air-seal check.',
@@ -128,6 +137,7 @@ export const DAILY_CHALLENGES: DailyChallengeDefinition[] = [
   },
   {
     id: 'solar-array-inspection',
+    taskType: 'event-prevention',
     title: 'Solar Panel Inspection',
     description: 'Inspect the solar array and confirm that power-generation equipment is ready for a storm.',
     objective: 'Reach the Solar Array and complete the inspection.',
@@ -140,8 +150,9 @@ export const DAILY_CHALLENGES: DailyChallengeDefinition[] = [
     deadlineDay: 1,
     affectedSystem: 'power',
     conditionRecovery: 10,
+    completionResourceEffects: { power: 3 },
     overdueConditionLoss: 8,
-    responseDeadlineMs: 90_000,
+    responseDeadlineMs: 60_000,
     escalationDelayMs: 60_000,
     urgentConditionLoss: 6,
     urgentResourceEffects: { power: -4 },

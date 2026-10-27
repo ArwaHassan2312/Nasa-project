@@ -39,6 +39,11 @@ export interface EmergencyTaskDefinition {
 
 export interface GameEvent {
   id: string;
+  /** Unique identity and cause for this occurrence, even when reusing an event definition. */
+  occurrenceId?: string;
+  /** Regular event definition whose readiness mechanics this task variant retains. */
+  sourceEventId?: string;
+  triggerSource?: 'independent' | 'task';
   name: string;
   day?: number;
   severity: "low" | "medium" | "high" | "critical";
@@ -47,6 +52,9 @@ export interface GameEvent {
   lesson: string;
   affectedSystems: SystemKey[];
   riskResources: ResourceKey[];
+  failureEffects: Partial<Record<ResourceKey, number>>;
+  failureConditionEffects?: Partial<Record<SystemKey, number>>;
+  failureFeedback: string;
   baseWeight: number;
   minDay: number;
   cooldownDays: number;
@@ -68,6 +76,9 @@ export const MOON_EVENTS: GameEvent[] = [
     situation: "Fire detected in the laboratory module. It could spread and consume oxygen.",
     affectedSystems: ["lifeSupport", "equipment"],
     riskResources: ["oxygen", "habitat", "equipment"],
+    failureEffects: { habitat: -18, equipment: -12, health: -8, oxygen: -8 },
+    failureConditionEffects: { lifeSupport: -12, equipment: -10 },
+    failureFeedback: 'The habitat fire spread before the crew could contain it.',
     baseWeight: 1.1,
     minDay: 2,
     cooldownDays: 5,
@@ -84,7 +95,7 @@ export const MOON_EVENTS: GameEvent[] = [
       targetComponentName: 'Cylinder Habitat',
       affectedSystem: 'lifeSupport',
       readinessFlag: 'habitatPressureLossContained',
-      responseDeadlineMs: 90_000,
+      responseDeadlineMs: 60_000,
       escalationDelayMs: 60_000,
       urgentConditionLoss: 7,
       urgentResourceEffects: { oxygen: -4 },
@@ -138,6 +149,9 @@ export const MOON_EVENTS: GameEvent[] = [
     situation: "Solar generation is far below expectation.",
     affectedSystems: ["power", "equipment"],
     riskResources: ["power", "battery", "equipment"],
+    failureEffects: { power: -18, battery: -12, equipment: -8 },
+    failureConditionEffects: { power: -14, equipment: -6 },
+    failureFeedback: 'The power system remained offline and reserve capacity was depleted.',
     baseWeight: 1.1,
     minDay: 2,
     cooldownDays: 5,
@@ -154,7 +168,7 @@ export const MOON_EVENTS: GameEvent[] = [
       targetComponentName: 'Battery Container',
       affectedSystem: 'power',
       readinessFlag: 'batteryBusRestored',
-      responseDeadlineMs: 90_000,
+      responseDeadlineMs: 60_000,
       escalationDelayMs: 60_000,
       urgentConditionLoss: 7,
       urgentResourceEffects: { power: -5, battery: -4 },
@@ -207,6 +221,9 @@ export const MOON_EVENTS: GameEvent[] = [
     situation: "A solar storm has reached the outpost. External equipment and power systems are at risk.",
     affectedSystems: ["power", "equipment"],
     riskResources: ["power", "battery", "equipment"],
+    failureEffects: { power: -12, battery: -10, radProtection: -8, health: -5 },
+    failureConditionEffects: { power: -10 },
+    failureFeedback: 'The solar storm passed without the array being secured.',
     baseWeight: 1,
     minDay: 2,
     cooldownDays: 5,
@@ -221,7 +238,7 @@ export const MOON_EVENTS: GameEvent[] = [
       targetComponentName: 'Solar Array',
       affectedSystem: 'power',
       readinessFlag: 'stormDamageSecured',
-      responseDeadlineMs: 90_000,
+      responseDeadlineMs: 60_000,
       escalationDelayMs: 60_000,
       urgentConditionLoss: 6,
       urgentResourceEffects: { power: -4 },
@@ -273,6 +290,9 @@ export const MOON_EVENTS: GameEvent[] = [
     situation: "Low-light conditions are reducing solar generation. Battery reserves will determine how safely the outpost can operate.",
     affectedSystems: ["power", "lifeSupport"],
     riskResources: ["power", "battery", "oxygen"],
+    failureEffects: { power: -15, battery: -10, oxygen: -6, food: -4 },
+    failureConditionEffects: { power: -10, lifeSupport: -5 },
+    failureFeedback: 'The crew failed to protect reserves through the lunar night.',
     baseWeight: 0.8,
     minDay: 4,
     cooldownDays: 6,
@@ -320,6 +340,9 @@ export const MOON_EVENTS: GameEvent[] = [
     situation: "A water pipe joint has ruptured inside the habitat infrastructure.",
     affectedSystems: ["water", "lifeSupport"],
     riskResources: ["water", "emergencyReserve", "oxygen"],
+    failureEffects: { water: -20, emergencyReserve: -12, oxygen: -5, equipment: -5 },
+    failureConditionEffects: { water: -14, lifeSupport: -4 },
+    failureFeedback: 'The water leak continued and contaminated reserve capacity.',
     baseWeight: 1.1,
     minDay: 2,
     cooldownDays: 5,
@@ -336,7 +359,7 @@ export const MOON_EVENTS: GameEvent[] = [
       targetComponentName: 'Cylinder Habitat',
       affectedSystem: 'water',
       readinessFlag: 'waterlineLeakRepaired',
-      responseDeadlineMs: 90_000,
+      responseDeadlineMs: 60_000,
       escalationDelayMs: 60_000,
       urgentConditionLoss: 7,
       urgentResourceEffects: { water: -5 },
@@ -388,8 +411,11 @@ export const MOON_EVENTS: GameEvent[] = [
     situation: "Orbital sensors detected high hydrogen signatures in a nearby crater rim.",
     affectedSystems: ["water", "equipment", "power"],
     riskResources: ["water", "power", "equipment"],
+    failureEffects: { power: -8, equipment: -5 },
+    failureConditionEffects: { equipment: -4 },
+    failureFeedback: 'The ice survey was abandoned before the crew could secure a useful result.',
     baseWeight: 0.75,
-    minDay: 3,
+    minDay: 1,
     cooldownDays: 6,
     maxOccurrences: 1,
     preparationFlags: ['workshopMaintenanceComplete'],
@@ -428,3 +454,54 @@ export const MOON_EVENTS: GameEvent[] = [
     lesson: "Resources must be confirmed, extracted and processed before they help."
   }
 ];
+
+const TASK_CONSEQUENCE_VARIANTS = [
+  {
+    sourceId: 'power_failure',
+    id: 'task_solar_array_fault',
+    taskId: 'solar-array-inspection',
+    name: 'Uninspected Solar Array Fault',
+    situation: 'The missed solar-array inspection left storm debris lodged in the panel hinges. Output has fallen and the battery bus is under strain.',
+    failureFeedback: 'The uninspected array fault persisted, cutting generation and draining reserve power.',
+    decisionLabels: ['Shed the Storm Load', 'Reroute Through the Battery Bus', 'Isolate the Damaged Array'],
+  },
+  {
+    sourceId: 'fire_lab',
+    id: 'task_workshop_arc',
+    taskId: 'workshop-equipment-maintenance',
+    name: 'Workshop Calibration Arc',
+    situation: 'The missed workshop calibration allowed a misaligned tool head to arc during operation, scorching nearby habitat equipment.',
+    failureFeedback: 'The workshop arc spread into nearby habitat equipment before it could be isolated.',
+    decisionLabels: ['Isolate the Workshop', 'Send a Crew Technician', 'Shut Down the Tool Bank'],
+  },
+  {
+    sourceId: 'water_leak',
+    id: 'task_waterline_joint_failure',
+    taskId: 'habitat-waterline-inspection',
+    name: 'Uninspected Waterline Joint Failure',
+    situation: 'The unchecked habitat joint has failed under pressure. Water is escaping into the service compartment and threatening reserve capacity.',
+    failureFeedback: 'The unchecked joint continued leaking and contaminated reserve capacity.',
+    decisionLabels: ['Ration Water Immediately', 'Patch the Failed Joint', 'Switch to Emergency Reserve'],
+  },
+] as const;
+
+// Independent scheduling uses MOON_EVENTS. Task failures use these separate
+// definitions, which retain their source event's mechanical effects while
+// carrying a distinct cause, identity, scenario, and response wording.
+export const TASK_CONSEQUENCE_EVENTS: GameEvent[] = TASK_CONSEQUENCE_VARIANTS.map((variant) => {
+  const source = MOON_EVENTS.find((event) => event.id === variant.sourceId);
+  if (!source) throw new Error(`Missing source event definition: ${variant.sourceId}`);
+  return {
+    ...source,
+    id: variant.id,
+    sourceEventId: variant.sourceId,
+    name: variant.name,
+    situation: variant.situation,
+    failureFeedback: variant.failureFeedback,
+    riskTaskIds: [variant.taskId],
+    decisions: source.decisions.map((decision, index) => ({
+      ...decision,
+      label: variant.decisionLabels[index] ?? decision.label,
+    })),
+  };
+});

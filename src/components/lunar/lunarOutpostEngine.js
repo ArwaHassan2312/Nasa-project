@@ -104,17 +104,22 @@ export function createLunarEngine(canvas, callbacks = {}) {
     onPromptChange = () => { },
     onInsidePanelChange = () => { },
     onTaskAction = () => { },
+    onTaskTimerClick = () => { },
     onConsoleEdit = () => { },
+    onSceneReady = () => { },
   } = callbacks;
 
   let isDestroyed = false;
   let animId = null;
+  let sceneReadyReported = false;
+  let skyAssetReady = Boolean(ASSET_CACHE.skyTexture);
+  let earthAssetsReady = Boolean(ASSET_CACHE.earthTextures);
 
   // Scene setup
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x080d14);
 
-  const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 14000);
+  const camera = new THREE.PerspectiveCamera(56, window.innerWidth / window.innerHeight, 0.1, 14000);
   camera.position.set(170, 220, 360);
 
   const renderer = new THREE.WebGLRenderer({
@@ -181,13 +186,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let airborne = false;
   let mapComponents = [];
   let mapBounds = null;
-  let currentEventEffect = null;
-  let eventVisualGroup = null;
+  const eventVisualizations = new Map();
+  let currentEventAnimations = null;
   let challengeMarkerGroup = null;
   let challengeReadinessFlags = [];
-  const eventAnimations = [];
   let eventCinematic = null;
-  let queuedEventPresentation = null;
+  const queuedEventPresentations = [];
   const EVENT_TARGET_PREFIXES = {
     fire_lab: ['010'],
     solar_storm: ['011', '012', '013'],
@@ -247,7 +251,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let consoleOverrides = {};
   try {
     consoleOverrides = JSON.parse(localStorage.getItem(CONSOLE_STORE_KEY) || '{}') || {};
-  } catch (error) {
+  } catch {
     consoleOverrides = {};
   }
   // Migrate v1 entries, which were shared per console kind: the wall placement
@@ -273,7 +277,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   function saveConsoleOverrides() {
     try {
       localStorage.setItem(CONSOLE_STORE_KEY, JSON.stringify(consoleOverrides));
-    } catch (error) {
+    } catch {
       /* storage unavailable - customization lasts for this session only */
     }
   }
@@ -343,6 +347,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let firstPersonYaw = 0;
   let firstPersonPitch = 0;
   let dayStartCameraTransition = null;
+  let initialCameraApproach = null;
+  let outpostOverview = null;
 
   // Prompts state tracked for callback updates with zero GC stringify
   let currentPromptType = null;
@@ -392,18 +398,37 @@ export function createLunarEngine(canvas, callbacks = {}) {
   scene.add(fill);
 
   function clearEventVisualization() {
-    eventAnimations.length = 0;
-    if (!eventVisualGroup) return;
+    for (const [occurrenceId, visualization] of eventVisualizations) {
+      scene.remove(visualization.group);
+      visualization.group.traverse(object => {
+        if (object.geometry) object.geometry.dispose();
+        if (object.material) {
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          materials.forEach(material => {
+            material.map?.dispose();
+            material.dispose();
+          });
+        }
+      });
+      eventVisualizations.delete(occurrenceId);
+    }
+  }
 
-    scene.remove(eventVisualGroup);
-    eventVisualGroup.traverse(object => {
+  function removeEventVisualization(occurrenceId) {
+    const visualization = eventVisualizations.get(occurrenceId);
+    if (!visualization) return;
+    scene.remove(visualization.group);
+    visualization.group.traverse(object => {
       if (object.geometry) object.geometry.dispose();
       if (object.material) {
         const materials = Array.isArray(object.material) ? object.material : [object.material];
-        materials.forEach(material => material.dispose());
+        materials.forEach(material => {
+          material.map?.dispose();
+          material.dispose();
+        });
       }
     });
-    eventVisualGroup = null;
+    eventVisualizations.delete(occurrenceId);
   }
 
   function findEventTarget(eventId) {
@@ -559,10 +584,18 @@ export function createLunarEngine(canvas, callbacks = {}) {
     eventCinematic.onReturned = onReturned;
   }
 
-  function beginEventPresentation(eventId, onPresented) {
-    if (isDestroyed || eventCinematic?.eventId === eventId) return;
+  function beginEventPresentation(eventId, occurrenceId, onPresented) {
+    if (isDestroyed || eventCinematic?.occurrenceId === occurrenceId) return;
+    if (eventCinematic) {
+      if (!queuedEventPresentations.some((entry) => entry.occurrenceId === occurrenceId)) {
+        queuedEventPresentations.push({ eventId, occurrenceId, onPresented });
+      }
+      return;
+    }
     if (!outpostRoot) {
-      queuedEventPresentation = { eventId, onPresented };
+      if (!queuedEventPresentations.some((entry) => entry.occurrenceId === occurrenceId)) {
+        queuedEventPresentations.push({ eventId, occurrenceId, onPresented });
+      }
       return;
     }
 
@@ -573,10 +606,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
         EVENT_TARGET_PREFIXES[eventId],
       );
       onPresented?.();
+      startNextEventPresentation();
       return;
     }
 
-    queuedEventPresentation = null;
     const snapshot = createWorldExposureSnapshot();
     exposeOutpostForEvent();
 
@@ -600,6 +633,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
     eventCinematic = {
       eventId,
+      occurrenceId,
       stage: 'approach',
       elapsed: 0,
       snapshot,
@@ -613,6 +647,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
       returnFromPosition: null,
       returnFromQuaternion: null,
     };
+  }
+
+  function startNextEventPresentation() {
+    if (isDestroyed || eventCinematic || !outpostRoot || queuedEventPresentations.length === 0) return;
+    const next = queuedEventPresentations.shift();
+    beginEventPresentation(next.eventId, next.occurrenceId, next.onPresented);
   }
 
   function addAnimatedParticles(parent, {
@@ -655,7 +695,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     particles.position.set(offset.x, offset.y, offset.z);
     parent.add(particles);
 
-    eventAnimations.push((elapsed, delta) => {
+    currentEventAnimations.push((elapsed, delta) => {
       const attribute = geometry.getAttribute('position');
       const values = attribute.array;
       for (let index = 0; index < count; index += 1) {
@@ -671,11 +711,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     });
   }
 
-  function buildEventVisualization() {
-    if (!currentEventEffect || !outpostRoot) return;
+  function buildEventVisualization(eventId, occurrenceId) {
+    if (!eventId || !occurrenceId || !outpostRoot) return;
 
-    clearEventVisualization();
-    const mappedTarget = findEventTarget(currentEventEffect);
+    const mappedTarget = findEventTarget(eventId);
     const bounds = mappedTarget?.bounds || new THREE.Box3().setFromObject(outpostRoot);
     const center = bounds.getCenter(new THREE.Vector3());
     const size = bounds.getSize(new THREE.Vector3());
@@ -685,12 +724,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const group = new THREE.Group();
     group.position.copy(center);
     group.updateMatrixWorld(true);
-    eventVisualGroup = group;
     scene.add(group);
-    const cameraDirection = (EVENT_CAMERA_DIRECTIONS[currentEventEffect]
+    const animations = [];
+    currentEventAnimations = animations;
+    const cameraDirection = (EVENT_CAMERA_DIRECTIONS[eventId]
       || new THREE.Vector3(1, 0.55, 1)).clone().normalize();
 
-    if (currentEventEffect === 'fire_lab') {
+    if (eventId === 'fire_lab') {
       const fireOffset = new THREE.Vector3(
         cameraDirection.x * size.x * 0.34,
         height * 0.22,
@@ -717,20 +757,17 @@ export function createLunarEngine(canvas, callbacks = {}) {
       const fireLight = new THREE.PointLight(0xff4d1f, 85, width * 0.75);
       fireLight.position.copy(fireOffset);
       group.add(fireLight);
-      eventAnimations.push((time) => {
+      currentEventAnimations.push((time) => {
         fireLight.intensity = 62 + Math.sin(time * 18) * 20 + Math.random() * 12;
       });
-    } else if (currentEventEffect === 'lunar_night') {
-      hemisphereLight.intensity = 0.2;
-      sun.intensity = 0.24;
-      fill.intensity = 0.16;
+    } else if (eventId === 'lunar_night') {
       const floodlight = new THREE.PointLight(0x9bdcff, 45, width * 1.8);
       floodlight.position.set(0, height * 0.38, 0);
       group.add(floodlight);
       const transitionBeacon = new THREE.PointLight(0xff9f52, 25, width * 0.9);
       transitionBeacon.position.set(cameraDirection.x * size.x * 0.35, -height * 0.1, cameraDirection.z * size.z * 0.35);
       group.add(transitionBeacon);
-    } else if (currentEventEffect === 'solar_storm') {
+    } else if (eventId === 'solar_storm') {
       const skyShell = new THREE.Mesh(
         new THREE.SphereGeometry(width * 18, 40, 24, 0, Math.PI * 2, 0, Math.PI * 0.48),
         new THREE.MeshBasicMaterial({
@@ -774,12 +811,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
         aurora.rotation.z = -0.14 + index * 0.11;
         aurora.position.y = height * (0.8 + index * 0.12);
         group.add(aurora);
-        eventAnimations.push((time) => {
+        currentEventAnimations.push((time) => {
           aurora.rotation.z += Math.sin(time * 0.5 + index) * 0.0008;
           aurora.material.opacity = 0.2 + (Math.sin(time * 1.4 + index) + 1) * 0.11;
         });
       }
-    } else if (currentEventEffect === 'water_ice_exploration') {
+    } else if (eventId === 'water_ice_exploration') {
       const scanRing = new THREE.Mesh(
         new THREE.TorusGeometry(Math.max(1, width * 0.28), Math.max(0.25, height * 0.04), 8, 64),
         new THREE.MeshBasicMaterial({
@@ -805,26 +842,21 @@ export function createLunarEngine(canvas, callbacks = {}) {
         speed: Math.max(height * 0.2, 0.8),
         opacity: 0.7,
       });
-      eventAnimations.push((time) => {
+      currentEventAnimations.push((time) => {
         scanRing.rotation.z = time * 0.32;
         scanRing.material.opacity = 0.38 + (Math.sin(time * 2.2) + 1) * 0.25;
         scanLight.intensity = 24 + (Math.sin(time * 3.5) + 1) * 16;
       });
-    } else if (currentEventEffect === 'power_failure' || currentEventEffect === 'water_leak') {
+    } else if (eventId === 'power_failure' || eventId === 'water_leak') {
       const location = new THREE.Vector3(
         cameraDirection.x * size.x * 0.36,
-        currentEventEffect === 'water_leak' ? -height * 0.25 : height * 0.08,
+        eventId === 'water_leak' ? -height * 0.25 : height * 0.08,
         cameraDirection.z * size.z * 0.36,
       );
-      if (currentEventEffect === 'power_failure') {
-        hemisphereLight.intensity = 0.46;
-        sun.intensity = 1.25;
-        fill.intensity = 0.18;
-      }
       const beacon = new THREE.Mesh(
         new THREE.ConeGeometry(Math.max(1, height * 0.11), Math.max(2, height * 0.5), 12),
         new THREE.MeshBasicMaterial({
-          color: currentEventEffect === 'water_leak' ? 0x54ccff : 0xff493f,
+          color: eventId === 'water_leak' ? 0x54ccff : 0xff493f,
           transparent: true,
           opacity: 0.78,
         }),
@@ -832,19 +864,19 @@ export function createLunarEngine(canvas, callbacks = {}) {
       beacon.position.copy(location).add(new THREE.Vector3(0, height * 0.22, 0));
       group.add(beacon);
       const warningLight = new THREE.PointLight(
-        currentEventEffect === 'water_leak' ? 0x36bfff : 0xff3228,
+        eventId === 'water_leak' ? 0x36bfff : 0xff3228,
         55,
         width * 0.55,
       );
       warningLight.position.copy(beacon.position);
       group.add(warningLight);
-      eventAnimations.push((time) => {
+      currentEventAnimations.push((time) => {
         const pulse = 0.45 + (Math.sin(time * 6) + 1) * 0.48;
         warningLight.intensity = 20 + pulse * 48;
         beacon.material.opacity = 0.28 + pulse * 0.62;
       });
 
-      if (currentEventEffect === 'water_leak') {
+      if (eventId === 'water_leak') {
         addAnimatedParticles(group, {
           count: 20,
           color: 0x66d9ff,
@@ -856,29 +888,67 @@ export function createLunarEngine(canvas, callbacks = {}) {
         });
       }
     }
+    eventVisualizations.set(occurrenceId, { eventId, group, animations });
+    currentEventAnimations = null;
   }
 
-  function setEventEffect(eventId) {
-    currentEventEffect = eventId;
-    hemisphereLight.intensity = 1.05;
-    sun.intensity = 3.15;
-    fill.intensity = 0.6;
-    clearEventVisualization();
-    buildEventVisualization();
+  function updateEventLighting() {
+    const activeEventIds = [...eventVisualizations.values()].map(({ eventId }) => eventId);
+    if (activeEventIds.includes('lunar_night')) {
+      hemisphereLight.intensity = 0.2;
+      sun.intensity = 0.24;
+      fill.intensity = 0.16;
+    } else if (activeEventIds.includes('power_failure')) {
+      hemisphereLight.intensity = 0.46;
+      sun.intensity = 1.25;
+      fill.intensity = 0.18;
+    } else {
+      hemisphereLight.intensity = 1.05;
+      sun.intensity = 3.15;
+      fill.intensity = 0.6;
+    }
   }
 
-  function presentEvent(eventId, onPresented) {
-    if (eventCinematic?.eventId === eventId) return;
-    if (queuedEventPresentation?.eventId === eventId) return;
-    beginEventPresentation(eventId, onPresented);
+  function setEventEffects(events) {
+    const desiredEvents = new Map(events.map(({ occurrenceId, eventId }) => [occurrenceId, eventId]));
+    for (let index = queuedEventPresentations.length - 1; index >= 0; index -= 1) {
+      if (!desiredEvents.has(queuedEventPresentations[index].occurrenceId)) {
+        queuedEventPresentations.splice(index, 1);
+      }
+    }
+    let changed = false;
+    for (const occurrenceId of eventVisualizations.keys()) {
+      if (!desiredEvents.has(occurrenceId)) {
+        removeEventVisualization(occurrenceId);
+        changed = true;
+      }
+    }
+    for (const [occurrenceId, eventId] of desiredEvents) {
+      const existing = eventVisualizations.get(occurrenceId);
+      if (existing?.eventId === eventId) continue;
+      if (existing) removeEventVisualization(occurrenceId);
+      buildEventVisualization(eventId, occurrenceId);
+      changed = true;
+    }
+    if (changed) updateEventLighting();
   }
 
-  function returnFromEvent(onReturned) {
+  function presentEvent(eventId, occurrenceId, onPresented) {
+    if (eventCinematic?.occurrenceId === occurrenceId
+      || queuedEventPresentations.some((entry) => entry.occurrenceId === occurrenceId)) return;
+    beginEventPresentation(eventId, occurrenceId, onPresented);
+  }
+
+  function returnFromEvent(occurrenceId, onReturned) {
+    if (eventCinematic && eventCinematic.occurrenceId !== occurrenceId) {
+      onReturned?.();
+      return;
+    }
     startEventReturn(onReturned);
   }
 
-  function returnToFirstPersonStart() {
-    if (isDestroyed || !outpostRoot || !heightGrid) return;
+  function returnToOutpostOverview() {
+    if (isDestroyed || !outpostRoot || !heightGrid || !outpostOverview) return;
 
     releaseAllKeys();
     firstPersonVelocity.set(0, 0, 0);
@@ -907,11 +977,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     scene.background = outsideBackground ?? scene.background;
     controls.enabled = false;
     earthViewActive = false;
-    cameraMode = 'first-person';
-    camera.rotation.order = 'YXZ';
-    camera.lookAt(firstPersonLookAt);
-    firstPersonYaw = camera.rotation.y;
-    firstPersonPitch = camera.rotation.x;
+    cameraMode = 'free';
+    freeCameraAdjusted = false;
+    camera.fov = 56;
+    camera.updateProjectionMatrix();
     onModeChange(cameraMode);
     onInsidePanelChange({ visible: false, label: '', buttonText: '' });
     setPrompt(null);
@@ -920,14 +989,17 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (canvas) canvas.style.cursor = '';
 
     const looker = new THREE.PerspectiveCamera();
-    looker.position.copy(firstPersonStart);
-    looker.lookAt(firstPersonLookAt);
+    looker.position.copy(outpostOverview.destination);
+    looker.lookAt(outpostOverview.focus);
     dayStartCameraTransition = {
       elapsed: 0,
+      duration: 2.8,
       startPosition: camera.position.clone(),
       startQuaternion: camera.quaternion.clone(),
-      destination: firstPersonStart.clone(),
+      destination: outpostOverview.destination.clone(),
       destinationQuaternion: looker.quaternion.clone(),
+      focus: outpostOverview.focus.clone(),
+      enableControlsOnFinish: true,
     };
   }
 
@@ -947,9 +1019,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
         if (!isDestroyed) {
           scene.background = texture;
           scene.backgroundIntensity = 0.8;
+          skyAssetReady = true;
         }
       })
-      .catch(() => console.warn('Could not load Milky Way texture.'));
+      .catch(() => { skyAssetReady = true; console.warn('Could not load Milky Way texture.'); });
   }
 
   // Open-world scale: the two scanned landing sites are stretched by this
@@ -1047,7 +1120,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
     }))).then(textures => {
       ASSET_CACHE.earthTextures = textures;
       setupEarth(textures);
-    }).catch(error => console.warn('Could not load Earth textures.', error));
+      earthAssetsReady = true;
+    }).catch(error => { earthAssetsReady = true; console.warn('Could not load Earth textures.', error); });
   }
 
   // Terrain scans: Apollo 12 & Apollo 16
@@ -1079,7 +1153,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   // The two scans overlap slightly so the seam between them disappears.
   const SEAM_OVERLAP = 4 * WORLD_SCALE;
   // Default free-camera framing distance, sized to the outpost (not the map).
-  const OUTPOST_VIEW_DISTANCE = LUNAR_OUTPOST_WIDTH * 3.6;
+  const OUTPOST_VIEW_DISTANCE = LUNAR_OUTPOST_WIDTH * 0.9;
 
   // Endless mare: a procedural cratered plain rings the scans so the moon has
   // no ending. A fine skirt blends the scanned borders into the plain, a
@@ -1237,16 +1311,27 @@ export function createLunarEngine(canvas, callbacks = {}) {
           );
           firstPersonLookAt.set(outpostCenter.x, outpostBounds.min.y + outpostSize.y * 0.45, outpostCenter.z);
 
-          // Frame the landed outpost for the free camera so the base stays the
-          // visual anchor of the much larger world.
-          if (cameraMode === 'free' && !earthViewActive && !freeCameraAdjusted) {
-            controls.target.set(outpostCenter.x, outpostBounds.min.y + outpostSize.y * 0.4, outpostCenter.z);
-            camera.position.set(
+          // Keep a close, elevated overview ready for the initial arrival and
+          // every day-start transition. This frames the complete base while
+          // making its structures large enough to inspect.
+          const overviewFocus = new THREE.Vector3(
+            outpostCenter.x,
+            outpostBounds.min.y + outpostSize.y * 0.4,
+            outpostCenter.z,
+          );
+          outpostOverview = {
+            focus: overviewFocus,
+            destination: new THREE.Vector3(
               outpostCenter.x + OUTPOST_VIEW_DISTANCE * 0.55,
               surfaceY + OUTPOST_VIEW_DISTANCE * 0.75,
-              outpostCenter.z + OUTPOST_VIEW_DISTANCE * 0.95
-            );
-            controls.update();
+              outpostCenter.z + OUTPOST_VIEW_DISTANCE * 0.95,
+            ),
+          };
+          if (cameraMode === 'free' && !earthViewActive && !freeCameraAdjusted) {
+            initialCameraApproach = {
+              focus: overviewFocus.clone(),
+              destination: outpostOverview.destination.clone(),
+            };
           }
 
           outpost.traverse(object => {
@@ -1258,8 +1343,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
           scene.add(outpost);
           outpost.updateMatrixWorld(true);
           outpostRoot = outpost;
-          buildEventVisualization();
-
           addOutpostPartLabels(outpost);
           componentTargets = buildComponentTargets(outpost);
           mapComponents = buildMapComponents(outpost);
@@ -1275,12 +1358,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
             };
           }
           setChallengeFlags(challengeReadinessFlags);
-          if (queuedEventPresentation) {
-            beginEventPresentation(
-              queuedEventPresentation.eventId,
-              queuedEventPresentation.onPresented,
-            );
-          }
+          startNextEventPresentation();
 
           const airlockEntrance = outpost.getObjectByName('005-airlock-with-dust-lock-vestibule');
           const entranceBounds = new THREE.Box3().setFromObject(airlockEntrance || outpost);
@@ -1699,11 +1777,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
     context.textAlign = 'center';
     context.textBaseline = 'middle';
     context.fillStyle = palette.text;
-    context.font = 'bold 34px monospace';
+    context.font = 'bold 28px monospace';
     const text = unit.status === 'completed'
       ? `✓ ${unit.label || 'DONE'}`
       : (unit.label || 'STANDBY');
-    context.fillText(text.toUpperCase().slice(0, 30), unit.canvas.width / 2, unit.canvas.height / 2 + 2, unit.canvas.width - 40);
+    context.fillText(text.toUpperCase().slice(0, 25), unit.canvas.width / 2, unit.canvas.height / 2 + 2, unit.canvas.width - 40);
     unit.texture.needsUpdate = true;
   }
 
@@ -2566,7 +2644,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const hits = taskRaycaster.intersectObjects(taskConsoleGroup.children, true);
     if (!hits.length) return;
     event.preventDefault();
-    try { canvas.setPointerCapture?.(event.pointerId); } catch (error) { /* noop */ }
+    try { canvas.setPointerCapture?.(event.pointerId); } catch { /* noop */ }
     const viewDir = new THREE.Vector3();
     camera.getWorldDirection(viewDir);
     consoleDragPlane.setFromNormalAndCoplanarPoint(viewDir, hits[0].point);
@@ -2644,7 +2722,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
           'task:', taskId, 'status:', unit?.status ?? 'unknown'
         );
         if (taskId && unit && (unit.status === 'inProgress' || unit.status === 'overdue')) {
-          onTaskAction(taskConsoleComponentId, taskId);
+          if (node?.isSprite) onTaskTimerClick(taskId);
+          else onTaskAction(taskConsoleComponentId, taskId);
         }
       }
     }
@@ -3302,6 +3381,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       restoreWorldExposure(cinematic.snapshot);
       eventCinematic = null;
       cinematic.onReturned?.();
+      startNextEventPresentation();
     }
   }
 
@@ -3331,7 +3411,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     } else if (dayStartCameraTransition) {
       const transition = dayStartCameraTransition;
       transition.elapsed += dt;
-      const progress = Math.min(transition.elapsed / 2.6, 1);
+      const progress = Math.min(transition.elapsed / (transition.duration ?? 2.6), 1);
       const eased = progress * progress * (3 - 2 * progress);
       camera.position.lerpVectors(transition.startPosition, transition.destination, eased);
       camera.quaternion.slerpQuaternions(
@@ -3343,6 +3423,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
         camera.position.copy(transition.destination);
         camera.quaternion.copy(transition.destinationQuaternion);
         dayStartCameraTransition = null;
+        if (transition.enableControlsOnFinish) {
+          controls.enabled = true;
+          controls.target.copy(transition.focus);
+          controls.update();
+        }
       }
     } else if (cameraMode === 'free') {
       controls.update();
@@ -3425,8 +3510,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
       firstPersonVelocity.set(0, 0, 0);
     }
 
-    for (const animateEvent of eventAnimations) {
-      animateEvent(clock.elapsedTime, dt);
+    for (const visualization of eventVisualizations.values()) {
+      for (const animateEvent of visualization.animations) {
+        animateEvent(clock.elapsedTime, dt);
+      }
     }
 
     const pulseNow = performance.now();
@@ -3449,6 +3536,27 @@ export function createLunarEngine(canvas, callbacks = {}) {
     }
 
     renderer.render(scene, camera);
+    if (!sceneReadyReported && outpostRoot && moonTerrainMeshes.length === 2 && skyAssetReady && earthAssetsReady) {
+      sceneReadyReported = true;
+      if (initialCameraApproach && !freeCameraAdjusted && cameraMode === 'free') {
+        const approach = initialCameraApproach;
+        const looker = new THREE.PerspectiveCamera();
+        looker.position.copy(approach.destination);
+        looker.lookAt(approach.focus);
+        controls.enabled = false;
+        dayStartCameraTransition = {
+          elapsed: 0,
+          duration: 4.4,
+          startPosition: camera.position.clone(),
+          startQuaternion: camera.quaternion.clone(),
+          destination: approach.destination.clone(),
+          destinationQuaternion: looker.quaternion.clone(),
+          focus: approach.focus.clone(),
+          enableControlsOnFinish: true,
+        };
+      }
+      onSceneReady();
+    }
   }
 
   function getMapSnapshot() {
@@ -3489,14 +3597,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
   // Public API returned to React
   return {
     getMapSnapshot,
-    setEventEffect,
+    setEventEffects,
     setChallengeFlags,
     setTaskTargets,
     setConsoleEditMode,
     resetConsolePlacement,
     presentEvent,
     returnFromEvent,
-    returnToFirstPersonStart,
+    returnToOutpostOverview,
     toggleCameraMode,
     toggleEarthView,
     enterAirlock,
@@ -3546,7 +3654,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         document.exitPointerLock?.();
       }
 
-      queuedEventPresentation = null;
+      queuedEventPresentations.length = 0;
       eventCinematic = null;
       outpostHeightField = null;
       clearEventVisualization();
