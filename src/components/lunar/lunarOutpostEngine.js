@@ -1244,6 +1244,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const OUTPOST_GROUND_EPSILON = 0.05;
   const ROVER_TARGET_WIDTH = 3; // Change this value to resize the playable rover.
   const ROVER_MAX_STEP_HEIGHT = COLLIDE_STEP_HEIGHT + 0.45;
+  // Rover driving model. It shares the walker's physics instincts: the chassis
+  // rides the sampled ground, leans with the slope, settles with a little
+  // suspension travel and falls under lunar gravity when a crest drops away.
+  const ROVER_GRAVITY = PLAYER_CAMERA.gravity; // same Moon gravity as the walker
+  const ROVER_RIDE_RATE_UP = 18; // how quickly the chassis climbs a rise
+  const ROVER_RIDE_RATE_DOWN = 6; // how gently it settles into a dip
+  const ROVER_TILT_RATE = 5; // how fast the body leans onto the slope
+  const ROVER_AIR_DROP = 0.45; // a drop taller than this becomes a fall
+  const ROVER_MAX_TILT = 1.35; // clamp the sampled slope (~54 degrees)
+  const ROVER_MAX_AIR_SPEED = 24; // terminal fall speed keeps it stable
   // Parked side by side in front of the outpost, nose pointing away from it.
   const ROVER_SLOTS = [
     { id: 1, label: 'ROVER 01', offsetX: -10, offsetZ: 0, tint: 0x59e3ff },
@@ -1345,6 +1355,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const moonTerrainMeshes = [];
   let loaded = 0;
 
+  // Scratch vectors for the rover ride model — reused every frame, never allocated.
+  const roverTerrainNormal = new THREE.Vector3();
+  const roverNose = new THREE.Vector3();
+  const roverBinormal = new THREE.Vector3();
+  const roverTargetQuaternion = new THREE.Quaternion();
+  const roverBasisMatrix = new THREE.Matrix4();
+
   function createRoverRig(root, slot) {
     const rover = {
       id: slot.id,
@@ -1359,6 +1376,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
       groundOffset: 0,
       halfLength: 4,
       halfWidth: 2,
+      // Ride state: the chassis leans onto the slope and falls under gravity
+      // when a crest drops away, exactly like the walker leaving the ground.
+      chassisQuaternion: new THREE.Quaternion(),
+      verticalVelocity: 0,
+      airborne: false,
+      climb: 0,
       // Wheel animation rig, rebuilt per clone so both chassis roll separately.
       spinBones: [],
       frontSpinBones: [],
@@ -1453,6 +1476,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
           });
           scene.add(root);
           root.updateMatrixWorld(true);
+          // Start the chassis already settled at its parked attitude, so the
+          // first frame does not snap it onto the slope.
+          rover.chassisQuaternion.copy(root.quaternion);
           rovers.push(rover);
         }
 
@@ -3544,6 +3570,132 @@ export function createLunarEngine(canvas, callbacks = {}) {
   // Remote links are started from a command center monitor; the interior is
   // hidden for the duration while the real moon and outpost come back on the
   // feed, then everything is restored exactly as it was on disconnect.
+  // Camera dive used when the player links a rover from a command center screen:
+  // the view pushes in on that monitor, then carries through the glass and lands
+  // on the rover's chase camera instead of cutting straight to it.
+  let roverLinkTransition = null;
+
+  // Where the camera should stop to be looking square at a monitor's picture,
+  // close enough that the glass fills the whole viewport. That is what lets the
+  // swap be invisible: at the far end of the push-in, the screen covers the view
+  // and shows this rover, so the cut to the live world lands on the same image.
+  function roverMonitorPose(monitor, outPosition, outQuaternion) {
+    const plane = monitor?.feed?.plane;
+    if (!plane) return false;
+    plane.updateMatrixWorld(true);
+    const center = new THREE.Vector3().setFromMatrixPosition(plane.matrixWorld);
+    const facing = new THREE.Vector3(0, 0, 1)
+      .applyQuaternion(plane.getWorldQuaternion(new THREE.Quaternion()))
+      .normalize();
+    // Distance at which the picture exactly covers the frame, measured at the
+    // feed's own lens angle so the reveal matches what the screen was showing.
+    const scale = plane.getWorldScale(new THREE.Vector3());
+    const tanVertical = Math.tan(THREE.MathUtils.degToRad(ROVER_FEED_FOV) * 0.5);
+    const tanHorizontal = tanVertical * camera.aspect;
+    const distance = Math.max(
+      Math.min(
+        scale.x / (2 * Math.max(tanHorizontal, 0.02)),
+        scale.y / (2 * Math.max(tanVertical, 0.02)),
+      ),
+      0.05,
+    );
+    outPosition.copy(center).addScaledVector(facing, distance);
+    const looker = new THREE.PerspectiveCamera();
+    looker.position.copy(outPosition);
+    looker.lookAt(center);
+    outQuaternion.copy(looker.quaternion);
+    return true;
+  }
+
+  function startRoverLinkTransition(rover, monitor) {
+    const toPosition = new THREE.Vector3();
+    const toQuaternion = new THREE.Quaternion();
+    if (!roverMonitorPose(monitor, toPosition, toQuaternion)) return false;
+    roverLinkTransition = {
+      stage: 'monitor',
+      elapsed: 0,
+      duration: 0.8,
+      rover,
+      monitor,
+      baseFov: camera.fov,
+      fromPosition: camera.position.clone(),
+      fromQuaternion: camera.quaternion.clone(),
+      toPosition,
+      toQuaternion,
+      fromFov: camera.fov,
+      toFov: ROVER_FEED_FOV,
+    };
+    return true;
+  }
+
+  // The moon comes back on screen once the camera is pressed against the glass,
+  // so the swap is hidden behind the screen filling the whole view.
+  function exposeWorldForRoverLink() {
+    moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
+    horizon.visible = true;
+    if (outpostRoot) outpostRoot.visible = true;
+    if (commandCenterRoot) commandCenterRoot.visible = false;
+    scene.background = remoteControlReturn?.feedBackground ?? scene.background;
+  }
+
+  function animateRoverLinkTransition(dt) {
+    const transition = roverLinkTransition;
+    if (!transition) return;
+    transition.elapsed += dt;
+    const progress = Math.min(transition.elapsed / transition.duration, 1);
+    const eased = progress * progress * (3 - 2 * progress);
+    camera.position.lerpVectors(transition.fromPosition, transition.toPosition, eased);
+    camera.quaternion.slerpQuaternions(
+      transition.fromQuaternion,
+      transition.toQuaternion,
+      eased,
+    );
+    if (transition.fromFov !== transition.toFov) {
+      camera.fov = THREE.MathUtils.lerp(transition.fromFov, transition.toFov, eased);
+      camera.updateProjectionMatrix();
+    }
+    if (progress < 1) return;
+
+    if (transition.stage === 'monitor') {
+      // The glass now covers the view. Take the camera onto the rover at exactly
+      // the pose and lens the screen was showing, so nothing visibly cuts.
+      exposeWorldForRoverLink();
+      const feedCamera = transition.monitor?.feed?.camera;
+      if (feedCamera) {
+        camera.position.copy(feedCamera.position);
+        camera.quaternion.copy(feedCamera.quaternion);
+      }
+      camera.fov = ROVER_FEED_FOV;
+      camera.updateProjectionMatrix();
+
+      // Second half of the same move: swing round to the driving angle while the
+      // lens widens back out, so it reads as one continuous camera move.
+      const toPosition = camera.position.clone();
+      const toQuaternion = camera.quaternion.clone();
+      updateRoverCamera(0);
+      transition.toPosition.copy(camera.position);
+      transition.toQuaternion.copy(camera.quaternion);
+      camera.position.copy(toPosition);
+      camera.quaternion.copy(toQuaternion);
+
+      transition.stage = 'rover';
+      transition.elapsed = 0;
+      transition.duration = 1.5;
+      transition.fromPosition.copy(toPosition);
+      transition.fromQuaternion.copy(toQuaternion);
+      transition.fromFov = ROVER_FEED_FOV;
+      transition.toFov = transition.baseFov;
+      return;
+    }
+
+    // Landed: hand the view straight over to the chase camera, which is already
+    // sitting exactly where the dive ended, so there is no jump.
+    camera.fov = transition.baseFov;
+    camera.updateProjectionMatrix();
+    roverLinkTransition = null;
+    updateRoverCamera(0);
+  }
+
   function beginRoverControl(roverId, options = {}) {
     const remote = Boolean(options.remote);
     if (!rovers.length || eventCinematic || dayStartCameraTransition) return false;
@@ -3579,14 +3731,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
         commandCenterVisibility: commandCenterRoot?.visible ?? true,
         shellVisibility: commandCenterExteriorShell?.visible ?? true,
       };
-      // Put the moon back on screen: the monitor feed is the real rover out on
-      // the surface, so the interior shell must not sit in front of the camera.
-      moonTerrainMeshes.forEach(terrain => { terrain.visible = true; });
-      horizon.visible = true;
-      if (outpostRoot) outpostRoot.visible = true;
-      if (commandCenterRoot) commandCenterRoot.visible = false;
-      scene.background = remoteControlReturn.feedBackground;
-      // Hide the inside panel so the HUD falls back to the rover controls.
+      // The moon only comes back once the dive reaches the glass, so the monitor
+      // is still the real room while the camera pushes in on it.
       onInsidePanelChange({ visible: false, label: '', buttonText: '' });
     }
 
@@ -3603,7 +3749,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
     activeRover = rover;
     roverCameraActive = true;
     roverRemoteControl = remote;
-    updateRoverCamera(0);
+    // A remote link dives through the screen the player just focused; anything
+    // else (or a monitor that is not on screen) still cuts straight over.
+    const monitor = remote
+      ? roverMonitors.find(entry => entry.roverId === rover.id)
+      : null;
+    if (remote) refreshRoverFeeds(rover.id, true);
+    if (!startRoverLinkTransition(rover, monitor)) {
+      if (remote) exposeWorldForRoverLink();
+      updateRoverCamera(0);
+    }
     refreshRoverMonitors();
     onRoverCameraChange(true, { roverId: rover.id, roverLabel: rover.label, remote });
     return true;
@@ -3623,6 +3778,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
     roverCameraActive = false;
     roverRemoteControl = false;
     roverCameraDragging = false;
+    // Cancel a dive still in flight, restoring the lens angle it was animating.
+    if (roverLinkTransition) {
+      camera.fov = roverLinkTransition.baseFov;
+      camera.updateProjectionMatrix();
+      roverLinkTransition = null;
+    }
     activeRover = null;
     if (previousRover) {
       previousRover.speed = 0;
@@ -3966,6 +4127,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
       .multiplyScalar(roverCameraDistance * Math.cos(roverCameraOrbitPitch));
     roverCameraDesiredPosition.add(chassis.position);
     roverCameraDesiredPosition.y += roverCameraDistance * Math.sin(roverCameraOrbitPitch) + 0.5;
+    // The chassis now leans with the slope, which carries the chase offset with
+    // it — keep the camera above the ground instead of letting it dip into a rise.
+    roverCameraDesiredPosition.y = Math.max(
+      roverCameraDesiredPosition.y,
+      supportHeightAt(roverCameraDesiredPosition.x, roverCameraDesiredPosition.z) + 1.2,
+    );
     const followBlend = dt > 0 ? 1 - Math.exp(-6 * dt) : 1;
     camera.position.lerp(roverCameraDesiredPosition, followBlend);
 
@@ -3977,39 +4144,134 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function stepRover(rover, dt, driving, steerInput, throttleInput) {
+    // Gradient sampled last frame: climbing costs speed, descending gains it, so
+    // the drivetrain feels like it is pulling against the surface.
+    const slopeFactor = THREE.MathUtils.clamp(1 - rover.climb * 0.9, 0.35, 1.5);
     const targetSpeed = driving
-      ? (throttleInput > 0 ? 8 : throttleInput < 0 ? -3 : 0)
+      ? (throttleInput > 0 ? 8 : throttleInput < 0 ? -3 : 0) * slopeFactor
       : 0;
     rover.speed = THREE.MathUtils.damp(rover.speed, targetSpeed, driving && throttleInput ? 2.8 : 4.5, dt);
     rover.steering = THREE.MathUtils.damp(rover.steering, driving ? steerInput * 0.3 : 0, 9, dt);
 
+    const chassis = rover.root;
+    // This extracted rover faces local +X. Arrow Up drives along its nose; side
+    // keys steer, turning the chassis while it is moving.
     if (Math.abs(rover.speed) > 0.01) {
       rover.heading += rover.steering * 0.55 * Math.sign(rover.speed) * dt;
-      rover.root.rotation.y = rover.heading;
+    }
 
-      // This extracted rover faces local +X. Arrow Up drives along its nose;
-      // side keys steer, turning the chassis while it is moving.
-      const nextX = rover.root.position.x + Math.cos(rover.heading) * rover.speed * dt;
-      const nextZ = rover.root.position.z - Math.sin(rover.heading) * rover.speed * dt;
-      const nextGround = roverSupportHeightAt(nextX, nextZ, rover);
-      const currentGround = rover.root.position.y - rover.groundOffset;
-      if (isRoverBlockedAt(nextX, nextZ, rover, currentGround)) {
-        rover.speed = 0;
+    const forwardX = Math.cos(rover.heading);
+    const forwardZ = -Math.sin(rover.heading);
+    const sideX = Math.sin(rover.heading);
+    const sideZ = Math.cos(rover.heading);
+    const travel = rover.speed * dt;
+
+    // Horizontal move with the walker's axis slide: a wall stops the axis that
+    // hits it and lets the rover scrape along the face instead of dead-stopping.
+    if (Math.abs(travel) > 1e-5) {
+      const nextX = chassis.position.x + forwardX * travel;
+      const nextZ = chassis.position.z + forwardZ * travel;
+      const feetY = chassis.position.y - rover.groundOffset;
+      if (!isRoverBlockedAt(nextX, nextZ, rover, feetY)) {
+        chassis.position.x = nextX;
+        chassis.position.z = nextZ;
+      } else if (!isRoverBlockedAt(nextX, chassis.position.z, rover, feetY)) {
+        chassis.position.x = nextX;
+        rover.speed *= 0.55;
+      } else if (!isRoverBlockedAt(chassis.position.x, nextZ, rover, feetY)) {
+        chassis.position.z = nextZ;
+        rover.speed *= 0.55;
       } else {
-        rover.root.position.x = nextX;
-        rover.root.position.z = nextZ;
-        rover.root.position.y = nextGround + rover.groundOffset;
+        rover.speed = 0;
       }
     }
 
-    // Terrain can finish loading after the rover model. Keep clamping its
-    // underside above the terrain every frame, including while it is parked.
-    const minimumRoverY = roverSupportHeightAt(
-      rover.root.position.x,
-      rover.root.position.z,
-      rover,
-    ) + rover.groundOffset;
-    rover.root.position.y = Math.max(rover.root.position.y, minimumRoverY);
+    // Sample the ground under each corner plus the belly, so the body can sit on
+    // the plane through the wheels and lean onto the local slope.
+    const x = chassis.position.x;
+    const z = chassis.position.z;
+    const alongX = forwardX * rover.halfLength;
+    const alongZ = forwardZ * rover.halfLength;
+    const acrossX = sideX * rover.halfWidth;
+    const acrossZ = sideZ * rover.halfWidth;
+    // "+side" is the chassis' right and "-side" its left — getting these the
+    // wrong way round rolls the body away from the slope instead of onto it.
+    const frontRight = roverGroundAt(x + alongX + acrossX, z + alongZ + acrossZ);
+    const frontLeft = roverGroundAt(x + alongX - acrossX, z + alongZ - acrossZ);
+    const rearRight = roverGroundAt(x - alongX + acrossX, z - alongZ + acrossZ);
+    const rearLeft = roverGroundAt(x - alongX - acrossX, z - alongZ - acrossZ);
+    const belly = roverGroundAt(x, z);
+
+    const front = (frontLeft + frontRight) * 0.5;
+    const rear = (rearLeft + rearRight) * 0.5;
+    const left = (frontLeft + rearLeft) * 0.5;
+    const right = (frontRight + rearRight) * 0.5;
+    // Ride on the plane through the four wheels — the belly sample only lifts the
+    // body if a rock sits underneath it. Using the highest corner would perch the
+    // rover on one wheel and lift the downhill side off the ground.
+    const rideHeight = Math.max((front + rear) * 0.5, belly);
+    const targetY = rideHeight + rover.groundOffset;
+
+    // Surface normal from the two slopes: forward measured nose-first and the
+    // side one toward the chassis' right, so a dip on the left drops the left
+    // side and a rise ahead pitches the nose up.
+    const climbForward = THREE.MathUtils.clamp(
+      (front - rear) / Math.max(rover.halfLength * 2, 1e-3),
+      -ROVER_MAX_TILT,
+      ROVER_MAX_TILT,
+    );
+    const climbSide = THREE.MathUtils.clamp(
+      (right - left) / Math.max(rover.halfWidth * 2, 1e-3),
+      -ROVER_MAX_TILT,
+      ROVER_MAX_TILT,
+    );
+    rover.climb = climbForward;
+
+    // In the air there is no slope to read, so the chassis keeps the attitude it
+    // left the ground with instead of snapping to the terrain underneath.
+    if (!rover.airborne) {
+      roverTerrainNormal.set(
+        -climbForward * forwardX - climbSide * sideX,
+        1,
+        -climbForward * forwardZ - climbSide * sideZ,
+      ).normalize();
+
+      // Basis for the leaned chassis: nose projected onto the slope, slope up, and
+      // the binormal across it. Reproduces the plain heading rotation when level.
+      roverNose.set(forwardX, 0, forwardZ);
+      roverNose.addScaledVector(roverTerrainNormal, -roverNose.dot(roverTerrainNormal));
+      if (roverNose.lengthSq() < 1e-6) roverNose.set(forwardX, 0, forwardZ);
+      roverNose.normalize();
+      roverBinormal.crossVectors(roverNose, roverTerrainNormal).normalize();
+      roverBasisMatrix.makeBasis(roverNose, roverTerrainNormal, roverBinormal);
+      roverTargetQuaternion.setFromRotationMatrix(roverBasisMatrix);
+      rover.chassisQuaternion.slerp(roverTargetQuaternion, 1 - Math.exp(-ROVER_TILT_RATE * dt));
+    }
+    chassis.quaternion.copy(rover.chassisQuaternion);
+
+    // Vertical: ride the ground with a little suspension travel, and fall under
+    // lunar gravity whenever a crest drops away beneath the wheels.
+    if (!rover.airborne && targetY < chassis.position.y - ROVER_AIR_DROP) {
+      rover.airborne = true;
+      rover.verticalVelocity = 0;
+    }
+    if (rover.airborne) {
+      rover.verticalVelocity = Math.max(
+        rover.verticalVelocity - ROVER_GRAVITY * dt,
+        -ROVER_MAX_AIR_SPEED,
+      );
+      const fallen = chassis.position.y + rover.verticalVelocity * dt;
+      if (fallen <= targetY) {
+        chassis.position.y = targetY;
+        rover.airborne = false;
+        rover.verticalVelocity = 0;
+      } else {
+        chassis.position.y = fallen;
+      }
+    } else {
+      const rate = targetY > chassis.position.y ? ROVER_RIDE_RATE_UP : ROVER_RIDE_RATE_DOWN;
+      chassis.position.y += (targetY - chassis.position.y) * Math.min(1, rate * dt);
+    }
 
     // The exported wheel joints use the opposite local axle sign from the
     // rover's +X travel direction, so negate speed to make tire roll match it.
@@ -4035,6 +4297,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (!rovers.length) return;
 
     const canDrive = roverCameraActive
+      && !roverLinkTransition
       && !eventCinematic
       && !dayStartCameraTransition
       && (roverRemoteControl || cameraMode === 'free' || cameraMode === 'first-person');
@@ -4670,6 +4933,19 @@ export function createLunarEngine(canvas, callbacks = {}) {
     return outpostTop === null ? terrain : Math.max(terrain, outpostTop);
   }
 
+  // Height of the surface under one point of the rover: terrain, or a walkable
+  // outpost surface (apron, ramp, low deck). Ramps and low obstacles can support
+  // the wheels, but tall walls and roofs remain obstacles rather than lifting the
+  // vehicle onto them.
+  function roverGroundAt(x, z) {
+    const terrain = sampleGroundHeight(x, z) ?? sampleOuterHeight(x, z);
+    const deck = sampleOutpostTop(outpostHeightField, x, z);
+    const height = deck !== null && deck >= terrain && deck - terrain <= ROVER_MAX_STEP_HEIGHT
+      ? deck
+      : terrain;
+    return Number.isFinite(height) ? height : PLAIN_LEVEL;
+  }
+
   function roverSupportHeightAt(x, z, rover) {
     const heading = rover.heading;
     const halfLength = rover.halfLength;
@@ -4691,14 +4967,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         const across = (j / widthSteps) * 2 - 1;
         const sampleX = x + forwardX * halfLength * along + sideX * halfWidth * across;
         const sampleZ = z + forwardZ * halfLength * along + sideZ * halfWidth * across;
-        const terrain = sampleGroundHeight(sampleX, sampleZ) ?? sampleOuterHeight(sampleX, sampleZ);
-        const deck = sampleOutpostTop(outpostHeightField, sampleX, sampleZ);
-        // Ramps and low obstacles can support the rover, but tall walls and
-        // roofs remain obstacles rather than lifting the vehicle onto them.
-        const height = deck !== null && deck >= terrain && deck - terrain <= ROVER_MAX_STEP_HEIGHT
-          ? deck
-          : terrain;
-        if (Number.isFinite(height)) highest = Math.max(highest, height);
+        highest = Math.max(highest, roverGroundAt(sampleX, sampleZ));
       }
     }
 
@@ -5090,6 +5359,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
           controls.update();
         }
       }
+    } else if (roverLinkTransition) {
+      // Push in on the monitor, then carry through it onto the rover.
+      animateRoverLinkTransition(dt);
     } else if (roverCameraActive) {
       updateRoverCamera(dt);
     } else if (cameraMode === 'free') {
@@ -5295,6 +5567,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
       queuedEventPresentations.length = 0;
       eventCinematic = null;
+      roverLinkTransition = null;
       outpostHeightField = null;
       clearEventVisualization();
       if (challengeMarkerGroup) {
