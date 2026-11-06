@@ -1,3 +1,5 @@
+export type SurvivalResourceKey = 'power' | 'oxygen' | 'water' | 'food' | 'health';
+
 export type ResourceKey = 
   | "power" | "battery" | "oxygen" | "water" | "food" 
   | "habitat" | "equipment" | "health" | "radProtection" 
@@ -8,7 +10,7 @@ export type SystemKey = "power" | "lifeSupport" | "water" | "equipment";
 export interface Decision {
   id: string;
   label: string;
-  effects: Partial<Record<ResourceKey, number>>;
+  effects: Partial<Record<SurvivalResourceKey, number>>;
   conditionEffects?: Partial<Record<SystemKey, number>>;
   benefit: string;
   cost: string;
@@ -44,6 +46,9 @@ export interface GameEvent {
   /** Regular event definition whose readiness mechanics this task variant retains. */
   sourceEventId?: string;
   triggerSource?: 'independent' | 'task';
+  /** Consequence-only event shown during day closing, without player interaction. */
+  endOfDayConsequence?: boolean;
+  missedTaskTitle?: string;
   name: string;
   day?: number;
   severity: "low" | "medium" | "high" | "critical";
@@ -52,6 +57,11 @@ export interface GameEvent {
   lesson: string;
   affectedSystems: SystemKey[];
   riskResources: ResourceKey[];
+  /** Integer reserve loss applied once when the incident is generated. */
+  initialResourceEffects?: Partial<Record<ResourceKey, number>>;
+  /** Integer resource loss per interval while the event remains unresolved. */
+  ongoingResourceEffects?: Partial<Record<ResourceKey, number>>;
+  ongoingEffectIntervalMs?: number;
   failureEffects: Partial<Record<ResourceKey, number>>;
   failureConditionEffects?: Partial<Record<SystemKey, number>>;
   failureFeedback: string;
@@ -71,14 +81,17 @@ export interface GameEvent {
 export const MOON_EVENTS: GameEvent[] = [
   {
     id: "fire_lab",
-    name: "Fire in Habitat",
+    name: "Fire in the Lab",
     severity: "critical",
-    situation: "Fire detected in the laboratory module. It could spread and consume oxygen.",
+    situation: "The crew spots a fire in the lab! It could spread and use up their air.",
     affectedSystems: ["lifeSupport", "equipment"],
-    riskResources: ["oxygen", "habitat", "equipment"],
-    failureEffects: { habitat: -18, equipment: -12, health: -8, oxygen: -8 },
+    riskResources: ["oxygen", "habitat", "equipment", "health"],
+    initialResourceEffects: { oxygen: -3, habitat: -4, equipment: -2 },
+    ongoingResourceEffects: { oxygen: -1, habitat: -1, equipment: -1 },
+    ongoingEffectIntervalMs: 8_000,
+    failureEffects: { habitat: -35, equipment: -25, health: -20, oxygen: -30 },
     failureConditionEffects: { lifeSupport: -12, equipment: -10 },
-    failureFeedback: 'The habitat fire spread before the crew could contain it.',
+    failureFeedback: 'The fire spread before the crew could stop it. Next time, you can help them sooner.',
     baseWeight: 1.1,
     minDay: 2,
     cooldownDays: 5,
@@ -87,10 +100,10 @@ export const MOON_EVENTS: GameEvent[] = [
     preventedByFlags: ['workshopMaintenanceComplete'],
     preparationFlags: ['workshopMaintenanceComplete', 'habitatSealVerified'],
     emergencyTask: {
-      title: 'Contain Habitat Pressure Loss',
-      description: 'Inspect and isolate the affected habitat seals after the fire response.',
-      objective: 'Reach the Cylinder Habitat and isolate the pressure leak.',
-      actionLabel: 'Isolate habitat pressure leak',
+      title: 'Stop the Air Leak',
+      description: 'Find and close the damaged air seals after the fire.',
+      objective: 'Go to the Cylinder Habitat and stop the air leak.',
+      actionLabel: 'Stop the air leak',
       targetComponentId: '001',
       targetComponentName: 'Cylinder Habitat',
       affectedSystem: 'lifeSupport',
@@ -102,56 +115,59 @@ export const MOON_EVENTS: GameEvent[] = [
       escalationConditionAtOrBelow: 80,
       escalationConditionLoss: 8,
       escalationResourceEffects: { oxygen: -7 },
-      riskIfDelayed: 'The habitat pressure leak is worsening; life support and oxygen are at risk.',
-      completionFeedback: 'Habitat pressure loss isolated before the next stage of life-support damage.',
+      riskIfDelayed: 'The air leak is getting worse. The crew could lose more air.',
+      completionFeedback: 'The air leak is stopped before the crew loses more air.',
     },
     decisions: [
       {
         id: "A",
-        label: "Isolate Lab",
-        effects: { habitat: 5, oxygen: -5, science: -10 },
+        label: "Close Off the Lab",
+        effects: { oxygen: 5, power: -3 },
         conditionEffects: { lifeSupport: 8, equipment: 3 },
-        benefit: "Habitat +5; spread chance reduced",
-        cost: "Oxygen -5, Science -10",
-        risk: "Low",
+        benefit: "Oxygen +5; the crew has more air",
+        cost: "Power -3",
+        risk: "Small risk",
         setFlags: ["labDamaged"],
-        futureConsequence: "Lab needs repair later"
+        futureConsequence: "The lab will need repairs later"
       },
       {
         id: "B",
-        label: "Send Astronaut",
-        effects: { science: 5, health: -8, oxygen: -3, equipment: -5 },
+        label: "Send a Crew Member",
+        effects: { food: 4, power: -5 },
         conditionEffects: { lifeSupport: -8, equipment: -7 },
-        benefit: "Science +5; equipment saved",
-        cost: "Health -8, Oxygen -3, Equipment -5",
-        risk: "Astronaut injury (30%)",
+        benefit: "Food +4; the crew acts quickly",
+        cost: "Power -5",
+        risk: "A crew member could get hurt (30%)",
         setFlags: ["crewInjured"],
-        futureConsequence: "If injured: EVA capacity reduced"
+        futureConsequence: "If someone is hurt, fewer crew can go outside"
       },
       {
         id: "C",
-        label: "Emergency Shutdown",
-        effects: { habitat: 10, power: -2, science: -20 },
+        label: "Turn Off the Lab",
+        effects: { health: 8, power: -5 },
         conditionEffects: { lifeSupport: 5, power: -3 },
-        benefit: "Habitat +10; fire risk down",
-        cost: "Power -2, Science -20",
-        risk: "Lost progress",
+        benefit: "Crew health +8; the fire is contained",
+        cost: "Power -5",
+        risk: "Less time for other jobs",
         setFlags: ["experimentsReset"],
-        futureConsequence: "Experiments restart"
+        futureConsequence: "Experiments will need to start again"
       }
     ],
-    lesson: "Fire in a sealed habitat needs containment before recovery; no venting option exists."
+    lesson: "A fire in a sealed Moon home must be stopped quickly. The crew cannot let the air out to put it out."
   },
   {
     id: "power_failure",
-    name: "Power Failure",
+    name: "Power Trouble",
     severity: "high",
-    situation: "Solar generation is far below expectation.",
+    situation: "Oh no! The solar panels are making much less power than expected. Can you help the crew save power?",
     affectedSystems: ["power", "equipment"],
     riskResources: ["power", "battery", "equipment"],
-    failureEffects: { power: -18, battery: -12, equipment: -8 },
+    initialResourceEffects: { power: -4, battery: -4, equipment: -1 },
+    ongoingResourceEffects: { power: -1, battery: -1, equipment: -1 },
+    ongoingEffectIntervalMs: 8_000,
+    failureEffects: { power: -30, battery: -25, equipment: -20 },
     failureConditionEffects: { power: -14, equipment: -6 },
-    failureFeedback: 'The power system remained offline and reserve capacity was depleted.',
+    failureFeedback: 'Power stayed off and the backup supply got low. Next time, try helping the crew sooner.',
     baseWeight: 1.1,
     minDay: 2,
     cooldownDays: 5,
@@ -160,10 +176,10 @@ export const MOON_EVENTS: GameEvent[] = [
     preventedByFlags: ['solarArrayInspected'],
     preparationFlags: ['batteryReadinessVerified'],
     emergencyTask: {
-      title: 'Restore Battery Bus',
-      description: 'Inspect the battery bus after the power failure and restore stable distribution.',
-      objective: 'Reach the Battery Container and restore the battery bus.',
-      actionLabel: 'Restore battery bus',
+      title: 'Fix the Power Connections',
+      description: 'Check the power connections and get the backup power working again.',
+      objective: 'Go to the Battery Container and fix the power connections.',
+      actionLabel: 'Fix power connections',
       targetComponentId: '015',
       targetComponentName: 'Battery Container',
       affectedSystem: 'power',
@@ -175,65 +191,68 @@ export const MOON_EVENTS: GameEvent[] = [
       escalationConditionAtOrBelow: 75,
       escalationConditionLoss: 8,
       escalationResourceEffects: { power: -9, battery: -8 },
-      riskIfDelayed: 'The unstable power bus is drawing down the battery reserve.',
-      completionFeedback: 'Battery bus stabilized before the power shortfall escalated.',
+      riskIfDelayed: 'The loose power connections are using up the backup power.',
+      completionFeedback: 'The power connections are fixed before the backup runs low.',
     },
     decisions: [
       {
         id: "A",
-        label: "Low Power Mode",
-        effects: { power: 10, science: -15, food: -5 },
+        label: "Save Power",
+        effects: { power: 10, food: -5 },
         conditionEffects: { power: 5 },
         benefit: "Power +10",
-        cost: "Science -15, Food -5",
-        risk: "Systems under capacity",
-        futureConsequence: "Slower recovery of Science"
+        cost: "Food -5",
+        risk: "Some outpost systems may slow down",
+        futureConsequence: "Outpost research will take longer"
       },
       {
         id: "B",
-        label: "Use Battery Reserve",
-        effects: { power: 20, battery: -25 },
+        label: "Use Stored Power",
+        effects: { power: 12, food: -5 },
         conditionEffects: { power: 8 },
-        benefit: "Power +20",
-        cost: "Battery -25",
-        risk: "Little reserve for emergencies",
+        benefit: "Power +12; stored energy helps",
+        cost: "Food -5",
+        risk: "Not much backup power left",
         setFlags: ["batteryDrained"],
-        futureConsequence: "Power emergency probability up"
+        futureConsequence: "Another power problem is more likely"
       },
       {
         id: "C",
-        label: "Full Operations",
-        effects: { science: 10, power: -25 },
+        label: "Keep Everything Running",
+        effects: { food: 8, health: -8 },
         conditionEffects: { power: -15, equipment: -4 },
-        benefit: "Science +10",
-        cost: "Power -25",
-        risk: "Power crisis likely",
+        benefit: "Food +8; the crew keeps working",
+        cost: "Crew health -8",
+        risk: "The power could run too low",
         setFlags: ["powerDebt"],
-        futureConsequence: "Power debt and crisis risk"
+        futureConsequence: "The outpost will need to save more power"
       }
     ],
-    lesson: "Energy is a budget; spending reserves buys time but borrows from the future."
+    lesson: "Power is limited. Using the backup helps now, but leaves less for later."
   },
   {
     id: "solar_storm",
     name: "☀ Solar Storm",
     severity: "high",
-    situation: "A solar storm has reached the outpost. External equipment and power systems are at risk.",
+    situation: "A solar storm is passing the outpost! It could harm the outside panels and drain power.",
     affectedSystems: ["power", "equipment"],
-    riskResources: ["power", "battery", "equipment"],
-    failureEffects: { power: -12, battery: -10, radProtection: -8, health: -5 },
+    riskResources: ["power", "battery", "radProtection", "health"],
+    initialResourceEffects: { power: -3, battery: -3, radProtection: -2, health: -1 },
+    ongoingResourceEffects: { power: -1, battery: -1, radProtection: -1, health: -1 },
+    ongoingEffectIntervalMs: 10_000,
+    failureEffects: { power: -25, battery: -20, radProtection: -30, health: -20 },
     failureConditionEffects: { power: -10 },
-    failureFeedback: 'The solar storm passed without the array being secured.',
+    failureFeedback: 'The storm passed before the crew could protect the panels. Next time, you can help them get ready sooner.',
     baseWeight: 1,
     minDay: 2,
     cooldownDays: 5,
     maxOccurrences: 2,
     preparationFlags: ['solarArrayInspected'],
     emergencyTask: {
-      title: 'Secure Storm-Damaged Solar Array',
-      description: 'Inspect the solar array for storm damage and secure vulnerable panels.',
-      objective: 'Reach the Solar Array and secure the damaged panels.',
-      actionLabel: 'Secure solar array',
+      title: 'Secure the Solar Panels',
+      description: 'Check the panels for storm damage and secure any loose ones.',
+      objective: 'Go to the Solar Array and secure the loose panels.',
+      actionLabel: 'Secure solar panels',
       targetComponentId: '011',
       targetComponentName: 'Solar Array',
       affectedSystem: 'power',
@@ -245,54 +264,57 @@ export const MOON_EVENTS: GameEvent[] = [
       escalationConditionAtOrBelow: 80,
       escalationConditionLoss: 7,
       escalationResourceEffects: { power: -8, battery: -4 },
-      riskIfDelayed: 'Storm damage is reducing solar output and can drain the battery reserve.',
-      completionFeedback: 'Storm-damaged panels secured before power-system condition worsened.',
+      riskIfDelayed: 'The damaged panels are making less power and using up the backup.',
+      completionFeedback: 'The loose panels are secure before the power gets worse.',
     },
     decisions: [
       {
         id: "A",
-        label: "Radiation Shelter",
-        effects: { health: 5, science: -15, power: -5 },
+        label: "Go to the Storm Shelter",
+        effects: { health: 5, food: -5 },
         conditionEffects: { power: 3 },
-        benefit: "Health +5",
-        cost: "Science -15, Power -5",
-        risk: "Lost work time",
-        futureConsequence: "Safe; none"
+        benefit: "Crew health +5",
+        cost: "Food -5",
+        risk: "Less time for other jobs",
+        futureConsequence: "The crew stays safe"
       },
       {
         id: "B",
-        label: "Continue EVA",
-        effects: { science: 20, radProtection: -30, health: -20 },
+        label: "Keep Working Outside",
+        effects: { food: 10, water: -5 },
         conditionEffects: { power: -12, equipment: -10 },
-        benefit: "Science +20",
-        cost: "Radiation Prot. -30, Health -20",
-        risk: "Radiation exposure",
+        benefit: "Food +10; the crew finishes the work",
+        cost: "Water -5",
+        risk: "Radiation may harm the crew",
         setFlags: ["radiationExposed"],
-        futureConsequence: "Later Health loss"
+        futureConsequence: "The crew may feel unwell later"
       },
       {
         id: "C",
-        label: "Cancel External Ops",
-        effects: { radProtection: 5, health: 5, science: -10 },
+        label: "Head to Shelter",
+        effects: { health: 10, food: -5 },
         conditionEffects: { power: 2 },
-        benefit: "Radiation Prot. +5, Health +5",
-        cost: "Science -10",
-        risk: "Backlog",
-        futureConsequence: "EVA tasks delayed"
+        benefit: "Crew health +10; everyone stays sheltered",
+        cost: "Food -5",
+        risk: "Other jobs may have to wait",
+        futureConsequence: "Outdoor jobs will have to wait"
       }
     ],
-    lesson: "Radiation risk is cumulative; shielding and timing matter more than tough choices in the moment."
+    lesson: "Radiation can build up over time. A shelter and good timing help keep the crew safe."
   },
   {
     id: "lunar_night",
     name: "Lunar Night",
     severity: "critical",
-    situation: "Low-light conditions are reducing solar generation. Battery reserves will determine how safely the outpost can operate.",
+    situation: "The Sun is setting, so the panels are making less power. Saved power can help keep the crew safe through the long night.",
     affectedSystems: ["power", "lifeSupport"],
     riskResources: ["power", "battery", "oxygen"],
-    failureEffects: { power: -15, battery: -10, oxygen: -6, food: -4 },
+    initialResourceEffects: { power: -4, battery: -4, oxygen: -1 },
+    ongoingResourceEffects: { power: -1, battery: -1, oxygen: -1 },
+    ongoingEffectIntervalMs: 8_000,
+    failureEffects: { power: -35, battery: -30, oxygen: -20 },
     failureConditionEffects: { power: -10, lifeSupport: -5 },
-    failureFeedback: 'The crew failed to protect reserves through the lunar night.',
+    failureFeedback: 'Supplies got low during the long Moon night. Next time, you can help the crew plan ahead.',
     baseWeight: 0.8,
     minDay: 4,
     cooldownDays: 6,
@@ -301,48 +323,51 @@ export const MOON_EVENTS: GameEvent[] = [
     decisions: [
       {
         id: "A",
-        label: "Max Battery Preparation",
-        effects: { power: 30, science: -10 },
+        label: "Save Power for Night",
+        effects: { power: 30, food: -10 },
         conditionEffects: { power: 4 },
-        benefit: "Stored Power +30",
-        cost: "Science -10",
-        risk: "Less science before night",
-        futureConsequence: "Strong survival margin"
+        benefit: "Power +30",
+        cost: "Food -10",
+        risk: "Research will have to wait until morning",
+        futureConsequence: "The crew has more power to stay safe"
       },
       {
         id: "B",
-        label: "Normal Operations",
-        effects: { science: 10, power: -20 },
+        label: "Keep Working as Usual",
+        effects: { food: 10, health: -8 },
         conditionEffects: { power: -12, lifeSupport: -4 },
-        benefit: "Science +10",
-        cost: "Stored Power -20",
-        risk: "Battery runs dry in darkness",
+        benefit: "Food +10; regular work continues",
+        cost: "Crew health -8",
+        risk: "Power could run low in the dark",
         setFlags: ["powerDebt"],
-        futureConsequence: "Power shortage risk increases"
+        futureConsequence: "Power may run low again"
       },
       {
         id: "C",
-        label: "Survival Mode",
-        effects: { power: 20, science: -20, food: -5 },
+        label: "Save Supplies",
+        effects: { power: 20, food: -5 },
         conditionEffects: { power: 3, lifeSupport: 2 },
-        benefit: "Stored Power +20",
-        cost: "Science -20, Food -5",
-        risk: "Low productivity",
-        futureConsequence: "Safe but slow operations"
+        benefit: "Power +20",
+        cost: "Food -5",
+        risk: "Fewer jobs may get done",
+        futureConsequence: "The crew stays safer, but gets fewer jobs done"
       }
     ],
-    lesson: "Energy planning ahead of an inevitable event is a core Moon skill."
+    lesson: "Plan ahead for the long Moon night. Saved power helps the crew stay safe."
   },
   {
     id: "water_leak",
-    name: "💧 Water Leak",
+    name: "Water Leak",
     severity: "high",
-    situation: "A water pipe joint has ruptured inside the habitat infrastructure.",
+    situation: "A water pipe just burst inside the habitat! Water is leaking out.",
     affectedSystems: ["water", "lifeSupport"],
-    riskResources: ["water", "emergencyReserve", "oxygen"],
-    failureEffects: { water: -20, emergencyReserve: -12, oxygen: -5, equipment: -5 },
+    riskResources: ["water", "emergencyReserve", "oxygen", "equipment"],
+    initialResourceEffects: { water: -5, emergencyReserve: -2, oxygen: -1 },
+    ongoingResourceEffects: { water: -1, emergencyReserve: -1, oxygen: -1 },
+    ongoingEffectIntervalMs: 6_000,
+    failureEffects: { water: -30, emergencyReserve: -25, oxygen: -20, equipment: -15 },
     failureConditionEffects: { water: -14, lifeSupport: -4 },
-    failureFeedback: 'The water leak continued and contaminated reserve capacity.',
+    failureFeedback: 'The pipe kept leaking, so some backup water was lost. Next time, you can help stop the leak sooner.',
     baseWeight: 1.1,
     minDay: 2,
     cooldownDays: 5,
@@ -351,9 +376,9 @@ export const MOON_EVENTS: GameEvent[] = [
     preventedByFlags: ['waterLineInspected'],
     preparationFlags: ['waterLineInspected'],
     emergencyTask: {
-      title: 'Repair Habitat Waterline',
-      description: 'Isolate and repair the ruptured waterline before reserves fall further.',
-      objective: 'Reach the Cylinder Habitat and repair the leaking waterline.',
+      title: 'Fix the Leaking Water Pipe',
+      description: 'Close off and fix the broken pipe before more water leaks out.',
+      objective: 'Go to the Cylinder Habitat and fix the leaking pipe.',
       actionLabel: 'Repair waterline',
       targetComponentId: '001',
       targetComponentName: 'Cylinder Habitat',
@@ -366,54 +391,54 @@ export const MOON_EVENTS: GameEvent[] = [
       escalationConditionAtOrBelow: 80,
       escalationConditionLoss: 8,
       escalationResourceEffects: { water: -9, emergencyReserve: -5 },
-      riskIfDelayed: 'The leak is consuming stored water and may force use of the emergency reserve.',
-      completionFeedback: 'Waterline leak repaired before the emergency reserve was needed.',
+      riskIfDelayed: 'The leak is using up stored water. The crew may need its backup.',
+      completionFeedback: 'The leak is fixed before the crew needs its backup water.',
     },
     decisions: [
       {
         id: "A",
-        label: "Reduce Consumption",
+        label: "Use Less Water",
         effects: { water: 15, health: -3 },
         conditionEffects: { water: 2 },
         benefit: "Water +15",
         cost: "Health -3",
-        risk: "Crew discomfort",
-        futureConsequence: "Leak persists if unrepaired"
+        risk: "The crew may feel uncomfortable",
+        futureConsequence: "The leak will keep going until the pipe is fixed"
       },
       {
         id: "B",
-        label: "Repair System",
-        effects: { water: 25, equipment: -10, power: -8 },
+        label: "Fix the Pipe",
+        effects: { water: 25, power: -8 },
         conditionEffects: { water: 12, equipment: -3 },
         benefit: "Water +25",
-        cost: "Equipment -10, Power -8",
-        risk: "Spare parts use",
+        cost: "Power -8",
+        risk: "Some repair supplies will be used",
         setFlags: ["sparesLow"],
-        futureConsequence: "Fewer spares for future"
+        futureConsequence: "The crew will have fewer repair supplies left"
       },
       {
         id: "C",
-        label: "Emergency Reserve",
-        effects: { water: 20, emergencyReserve: -20 },
+        label: "Use Backup Water",
+        effects: { water: 20, food: -8 },
         conditionEffects: { water: -5 },
         benefit: "Water +20",
-        cost: "Emergency Reserve -20",
-        risk: "Low reserve",
-        futureConsequence: "Future water events more dangerous"
+        cost: "Food -8",
+        risk: "There will be less backup water for later",
+        futureConsequence: "Another leak could be harder to fix"
       }
     ],
-    lesson: "Recycling and reserves are layered defenses; each layer used leaves less margin."
+    lesson: "Recycling water and saving a backup supply both help. Using one leaves less for later."
   },
   {
     id: "water_ice_exploration",
-    name: "❄ Possible Water Ice",
+    name: "❄ Signs of Water Ice",
     severity: "medium",
-    situation: "Orbital sensors detected high hydrogen signatures in a nearby crater rim.",
+    situation: "The crew found signs of ice in a nearby crater! They can look for water, but exploring uses power and wears down tools.",
     affectedSystems: ["water", "equipment", "power"],
-    riskResources: ["water", "power", "equipment"],
-    failureEffects: { power: -8, equipment: -5 },
+    riskResources: ["power", "equipment"],
+    failureEffects: { power: -15, equipment: -18 },
     failureConditionEffects: { equipment: -4 },
-    failureFeedback: 'The ice survey was abandoned before the crew could secure a useful result.',
+    failureFeedback: 'The crew didn’t find a useful ice sample this time. They can explore again and learn from another try.',
     baseWeight: 0.75,
     minDay: 1,
     cooldownDays: 6,
@@ -422,36 +447,36 @@ export const MOON_EVENTS: GameEvent[] = [
     decisions: [
       {
         id: "A",
-        label: "Full Investigation",
-        effects: { potentialWater: 40, power: -20, equipment: -10 },
+        label: "Explore the Crater",
+        effects: { water: 25, food: -8 },
         conditionEffects: { water: 4, power: -5, equipment: -5 },
-        benefit: "Potential Water +40",
-        cost: "Power -20, Equipment -10",
-        risk: "Dust/power strain",
-        futureConsequence: "Faster Confirmation"
+        benefit: "Water +25; ice is collected",
+        cost: "Food -8",
+        risk: "Dust may slow the work and use power",
+        futureConsequence: "The crew will learn sooner if the ice can help"
       },
       {
         id: "B",
-        label: "Limited Sampling",
-        effects: { potentialWater: 20, power: -10 },
+        label: "Take a Small Sample",
+        effects: { water: 12, food: -5 },
         conditionEffects: { water: 2, power: -2 },
-        benefit: "Potential Water +20",
-        cost: "Power -10",
-        risk: "Uncertain result",
-        futureConsequence: "Slower chain"
+        benefit: "Water +12; a small sample is collected",
+        cost: "Food -5",
+        risk: "The sample may not tell us much",
+        futureConsequence: "It may take longer to learn if the ice can help"
       },
       {
         id: "C",
-        label: "Ignore",
-        effects: { power: 5, science: -5 },
+        label: "Skip the Search",
+        effects: { power: 5, water: -5 },
         conditionEffects: { power: 1 },
         benefit: "Power +5",
-        cost: "Science -5",
-        risk: "Missed opportunity",
-        futureConsequence: "Chain not started"
+        cost: "Water -5",
+        risk: "The crew may miss useful ice",
+        futureConsequence: "The ice search will not continue"
       }
     ],
-    lesson: "Resources must be confirmed, extracted and processed before they help."
+    lesson: "Ice needs to be found and cleaned before the crew can use it for water."
   }
 ];
 
@@ -460,28 +485,28 @@ const TASK_CONSEQUENCE_VARIANTS = [
     sourceId: 'power_failure',
     id: 'task_solar_array_fault',
     taskId: 'solar-array-inspection',
-    name: 'Uninspected Solar Array Fault',
-    situation: 'The missed solar-array inspection left storm debris lodged in the panel hinges. Output has fallen and the battery bus is under strain.',
-    failureFeedback: 'The uninspected array fault persisted, cutting generation and draining reserve power.',
-    decisionLabels: ['Shed the Storm Load', 'Reroute Through the Battery Bus', 'Isolate the Damaged Array'],
+    name: 'Solar Panel Trouble',
+    situation: 'The crew missed the solar panel check. Storm dust is covering them, so they are making less power.',
+    failureFeedback: 'Storm dust kept covering the panels, and backup power got low. Next time, you can help clear them sooner.',
+    decisionLabels: ['Shed the Storm Load', 'Use Backup Power', 'Isolate the Damaged Array'],
   },
   {
     sourceId: 'fire_lab',
     id: 'task_workshop_arc',
     taskId: 'workshop-equipment-maintenance',
-    name: 'Workshop Calibration Arc',
-    situation: 'The missed workshop calibration allowed a misaligned tool head to arc during operation, scorching nearby habitat equipment.',
-    failureFeedback: 'The workshop arc spread into nearby habitat equipment before it could be isolated.',
-    decisionLabels: ['Isolate the Workshop', 'Send a Crew Technician', 'Shut Down the Tool Bank'],
+    name: 'Workshop Tool Spark',
+    situation: 'A workshop tool was not checked and made a spark! It scorched part of the habitat.',
+    failureFeedback: 'The spark spread before the crew could stop it. Next time, you can help them act sooner.',
+    decisionLabels: ['Close the Workshop', 'Send a Crew Member', 'Turn Off the Tools'],
   },
   {
     sourceId: 'water_leak',
     id: 'task_waterline_joint_failure',
     taskId: 'habitat-waterline-inspection',
-    name: 'Uninspected Waterline Joint Failure',
-    situation: 'The unchecked habitat joint has failed under pressure. Water is escaping into the service compartment and threatening reserve capacity.',
-    failureFeedback: 'The unchecked joint continued leaking and contaminated reserve capacity.',
-    decisionLabels: ['Ration Water Immediately', 'Patch the Failed Joint', 'Switch to Emergency Reserve'],
+    name: 'Broken Water Pipe',
+    situation: 'A water pipe was not checked and has burst! Water is leaking into the service room.',
+    failureFeedback: 'The pipe kept leaking, leaving less water for later. Next time, you can help find the leak sooner.',
+    decisionLabels: ['Save Water Now', 'Fix the Pipe', 'Use Backup Water'],
   },
 ] as const;
 

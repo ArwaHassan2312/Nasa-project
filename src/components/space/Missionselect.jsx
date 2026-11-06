@@ -14,11 +14,11 @@ const PLANETS = [
   { id: 'mars', name: 'Mars', url: ASSETS.mars, kind: 'mars' },
 ];
 const LINES = [
-  'Your destination awaits.',
+  'Your space trip is ready.',
   '',
   'Choose your world.',
-  'Choose your landing site.',
-  'Shape your mission.',
+  'Choose where to go.',
+  'Get ready to explore.',
 ];
 const RADIUS = 1.25;
 
@@ -190,8 +190,8 @@ export default function MissionSelect({ selected, onSelect, onLaunchMission }) {
           const dismissed = !!selected && !isSel;
           const interactive = isSel && settled;
           const tag = isSel
-            ? settled ? 'Drag to rotate · Scroll to zoom' : 'Destination locked'
-            : hover === p.id && !selected ? 'Select destination' : '\u00A0';
+            ? settled ? 'Drag to turn · Scroll to zoom' : 'Getting ready'
+            : hover === p.id && !selected ? 'Choose this world' : '\u00A0';
           return (
             <div
               key={p.id}
@@ -251,8 +251,8 @@ export default function MissionSelect({ selected, onSelect, onLaunchMission }) {
                 >
                   <span className="dest-deploy-icon">⚡</span>
                   <div className="dest-deploy-info">
-                    <span className="dest-deploy-title">DEPLOY TO LUNAR SURFACE</span>
-                    <span className="dest-deploy-desc">Apollo 12 & 16 Outpost Recon · Habitat & Greenhouse</span>
+                  <span className="dest-deploy-title">Go to the Moon base</span>
+                  <span className="dest-deploy-desc">Explore the Apollo 12 and 16 sites, home, and greenhouse.</span>
                   </div>
                   <span className="dest-deploy-arrow">→</span>
                 </button>
@@ -263,8 +263,8 @@ export default function MissionSelect({ selected, onSelect, onLaunchMission }) {
                 <div className="dest-deploy-btn dest-deploy-btn--disabled">
                   <span className="dest-deploy-icon">⏳</span>
                   <div className="dest-deploy-info">
-                    <span className="dest-deploy-title">MARS RECONNAISSANCE</span>
-                    <span className="dest-deploy-desc">Orbital scan active · Surface mission in development</span>
+                  <span className="dest-deploy-title">Mars is not ready yet</span>
+                  <span className="dest-deploy-desc">We are still building the Mars surface mission.</span>
                   </div>
                 </div>
               </div>
@@ -279,7 +279,7 @@ export default function MissionSelect({ selected, onSelect, onLaunchMission }) {
         tabIndex={selected ? 0 : -1}
         onClick={() => onSelect?.(null)}
       >
-        ← Change destination
+        ← Choose another world
       </button>
     </div>
   );

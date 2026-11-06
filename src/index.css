@@ -117,3 +117,83 @@ html, body, #root {
   background: #000;
   overflow: hidden;
 }
+
+html { font-size: 99%; }
+
+/* Keep one friendly typeface across menus, the game HUD, and every dialog. */
+#root,
+#root * {
+  font-family: 'Trebuchet MS', 'Segoe UI', Arial, sans-serif !important;
+}
+
+#root {
+  font-size: 0.98rem;
+}
+
+/* Keep all feedback panels softly rounded and let their text wrap cleanly. */
+#root :is(
+  .simulation-event-modal,
+  .simulation-warning-modal,
+  .simulation-report,
+  .lunar-task-toast,
+  .lunar-task-feedback,
+  .lunar-task-card,
+  .lunar-proximity-prompt,
+  .lunar-persistent-notice,
+  .lunar-end-of-day-event-message,
+  .lunar-day-report,
+  .lunar-event-alert-dropdown,
+  .lunar-resource-footnote,
+  .lunar-context-task,
+  .lunar-map-note,
+  .lunar-rover-help,
+  .brief
+) {
+  font-size: 0.95rem !important;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+#root :is(
+  .simulation-event-modal,
+  .simulation-warning-modal,
+  .simulation-report,
+  .lunar-task-toast,
+  .lunar-task-feedback,
+  .lunar-task-card,
+  .lunar-proximity-prompt,
+  .lunar-persistent-notice,
+  .lunar-end-of-day-event-message,
+  .lunar-day-report,
+  .lunar-event-alert-dropdown,
+  .lunar-resource-footnote,
+  .lunar-context-task,
+  .lunar-map-note,
+  .lunar-rover-help,
+  .brief
+) :is(p, span, small, strong, b, li, label, button) {
+  font-size: 1em !important;
+}
+
+#root .lunar-notice-close { font-size: 1.35rem !important; }
+
+/* Keep camera help readable; make location prompts distinctly more compact. */
+#root .lunar-rover-help {
+  font-size: 0.9rem !important;
+}
+
+#root .lunar-proximity-prompt { font-size: 0.6rem !important; }
+#root .lunar-proximity-prompt :is(.lunar-proximity-enter, .lunar-proximity-resolve-event) {
+  font-size: 0.62rem !important;
+}
+#root .lunar-proximity-prompt kbd { font-size: 0.56rem !important; }
+
+/* Compact the event choices and critical problem alerts. */
+#root .simulation-event-modal { font-size: 0.8rem !important; }
+#root .simulation-event-modal .simulation-event-heading h2 { font-size: 1.25em !important; }
+#root .simulation-warning-modal { font-size: 0.8rem !important; }
+#root .simulation-warning-modal h2 { font-size: 1.25em !important; }
+#root .lunar-event-failure-notice,
+#root .lunar-task-failure-notice { font-size: 0.82rem !important; }
+#root .lunar-event-alert-button { font-size: 0.78rem !important; }

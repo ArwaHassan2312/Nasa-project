@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { MOON_EVENTS, TASK_CONSEQUENCE_EVENTS } from '../data/moonEvents';
 import type {
   Decision,
-  EmergencyTaskDefinition,
   GameEvent,
   ResourceKey,
+  SurvivalResourceKey,
   SystemKey,
 } from '../data/moonEvents';
 import { DAILY_CHALLENGES } from '../data/dailyChallenges';
@@ -12,22 +12,26 @@ import type { DailyChallengeDefinition } from '../data/dailyChallenges';
 import {
   createRandomSeed,
   EVENT_SCHEDULER_CONFIG,
+  getIndependentEventWindowEndMs,
   selectMajorEvent,
 } from './eventScheduler';
 import type { EventOccurrence } from './eventScheduler';
 import {
-  applyResourceEffects,
-  canTriggerLinkedTaskEvent,
+  BASELINE_DAILY_CONSUMPTION,
   excludeTaskEventSources,
+  getUnresolvedEventOccurrenceIdsAtDayEnd,
   hasEventOccurredOnDay,
   removeEventOccurrence,
   getTaskCompletionResourceEffects,
-  getTaskEventRecovery,
+  getHalfResourceRestoration,
+  getSuccessfulEventResourceEffects,
   getTaskMissResourceEffects,
+  getElapsedResourceEffects,
+  findFailedEssentialResource,
   getResolvedLinkedTasks,
-  selectDailyTaskDefinitions,
-  shouldCreateEmergencyFollowUp,
-  shouldDeferCriticalTaskAtDayEnd,
+  selectUntriggeredCriticalTaskEvents,
+  selectRandomDailyTaskDefinitions,
+  settlePendingResourceEffects,
   startTaskOccurrence,
 } from './taskLifecycle';
 
@@ -35,6 +39,7 @@ export type GameStatus = 'playing' | 'success' | 'failed';
 export type ResourceLevels = Record<ResourceKey, number>;
 export type EventPhase = 'idle' | 'pending' | 'presenting' | 'awaitingDecision' | 'resolving';
 export type DayPhase = 'active' | 'closing' | 'report' | 'transition';
+type DisplayResourceKey = 'power' | 'battery' | 'oxygen' | 'water' | 'food' | 'health';
 
 export interface DayReport {
   day: number;
@@ -43,9 +48,9 @@ export interface DayReport {
   totalEvents: number;
   expiredEvents: number;
   eventOutcomes: EventOutcomeRecord[];
-  resourceStart: ResourceLevels;
-  resources: ResourceLevels;
-  resourceChanges: Partial<Record<ResourceKey, number>>;
+  resourceStart: Record<DisplayResourceKey, number>;
+  resources: Record<DisplayResourceKey, number>;
+  resourceChanges: Partial<Record<DisplayResourceKey, number>>;
 }
 
 export interface DecisionRecord {
@@ -55,6 +60,7 @@ export interface DecisionRecord {
   lesson: string;
   futureConsequence: string;
   actualOutcome: string;
+  resourceChanges?: Partial<Record<ResourceKey, number>>;
 }
 
 export interface GameSimulationOptions {
@@ -64,6 +70,7 @@ export interface GameSimulationOptions {
 }
 
 export type DailyChallengeStatus = 'available' | 'inProgress' | 'overdue' | 'completed';
+export type CriticalTaskRecoveryStatus = 'available' | 'active' | 'completed' | 'expired' | null;
 export interface DailyChallenge extends DailyChallengeDefinition {
   scheduledDay: number;
   status: DailyChallengeStatus;
@@ -76,8 +83,14 @@ export interface DailyChallenge extends DailyChallengeDefinition {
   urgentStartedAtMs: number | null;
   urgentDeadlineAtMs: number | null;
   escalationAtMs: number | null;
+  recoveryStatus: CriticalTaskRecoveryStatus;
+  recoveryAttempted: boolean;
+  recoveryDeadlineAtMs: number | null;
+  recoveryResourceLosses: Partial<Record<ResourceKey, number>>;
   urgentConsequenceApplied: boolean;
   escalationApplied: boolean;
+  targetComponentName: string;
+  deadlineDay: number;
   completedAfterDeadline: boolean | null;
   responseTimeMs: number | null;
   emergencyPrevented: boolean;
@@ -93,6 +106,22 @@ export interface DailyChallengeCompletion {
   responseTimeMs: number | null;
   emergency: boolean;
   preventedEscalation: boolean;
+}
+
+export interface TaskMissionRecord {
+  id: string;
+  title: string;
+  priority: DailyChallengeDefinition['priority'];
+  status: DailyChallengeStatus;
+  affectedSystem: SystemKey;
+  day: number;
+  emergency: boolean;
+  completedAfterDeadline: boolean | null;
+  responseTimeMs: number | null;
+  emergencyPrevented: boolean;
+  escalationApplied: boolean;
+  targetComponentName: string;
+  deadlineDay: number;
 }
 
 export type SystemConditions = Record<SystemKey, number>;
@@ -112,7 +141,7 @@ export interface PostponementRecord {
   consequence: string;
 }
 
-interface EventOutcomeRecord {
+export interface EventOutcomeRecord {
   occurrenceId: string;
   day: number;
   eventId: string;
@@ -120,6 +149,7 @@ interface EventOutcomeRecord {
   status: 'resolved' | 'failed' | 'expired';
   decision?: string;
   feedback: string;
+  resourceChanges?: Partial<Record<ResourceKey, number>>;
 }
 
 interface GameState {
@@ -128,20 +158,25 @@ interface GameState {
   dayPhase: DayPhase;
   dayReport: DayReport | null;
   dayElapsedMs: number;
+  resourceElapsedMs: number;
   campaignElapsedMs: number;
   schedulerElapsedMs: number;
   eventDrainElapsedMs: number;
   rngState: number;
   resources: ResourceLevels;
+  pendingResourceEffects: Partial<Record<ResourceKey, number>>;
   systemConditions: SystemConditions;
   currentEvent: GameEvent | null;
   queuedEvents: { event: GameEvent; drainElapsedMs: number; presented: boolean; deadlineAtMs: number | null }[];
+  endOfDayEvents: GameEvent[];
+  endOfDayNoticeHistory: GameEvent[];
+  endOfDayNoticePresentationIds: string[];
+  endOfDaySequenceFinished: boolean;
   eventPhase: EventPhase;
   eventEffectId: string | null;
   eventDeadlineAtMs: number | null;
   dayStartResources: ResourceLevels;
-  eventFailureNotices: { id: string; day: number; name: string; feedback: string; changes: Partial<Record<ResourceKey, number>>; expired: boolean }[];
-  eventSuccessNotices: { id: string; day: number; name: string; decision: string; feedback: string; changes: Partial<Record<ResourceKey, number>> }[];
+  eventFailureNotices: { id: string; day: number; name: string; feedback: string; changes: Partial<Record<ResourceKey, number>>; expired: boolean; status?: 'resolved' | 'failed' | 'expired'; decision?: string }[];
   expiredEventHistory: { day: number; occurrenceId: string }[];
   taskFailureNotices: { id: string; day: number; task: string; event: string; occurrenceId: string | undefined; presented: boolean }[];
   sceneReady: boolean;
@@ -157,8 +192,10 @@ interface GameState {
   faultHistory: SystemFaultRecord[];
   postponementHistory: PostponementRecord[];
   dailyChallenges: DailyChallenge[];
+  usedDailyChallengeIds: string[];
   activeChallengeId: string | null;
   challengeHistory: DailyChallengeCompletion[];
+  taskMissionHistory: TaskMissionRecord[];
   challengeFeedback: string | null;
   warningTaskId: string | null;
 }
@@ -167,23 +204,47 @@ interface GameState {
 const MAX_RESOURCE_LEVEL = 100;
 export const MISSION_FAILURE_RESOURCE_THRESHOLD = 10;
 export const MISSION_LENGTH_DAYS = 30;
-export const LUNAR_DAY_DURATION_MS = 120_000;
-const DAILY_TASK_COUNT = 3;
+export const LUNAR_DAY_DURATION_MS = 180_000;
 const DAY_TRANSITION_DURATION_MS = 5000;
 const EVENT_RESPONSE_DURATION_MS = 60_000;
+const CRITICAL_TASK_RECOVERY_DURATION_MS = 45_000;
 const CLOCK_UPDATE_INTERVAL_MS = 1000;
+const RESOURCE_DISPLAY_NAMES: Record<ResourceKey, string> = {
+  power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
+  habitat: 'Crew health', equipment: 'Crew health', health: 'Crew health',
+  radProtection: 'Crew health', comms: 'Power', science: 'Food',
+  emergencyReserve: 'Water', potentialWater: 'Water',
+};
+const SYSTEM_DISPLAY_NAMES: Record<SystemKey, string> = {
+  power: 'Power', lifeSupport: 'Air', water: 'Water', equipment: 'Outpost tools',
+};
 // Task completion toast stays on screen for this long before auto-dismissing.
 const CHALLENGE_FEEDBACK_DURATION_MS = 3000;
+const EVENT_OPTION_RESOURCES: SurvivalResourceKey[] = ['oxygen', 'water', 'power', 'food', 'health'];
+
+function isEventOptionResource(resource: string): resource is SurvivalResourceKey {
+  return EVENT_OPTION_RESOURCES.includes(resource as SurvivalResourceKey);
+}
 
 function eventOccurrenceKey(event: GameEvent | null | undefined): string | null {
   return event?.occurrenceId ?? (event ? `${event.id}-${event.day ?? 0}` : null);
 }
 
+function hasPendingCriticalTaskNotice(state: GameState): boolean {
+  return state.taskFailureNotices.length > 0 || state.endOfDayNoticeHistory.length > 0;
+}
+
+function hasUnresolvedCriticalTaskEvent(tasks: DailyChallenge[]): boolean {
+  return tasks.some((task) => task.status !== 'completed'
+    && (task.recoveryStatus === 'available'
+      || task.recoveryStatus === 'active'
+      || task.recoveryStatus === 'expired')
+    && TASK_CONSEQUENCE_EVENTS.some((event) => event.riskTaskIds?.includes(task.id)));
+}
+
 function getEventVisualId(event: GameEvent | null | undefined): string | null {
   return event?.sourceEventId ?? event?.id ?? null;
 }
-
-const VITAL_RESOURCES: ResourceKey[] = ['oxygen', 'water', 'power'];
 
 const INITIAL_RESOURCES: ResourceLevels = {
   power: 100,
@@ -201,18 +262,16 @@ const INITIAL_RESOURCES: ResourceLevels = {
   potentialWater: 0,
 };
 
-const DAILY_CONSUMPTION: Partial<Record<ResourceKey, number>> = {
-  power: 1,
-  oxygen: 1,
-  water: 1,
-  food: 1,
-};
-
-function createDailyChallenges(day = 1): DailyChallenge[] {
-  const selectedChallenges = selectDailyTaskDefinitions(
+function createDailyChallenges(
+  day = 1,
+  selectionSeed = day,
+  usedTaskIds: string[] = [],
+): DailyChallenge[] {
+  const selectedChallenges = selectRandomDailyTaskDefinitions(
     DAILY_CHALLENGES,
     day,
-    DAILY_TASK_COUNT,
+    selectionSeed,
+    usedTaskIds,
   );
   return selectedChallenges.map((challenge) => {
     return {
@@ -229,6 +288,10 @@ function createDailyChallenges(day = 1): DailyChallenge[] {
       urgentStartedAtMs: null,
       urgentDeadlineAtMs: null,
       escalationAtMs: null,
+      recoveryStatus: null,
+      recoveryAttempted: false,
+      recoveryDeadlineAtMs: null,
+      recoveryResourceLosses: {},
       urgentConsequenceApplied: false,
       escalationApplied: false,
       completedAfterDeadline: null,
@@ -240,18 +303,21 @@ function createDailyChallenges(day = 1): DailyChallenge[] {
   });
 }
 
-function createInitialState(seed: number): GameState {
+export function createInitialState(seed: number): GameState {
+  const initialChallenges = createDailyChallenges(1, seed);
   const initialState: GameState = {
     day: 1,
     maxDays: MISSION_LENGTH_DAYS,
     dayPhase: 'active',
     dayReport: null,
     dayElapsedMs: 0,
+    resourceElapsedMs: 0,
     campaignElapsedMs: 0,
     schedulerElapsedMs: 0,
     eventDrainElapsedMs: 0,
     rngState: seed >>> 0,
     resources: { ...INITIAL_RESOURCES },
+    pendingResourceEffects: {},
     systemConditions: {
       power: 85,
       lifeSupport: 90,
@@ -260,12 +326,15 @@ function createInitialState(seed: number): GameState {
     },
     currentEvent: null,
     queuedEvents: [],
+    endOfDayEvents: [],
+    endOfDayNoticeHistory: [],
+    endOfDayNoticePresentationIds: [],
+    endOfDaySequenceFinished: false,
     eventPhase: 'idle',
     eventEffectId: null,
     eventDeadlineAtMs: null,
     dayStartResources: { ...INITIAL_RESOURCES },
     eventFailureNotices: [],
-    eventSuccessNotices: [],
     expiredEventHistory: [],
     taskFailureNotices: [],
     sceneReady: false,
@@ -280,9 +349,11 @@ function createInitialState(seed: number): GameState {
     independentEventHistory: [],
     faultHistory: [],
     postponementHistory: [],
-    dailyChallenges: createDailyChallenges(),
+    dailyChallenges: initialChallenges,
+    usedDailyChallengeIds: initialChallenges.map(({ id }) => id),
     activeChallengeId: null,
     challengeHistory: [],
+    taskMissionHistory: [],
     challengeFeedback: null,
     warningTaskId: null,
   };
@@ -316,16 +387,16 @@ function prepareEventForReadiness(
     ) {
       return {
         ...decision,
-        effects: { ...decision.effects, battery: -15 },
-        benefit: 'Power +20; verified reserve used efficiently',
-        cost: 'Battery -15',
+        effects: { ...decision.effects, power: 8 },
+        benefit: 'Power +8; the checked reserve helps',
+        cost: 'Food -5',
       };
     }
     if (readinessEventId === 'power_failure' && decision.id === 'C' && flags.includes('powerDebt')) {
       return {
         ...decision,
-        effects: { ...decision.effects, power: -30 },
-        cost: 'Power -30',
+        effects: { ...decision.effects, health: -8 },
+        cost: 'Crew health -8',
         risk: 'Existing power debt compounds the crisis',
       };
     }
@@ -338,11 +409,9 @@ function prepareEventForReadiness(
       const conditionEffects = { ...decision.conditionEffects };
       const benefits: string[] = [];
       if (isPrepared('workshopMaintenanceComplete')) {
-        effects.equipment = -2;
-        benefits.push('calibrated equipment limits equipment loss');
+        benefits.push('the workshop check limits further damage');
       }
       if (isPrepared('habitatSealVerified')) {
-        effects.oxygen = -1;
         if (conditionEffects.lifeSupport !== undefined) {
           conditionEffects.lifeSupport = Math.ceil(conditionEffects.lifeSupport / 2);
         }
@@ -352,16 +421,15 @@ function prepareEventForReadiness(
         ...decision,
         effects,
         conditionEffects,
-        benefit: `Science +5; ${benefits.join('; ')}`,
-        cost: `Health -8, Oxygen ${effects.oxygen}, Equipment ${effects.equipment}`,
+        benefit: `Food +4; ${benefits.join('; ')}`,
+        cost: 'Power -5',
       };
     }
     if (readinessEventId === 'water_leak' && decision.id === 'B' && isPrepared('waterLineInspected')) {
       return {
         ...decision,
-        effects: { ...decision.effects, equipment: -5 },
-        benefit: 'Water +25; inspected repair points reduce spare-part use',
-        cost: 'Equipment -5, Power -8',
+        benefit: 'Water +25; the checked repair points help',
+        cost: 'Power -8',
       };
     }
     if (
@@ -373,7 +441,7 @@ function prepareEventForReadiness(
       return {
         ...decision,
         effects: { ...decision.effects, power: 35 },
-        benefit: 'Stored Power +35; verified battery preparation improves reserve efficiency',
+        benefit: 'Power +35; the checked reserve helps',
       };
     }
     if (
@@ -383,10 +451,9 @@ function prepareEventForReadiness(
     ) {
       return {
         ...decision,
-        effects: { ...decision.effects, equipment: -5 },
         conditionEffects: { ...decision.conditionEffects, equipment: -3 },
-        benefit: 'Potential Water +40; calibrated equipment reduces exploration wear',
-        cost: 'Power -20, Equipment -5',
+        benefit: 'Water +25; the outpost check makes ice collection safer',
+        cost: 'Food -8',
       };
     }
     if (readinessEventId === 'solar_storm' && isPrepared('solarArrayInspected')) {
@@ -415,13 +482,29 @@ function applyEffects(
   resources: ResourceLevels,
   effects: Partial<Record<ResourceKey, number>>,
 ): ResourceLevels {
-  return applyResourceEffects(resources, effects, MAX_RESOURCE_LEVEL) as ResourceLevels;
+  return applyIncidentEffects(resources, effects);
+}
+
+function roundResourceEffects(effects: Partial<Record<ResourceKey, number>>): Partial<Record<ResourceKey, number>> {
+  return Object.fromEntries(Object.entries(effects).map(([resource, amount]) => (
+    [resource, Math.sign(amount ?? 0) * Math.round(Math.abs(amount ?? 0))]
+  ))) as Partial<Record<ResourceKey, number>>;
+}
+
+function applyIncidentEffects(
+  resources: ResourceLevels,
+  effects: Partial<Record<ResourceKey, number>>,
+): ResourceLevels {
+  const updated = { ...resources };
+  for (const [resource, change] of Object.entries(effects) as [ResourceKey, number][]) {
+    updated[resource] = Math.max(0, Math.min(MAX_RESOURCE_LEVEL,
+      Math.trunc(updated[resource]) + Math.trunc(change)));
+  }
+  return updated;
 }
 
 function findFailedVital(resources: ResourceLevels): ResourceKey | null {
-  return VITAL_RESOURCES.find(
-    (resource) => resources[resource] <= MISSION_FAILURE_RESOURCE_THRESHOLD,
-  ) ?? null;
+  return findFailedEssentialResource(resources, MISSION_FAILURE_RESOURCE_THRESHOLD) as ResourceKey | null;
 }
 
 function changeSystemCondition(
@@ -527,7 +610,7 @@ function applyDayStartConsequences(state: GameState, day: number): GameState {
         resources,
         systemConditions,
         faultHistory,
-        challengeFeedback: `Secondary ${system} fault: ${relatedOverdueTask.title} remained overdue while the system was critical.`,
+        challengeFeedback: `A ${system} problem needs care: ${relatedOverdueTask.title} was still waiting. You can use this to help the crew sooner next time.`,
       };
       const failedVital = findFailedVital(resources);
       if (failedVital) {
@@ -540,44 +623,6 @@ function applyDayStartConsequences(state: GameState, day: number): GameState {
   return { ...nextState, systemConditions, faultHistory };
 }
 
-function createEmergencyChallenge(
-  definition: EmergencyTaskDefinition,
-  id: string,
-  day: number,
-): DailyChallenge {
-  return {
-    ...definition,
-    taskType: 'event-prevention',
-    id,
-    scheduledDay: day,
-    priority: 'critical',
-    deadlineDay: day + 1,
-    conditionRecovery: 8,
-    overdueConditionLoss: definition.urgentConditionLoss,
-    postponement: {
-      warning: `${definition.title} is an active emergency and cannot be postponed.`,
-      riskOnlyConsequence: definition.riskIfDelayed,
-    },
-    emergency: true,
-    triggeredEventIds: [],
-    status: 'available',
-    startedDay: null,
-    completedDay: null,
-    postponed: false,
-    deadlineMissed: false,
-    overdueEffectApplied: false,
-    postponementEffectApplied: false,
-    urgentStartedAtMs: null,
-    urgentDeadlineAtMs: null,
-    escalationAtMs: null,
-    urgentConsequenceApplied: false,
-    escalationApplied: false,
-    completedAfterDeadline: null,
-    responseTimeMs: null,
-    emergencyPrevented: false,
-  };
-}
-
 function applyTimedTaskConsequences(state: GameState): GameState {
   let resources = state.resources;
   let systemConditions = state.systemConditions;
@@ -587,45 +632,60 @@ function applyTimedTaskConsequences(state: GameState): GameState {
   let failureReason = state.failureReason;
 
   const dailyChallenges = state.dailyChallenges.map((challenge) => {
-    if (challenge.status === 'completed' || challenge.urgentDeadlineAtMs === null) {
-      return challenge;
-    }
-    let nextChallenge = challenge;
+    if (challenge.status === 'completed') return challenge;
+    let nextChallenge = challenge.recoveryStatus === 'active'
+      && challenge.recoveryDeadlineAtMs !== null
+      && state.campaignElapsedMs >= challenge.recoveryDeadlineAtMs
+      ? { ...challenge, recoveryStatus: 'expired' as const, recoveryDeadlineAtMs: null }
+      : challenge;
 
     if (
-      !challenge.urgentConsequenceApplied
-      && state.campaignElapsedMs >= challenge.urgentDeadlineAtMs
+      nextChallenge.urgentDeadlineAtMs !== null
+      && !nextChallenge.urgentConsequenceApplied
+      && state.campaignElapsedMs >= nextChallenge.urgentDeadlineAtMs
     ) {
-      if (!challenge.overdueEffectApplied) {
-        const systemBefore = systemConditions[challenge.affectedSystem];
+      if (!nextChallenge.overdueEffectApplied) {
+        const systemBefore = systemConditions[nextChallenge.affectedSystem];
         systemConditions = changeSystemCondition(
           systemConditions,
-          challenge.affectedSystem,
-          -(challenge.urgentConditionLoss ?? challenge.overdueConditionLoss),
+          nextChallenge.affectedSystem,
+          -(nextChallenge.urgentConditionLoss ?? nextChallenge.overdueConditionLoss),
         );
         faultHistory.push({
           day: state.day,
-          system: challenge.affectedSystem,
+          system: nextChallenge.affectedSystem,
           kind: 'overdue-task',
-          reason: `${challenge.title} response deadline expired`,
-          change: systemConditions[challenge.affectedSystem] - systemBefore,
+          reason: `${nextChallenge.title} response deadline expired`,
+          change: systemConditions[nextChallenge.affectedSystem] - systemBefore,
         });
       }
-      const hasLinkedEvent = MOON_EVENTS.some((event) => event.riskTaskIds?.includes(challenge.id));
-      if (!hasLinkedEvent) resources = applyEffects(resources, challenge.urgentResourceEffects ?? {});
-      challengeFeedback = `${challenge.priority.toUpperCase()} task overdue: ${challenge.title}. ${challenge.riskIfDelayed}`;
+      const missedResourceEffects = nextChallenge.priority === 'high' || nextChallenge.priority === 'critical'
+        ? nextChallenge.urgentResourceEffects ?? getTaskMissResourceEffects(nextChallenge)
+        : {};
+      const roundedMissedResourceEffects = roundResourceEffects(missedResourceEffects);
+      const resourcesBeforeMiss = resources;
+      resources = applyEffects(resources, roundedMissedResourceEffects);
+      const canRecover = nextChallenge.priority === 'critical'
+        && TASK_CONSEQUENCE_EVENTS.some((event) => event.riskTaskIds?.includes(nextChallenge.id))
+        && nextChallenge.triggeredEventIds.length === 0;
+      const recoveryResourceLosses = (Object.keys(roundedMissedResourceEffects) as ResourceKey[])
+        .reduce((losses, resource) => {
+          const lost = Math.max(0, resourcesBeforeMiss[resource] - resources[resource]);
+          if (lost > 0) losses[resource] = lost;
+          return losses;
+        }, {} as Partial<Record<ResourceKey, number>>);
+      challengeFeedback = canRecover
+        ? `Time ran out for ${nextChallenge.title}, and some supplies were used. Try the recovery job to win half back. The related problem will wait while you do.`
+        : `${nextChallenge.title} is still waiting. ${nextChallenge.riskIfDelayed} You can try it sooner next time.`;
       nextChallenge = {
-        ...challenge,
+        ...nextChallenge,
         status: 'overdue',
         deadlineMissed: true,
         overdueEffectApplied: true,
         urgentConsequenceApplied: true,
+        recoveryStatus: canRecover ? 'available' : nextChallenge.recoveryStatus,
+        recoveryResourceLosses: canRecover ? recoveryResourceLosses : nextChallenge.recoveryResourceLosses,
       };
-      const failedVital = findFailedVital(resources);
-      if (failedVital) {
-        gameStatus = 'failed';
-        failureReason = failedVital;
-      }
     }
 
     if (
@@ -633,6 +693,8 @@ function applyTimedTaskConsequences(state: GameState): GameState {
       && nextChallenge.urgentConsequenceApplied
       && !nextChallenge.escalationApplied
       && nextChallenge.escalationAtMs !== null
+      && nextChallenge.recoveryStatus !== 'available'
+      && nextChallenge.recoveryStatus !== 'active'
       && state.campaignElapsedMs >= nextChallenge.escalationAtMs
       && systemConditions[nextChallenge.affectedSystem]
         <= (nextChallenge.escalationConditionAtOrBelow ?? 0)
@@ -643,7 +705,8 @@ function applyTimedTaskConsequences(state: GameState): GameState {
         nextChallenge.affectedSystem,
         -(nextChallenge.escalationConditionLoss ?? 0),
       );
-      const hasLinkedEvent = MOON_EVENTS.some((event) => event.riskTaskIds?.includes(challenge.id));
+      const hasLinkedEvent = nextChallenge.priority === 'critical'
+        && TASK_CONSEQUENCE_EVENTS.some((event) => event.riskTaskIds?.includes(nextChallenge.id));
       if (!hasLinkedEvent) {
         resources = applyEffects(resources, nextChallenge.escalationResourceEffects ?? {});
       }
@@ -654,18 +717,25 @@ function applyTimedTaskConsequences(state: GameState): GameState {
         reason: `Second-stage escalation: ${nextChallenge.title} remained unresolved`,
         change: systemConditions[nextChallenge.affectedSystem] - systemBefore,
       });
-      challengeFeedback = `EMERGENCY ESCALATED: ${nextChallenge.title}. ${nextChallenge.riskIfDelayed}`;
+      challengeFeedback = `This emergency is getting worse: ${nextChallenge.title}. ${nextChallenge.riskIfDelayed}`;
       nextChallenge = { ...nextChallenge, escalationApplied: true };
-      const failedVital = findFailedVital(resources);
-      if (failedVital) {
-        gameStatus = 'failed';
-        failureReason = failedVital;
-      }
     }
 
     return nextChallenge;
   });
 
+  const awaitingRecoveryOrEvent = dailyChallenges.some((challenge) => (
+    challenge.recoveryStatus === 'available'
+    || challenge.recoveryStatus === 'active'
+    || (challenge.status !== 'completed'
+      && challenge.recoveryStatus === 'expired'
+      && TASK_CONSEQUENCE_EVENTS.some((event) => event.riskTaskIds?.includes(challenge.id)))
+  ));
+  const failedVital = findFailedVital(resources);
+  if (failedVital && !awaitingRecoveryOrEvent) {
+    gameStatus = 'failed';
+    failureReason = failedVital;
+  }
   return {
     ...state,
     resources,
@@ -679,9 +749,12 @@ function applyTimedTaskConsequences(state: GameState): GameState {
 }
 
 function createDayReport(state: GameState): GameState {
+  if (state.gameStatus !== 'playing' || hasPendingCriticalTaskNotice(state)) return state;
   return {
     ...state,
     dayPhase: 'report',
+    eventFailureNotices: [],
+    challengeFeedback: null,
     dayReport: {
       day: state.day,
       completedTasks: state.dailyChallenges
@@ -693,43 +766,88 @@ function createDayReport(state: GameState): GameState {
       totalEvents: state.eventHistory.filter((event) => event.day === state.day).length,
       expiredEvents: state.expiredEventHistory.filter((event) => event.day === state.day).length,
       eventOutcomes: state.eventOutcomeHistory.filter((event) => event.day === state.day),
-      resourceStart: { ...state.dayStartResources },
-      resources: { ...state.resources },
-      resourceChanges: (Object.keys(state.resources) as ResourceKey[]).reduce((changes, key) => {
-        const change = state.resources[key] - state.dayStartResources[key];
-        if (change !== 0) changes[key] = change;
-        return changes;
-      }, {} as Partial<Record<ResourceKey, number>>),
+      resourceStart: getVisibleResourceLevels(state.dayStartResources),
+      resources: getVisibleResourceLevels(state.resources),
+      resourceChanges: getResourceChanges(state.resources, state.dayStartResources),
+    },
+  };
+}
+
+function resumePendingDayReport(state: GameState): GameState {
+  if (
+    state.gameStatus !== 'playing'
+    || state.dayPhase !== 'closing'
+    || state.currentEvent
+    || state.queuedEvents.length > 0
+    || (state.endOfDayEvents.length > 0 && !state.endOfDaySequenceFinished)
+    || hasPendingCriticalTaskNotice(state)
+  ) return state;
+  return createDayReport(state);
+}
+
+function getResourceChanges(
+  resources: ResourceLevels,
+  resourceStart: ResourceLevels,
+): Partial<Record<DisplayResourceKey, number>> {
+  return getVisibleResourceChanges(getVisibleResourceLevels(resources), getVisibleResourceLevels(resourceStart));
+}
+
+function getVisibleResourceChanges(
+  currentVisible: Record<DisplayResourceKey, number>,
+  startingVisible: Record<DisplayResourceKey, number>,
+): Partial<Record<DisplayResourceKey, number>> {
+  return (Object.keys(currentVisible) as DisplayResourceKey[]).reduce((changes, key) => {
+    const change = currentVisible[key] - startingVisible[key];
+    if (change !== 0) changes[key] = change;
+    return changes;
+  }, {} as Partial<Record<DisplayResourceKey, number>>);
+}
+
+function getVisibleResourceLevels(resources: ResourceLevels): Record<DisplayResourceKey, number> {
+  return {
+    power: resources.power,
+    battery: resources.battery,
+    oxygen: resources.oxygen,
+    water: resources.water,
+    food: resources.food,
+    health: (resources.health + resources.habitat + resources.radProtection) / 3,
+  };
+}
+
+function refreshDayReportResources(state: GameState): GameState {
+  if (!state.dayReport) return state;
+  return {
+    ...state,
+    dayReport: {
+      ...state.dayReport,
+      resources: getVisibleResourceLevels(state.resources),
+      resourceChanges: getVisibleResourceChanges(getVisibleResourceLevels(state.resources), state.dayReport.resourceStart),
     },
   };
 }
 
 function queueOverdueTaskEvents(state: GameState): GameState {
-  const triggeredEvents: GameEvent[] = [];
-
-  for (const task of state.dailyChallenges) {
-    if (task.status !== 'overdue') continue;
-    if (task.priority === 'critical' && task.startedDay === null) continue;
-    const relatedEvent = TASK_CONSEQUENCE_EVENTS.find((event) => (
-      canTriggerLinkedTaskEvent(task, event)
-      && !task.triggeredEventIds.includes(event.id)
-      && !event.preventedByFlags?.some((flag) => state.flags.includes(flag))
-    ));
-    if (!relatedEvent) continue;
-
-    const event = prepareEventForReadiness(
+  const selectedEvents = selectUntriggeredCriticalTaskEvents(
+    state.dailyChallenges.filter((task) => (
+      task.recoveryStatus !== 'available' && task.recoveryStatus !== 'active'
+    )),
+    TASK_CONSEQUENCE_EVENTS,
+    state.eventHistory,
+    state.flags,
+  );
+  const triggeredEvents: GameEvent[] = selectedEvents.map(({ task, event: definition }) => (
+    prepareEventForReadiness(
       {
-        ...relatedEvent,
+        ...definition,
         day: state.day,
-        situation: `Caused by the missed task “${task.title}”: ${relatedEvent.situation}`,
+        situation: `Caused by the missed task “${task.title}”: ${definition.situation}`,
         triggerSource: 'task',
         occurrenceId: `task-${task.id}-${state.day}`,
       },
       state.flags,
       state.systemConditions,
-    );
-    triggeredEvents.push(event);
-  }
+    )
+  ));
 
   if (triggeredEvents.length === 0) return state;
 
@@ -737,6 +855,7 @@ function queueOverdueTaskEvents(state: GameState): GameState {
     ...state.eventHistory,
     ...triggeredEvents.map((event) => ({
       eventId: event.id,
+      sourceEventId: event.sourceEventId,
       day: state.day,
       elapsedMs: state.campaignElapsedMs,
       source: 'task' as const,
@@ -764,9 +883,19 @@ function queueOverdueTaskEvents(state: GameState): GameState {
       ? { ...task, triggeredEventIds: [...new Set([...task.triggeredEventIds, ...triggeredForTask])] }
       : task;
   });
+  const pendingResourceEffects = state.pendingResourceEffects;
+  const resources = triggeredEvents.reduce(
+    (current, event) => applyIncidentEffects(current, event.initialResourceEffects ?? {}),
+    state.resources,
+  );
+  const failedVital = findFailedVital(resources);
+  const taskEventPending = triggeredEvents.some((event) => event.triggerSource === 'task');
   if (state.currentEvent) {
     return {
       ...state,
+      resources,
+      pendingResourceEffects,
+      ...(failedVital && !taskEventPending ? { gameStatus: 'failed' as const, failureReason: failedVital } : {}),
       queuedEvents: [
         ...state.queuedEvents,
         ...triggeredEvents.map((event) => ({
@@ -788,6 +917,9 @@ function queueOverdueTaskEvents(state: GameState): GameState {
   const queuedEvents = triggeredEvents.slice(1);
   return {
     ...state,
+    resources,
+    pendingResourceEffects,
+    ...(failedVital && !taskEventPending ? { gameStatus: 'failed' as const, failureReason: failedVital } : {}),
     currentEvent,
     queuedEvents: [
       ...state.queuedEvents,
@@ -801,6 +933,7 @@ function queueOverdueTaskEvents(state: GameState): GameState {
     eventPhase: 'pending',
     eventDrainElapsedMs: 0,
     eventEffectId: getEventVisualId(currentEvent),
+    eventDeadlineAtMs: state.eventDeadlineAtMs,
     eventHistory,
     taskFailureNotices,
     dailyChallenges,
@@ -808,21 +941,133 @@ function queueOverdueTaskEvents(state: GameState): GameState {
   };
 }
 
+function triggerEndOfDayCriticalConsequences(state: GameState): GameState {
+  const selectedEvents = selectUntriggeredCriticalTaskEvents(
+    state.dailyChallenges,
+    TASK_CONSEQUENCE_EVENTS,
+    state.eventHistory,
+    state.flags,
+  );
+  if (selectedEvents.length === 0) return state;
+  const missedWithoutRecovery = selectedEvents.filter(({ task }) => !task.recoveryAttempted);
+  const challengeFeedback = state.challengeFeedback
+    && missedWithoutRecovery.some(({ task }) => state.challengeFeedback?.includes(task.title))
+    ? null
+    : state.challengeFeedback;
+
+  const triggeredEvents = selectedEvents.map(({ task, event: definition }) => (
+    prepareEventForReadiness({
+      ...definition,
+      day: state.day,
+      situation: `Caused by the missed task “${task.title}”: ${definition.situation}`,
+      triggerSource: 'task',
+      endOfDayConsequence: true,
+      missedTaskTitle: task.title,
+      occurrenceId: `end-of-day-${task.id}-${state.day}`,
+    }, state.flags, state.systemConditions)
+  ));
+  const pendingResourceEffects = state.pendingResourceEffects;
+  let resources = state.resources;
+  const eventResourceChanges = new Map<string, Partial<Record<ResourceKey, number>>>();
+  for (const event of triggeredEvents) {
+    const before = resources;
+    resources = applyIncidentEffects(resources, roundResourceEffects(event.failureEffects));
+    const changes = getVisibleResourceChanges(
+      getVisibleResourceLevels(resources),
+      getVisibleResourceLevels(before),
+    );
+    eventResourceChanges.set(event.occurrenceId ?? `${event.id}-${state.day}`, changes);
+  }
+  let systemConditions = state.systemConditions;
+  const faultHistory = [...state.faultHistory];
+  const eventHistory = [
+    ...state.eventHistory,
+    ...triggeredEvents.map((event) => ({
+      eventId: event.id,
+      sourceEventId: event.sourceEventId,
+      day: state.day,
+      elapsedMs: state.campaignElapsedMs,
+      source: 'task' as const,
+      occurrenceId: event.occurrenceId,
+    })),
+  ];
+  const dailyChallenges = state.dailyChallenges.map((task) => {
+    const triggeredForTask = triggeredEvents
+      .filter((event) => event.riskTaskIds?.includes(task.id))
+      .map((event) => event.id);
+    return triggeredForTask.length > 0
+      ? { ...task, triggeredEventIds: [...new Set([...task.triggeredEventIds, ...triggeredForTask])] }
+      : task;
+  });
+  const eventOutcomeHistory = [...state.eventOutcomeHistory];
+  for (const event of triggeredEvents) {
+    const systemConditionsBeforeEvent = systemConditions;
+    systemConditions = applyConditionEffects(
+      systemConditions,
+      event.failureConditionEffects ?? {},
+      event.affectedSystems,
+    );
+    for (const system of Object.keys(event.failureConditionEffects ?? {}) as SystemKey[]) {
+      const change = systemConditions[system] - systemConditionsBeforeEvent[system];
+      if (change !== 0) {
+        faultHistory.push({
+          day: state.day,
+          system,
+          kind: 'event',
+          reason: `${event.name} followed the missed Critical task “${event.missedTaskTitle}”.`,
+          change,
+        });
+      }
+    }
+    eventOutcomeHistory.push({
+      occurrenceId: event.occurrenceId ?? `${event.id}-${state.day}`,
+      day: state.day,
+      eventId: event.id,
+      eventName: event.name,
+      status: 'failed',
+      feedback: `The crew couldn’t finish “${event.missedTaskTitle}” today, so ${event.name} happened. Next time, you can help them sooner. ${event.failureFeedback}`,
+      resourceChanges: eventResourceChanges.get(event.occurrenceId ?? `${event.id}-${state.day}`),
+    });
+  }
+
+  const failedVital = findFailedVital(resources);
+  return {
+    ...state,
+    resources,
+    pendingResourceEffects,
+    systemConditions,
+    faultHistory,
+    eventHistory,
+    challengeFeedback,
+    eventOutcomeHistory,
+    dailyChallenges,
+    endOfDayEvents: triggeredEvents,
+    endOfDayNoticeHistory: [
+      ...state.endOfDayNoticeHistory,
+      ...triggeredEvents.filter((event) => !state.endOfDayNoticeHistory.some(
+        (existing) => eventOccurrenceKey(existing) === eventOccurrenceKey(event),
+      )),
+    ],
+    endOfDaySequenceFinished: false,
+    ...(failedVital ? { gameStatus: 'failed' as const, failureReason: failedVital } : {}),
+  };
+}
+
 function failEventOccurrence(state: GameState, occurrenceId: string, expired = false): GameState {
   const removedOccurrence = removeEventOccurrence(state.currentEvent, state.queuedEvents, occurrenceId);
   const { isCurrent, event } = removedOccurrence;
   if (!event) return state;
-  const resources = applyEffects(state.resources, event.failureEffects);
+  const resources = applyIncidentEffects(state.resources, event.failureEffects);
+  const pendingResourceEffects = state.pendingResourceEffects;
   const systemConditions = applyConditionEffects(
     state.systemConditions,
     event.failureConditionEffects ?? {},
     event.affectedSystems,
   );
-  const changes = (Object.keys(event.failureEffects) as ResourceKey[]).reduce((result, key) => {
-    const actual = resources[key] - state.resources[key];
-    if (actual !== 0) result[key] = actual;
-    return result;
-  }, {} as Partial<Record<ResourceKey, number>>);
+  const changes = getVisibleResourceChanges(
+    getVisibleResourceLevels(resources),
+    getVisibleResourceLevels(state.resources),
+  );
   const remainingQueuedEvents = removedOccurrence.queuedEvents;
   const nextQueued = isCurrent ? remainingQueuedEvents[0] : undefined;
   const restQueuedEvents = isCurrent ? remainingQueuedEvents.slice(1) : remainingQueuedEvents;
@@ -845,6 +1090,7 @@ function failEventOccurrence(state: GameState, occurrenceId: string, expired = f
   let next: GameState = {
     ...state,
     resources,
+    pendingResourceEffects,
     systemConditions,
     faultHistory,
     currentEvent: isCurrent ? nextQueued?.event ?? null : state.currentEvent,
@@ -855,14 +1101,19 @@ function failEventOccurrence(state: GameState, occurrenceId: string, expired = f
     eventDrainElapsedMs: isCurrent ? nextQueued?.drainElapsedMs ?? 0 : state.eventDrainElapsedMs,
     eventEffectId: isCurrent ? getEventVisualId(nextQueued?.event) : state.eventEffectId,
     eventDeadlineAtMs: isCurrent ? nextQueued?.deadlineAtMs ?? null : state.eventDeadlineAtMs,
-    eventFailureNotices: [...state.eventFailureNotices, {
-      id: eventOccurrenceKey(event) ?? `${event.id}-${state.day}-${state.campaignElapsedMs}`,
-      day: event.day ?? state.day,
-      name: event.name,
-      feedback: event.failureFeedback,
-      changes,
-      expired,
-    }],
+    eventFailureNotices: state.eventFailureNotices.some((notice) => (
+      notice.id === (eventOccurrenceKey(event) ?? `${event.id}-${state.day}-${state.campaignElapsedMs}`)
+    ))
+      ? state.eventFailureNotices
+      : [...state.eventFailureNotices, {
+        id: eventOccurrenceKey(event) ?? `${event.id}-${state.day}-${state.campaignElapsedMs}`,
+        day: event.day ?? state.day,
+        name: event.name,
+        feedback: event.failureFeedback,
+        changes,
+        expired,
+        status: expired ? 'expired' : 'failed',
+      }],
     eventOutcomeHistory: [...state.eventOutcomeHistory, {
       occurrenceId: eventOccurrenceKey(event) ?? `${event.id}-${state.day}`,
       day: event.day ?? state.day,
@@ -870,6 +1121,7 @@ function failEventOccurrence(state: GameState, occurrenceId: string, expired = f
       eventName: event.name,
       status: expired ? 'expired' : 'failed',
       feedback: event.failureFeedback,
+      resourceChanges: changes,
     }],
     ...(expired ? { expiredEventHistory: [...state.expiredEventHistory, {
       day: event.day ?? state.day,
@@ -878,7 +1130,12 @@ function failEventOccurrence(state: GameState, occurrenceId: string, expired = f
   };
   const failedVital = findFailedVital(resources);
   if (failedVital) next = { ...next, gameStatus: 'failed', failureReason: failedVital };
-  if (next.dayPhase === 'closing' && !next.currentEvent && next.queuedEvents.length === 0) {
+  if (
+    next.dayPhase === 'closing'
+    && !next.currentEvent
+    && next.queuedEvents.length === 0
+    && (next.endOfDayEvents.length === 0 || next.endOfDaySequenceFinished)
+  ) {
     next = createDayReport(next);
   }
   return next;
@@ -889,35 +1146,46 @@ function failCurrentEvent(state: GameState, expectedOccurrenceId?: string, expir
   return occurrenceId ? failEventOccurrence(state, occurrenceId, expired) : state;
 }
 
-function beginDayClosing(state: GameState, dayDurationMs: number): GameState {
-  if (state.dayPhase !== 'active') return state;
-  const criticalTaskInProgress = state.dailyChallenges.some((task) => (
-    (task.emergency || task.taskType === 'event-prevention') && task.status === 'inProgress'
-    && task.urgentDeadlineAtMs !== null
-    && state.campaignElapsedMs < task.urgentDeadlineAtMs
-  ));
-
-  let resources = applyEffects(state.resources, DAILY_CONSUMPTION);
-  const failedVital = findFailedVital(resources);
-  if (failedVital) {
-    return {
-      ...state,
-      dayElapsedMs: dayDurationMs,
-      resources,
-      gameStatus: 'failed',
-      failureReason: failedVital,
+function expireUnresolvedEventsAtDayEnd(state: GameState): GameState {
+  let nextState = state;
+  if (nextState.currentEvent && nextState.eventPhase === 'resolving') {
+    const [nextQueued, ...remainingQueued] = nextState.queuedEvents;
+    nextState = {
+      ...nextState,
+      currentEvent: nextQueued?.event ?? null,
+      queuedEvents: remainingQueued,
+      eventPhase: nextQueued ? (nextQueued.presented ? 'awaitingDecision' : 'pending') : 'idle',
+      eventDrainElapsedMs: nextQueued?.drainElapsedMs ?? 0,
+      eventEffectId: getEventVisualId(nextQueued?.event),
+      eventDeadlineAtMs: nextQueued?.deadlineAtMs ?? null,
     };
   }
+
+  const occurrenceIds = getUnresolvedEventOccurrenceIdsAtDayEnd(
+    nextState.currentEvent,
+    nextState.queuedEvents,
+    nextState.eventPhase,
+  );
+  for (const occurrenceId of occurrenceIds) {
+    nextState = failEventOccurrence(nextState, occurrenceId, true);
+  }
+  return nextState;
+}
+
+function beginDayClosing(state: GameState, dayDurationMs: number): GameState {
+  if (state.dayPhase !== 'active') return state;
+  state = expireUnresolvedEventsAtDayEnd(state);
+  const criticalTaskInProgress = state.dailyChallenges.some((task) => (
+    task.priority === 'critical' && task.status !== 'completed'
+  ));
+
+  let resources = state.resources;
+  const existingFailure = findFailedVital(resources);
 
   const faultHistory = [...state.faultHistory];
   let systemConditions = state.systemConditions;
   const dailyChallenges = state.dailyChallenges.map((task) => {
     if (task.status === 'completed') return task;
-    // A Critical task's timer begins only when the player starts that task.
-    // Unstarted Critical tasks remain available across the day boundary.
-    // A started Critical task whose own response timer has not expired keeps
-    // running across the transition; day end is not its deadline.
-    if (shouldDeferCriticalTaskAtDayEnd(task, state.campaignElapsedMs)) return task;
     if (!task.overdueEffectApplied) {
       const before = systemConditions[task.affectedSystem];
       systemConditions = changeSystemCondition(
@@ -933,17 +1201,25 @@ function beginDayClosing(state: GameState, dayDurationMs: number): GameState {
         change: systemConditions[task.affectedSystem] - before,
       });
     }
-    resources = applyEffects(resources, getTaskMissResourceEffects(task));
+    const taskMissEffects = getTaskMissResourceEffects(task);
+    resources = applyEffects(resources, task.priority === 'critical'
+      ? roundResourceEffects(taskMissEffects)
+      : taskMissEffects);
     return {
       ...task,
       status: 'overdue' as const,
       deadlineMissed: true,
       overdueEffectApplied: true,
+      ...(task.priority === 'critical' ? {
+        recoveryStatus: 'expired' as const,
+        recoveryDeadlineAtMs: null,
+      } : {}),
     };
   });
   let closingState: GameState = {
     ...state,
     dayPhase: 'closing',
+    ...(existingFailure ? { gameStatus: 'failed' as const, failureReason: existingFailure } : {}),
     endOfDayCriticalTransition: criticalTaskInProgress,
     eventResolutionLocked: false,
     dayElapsedMs: dayDurationMs,
@@ -952,6 +1228,10 @@ function beginDayClosing(state: GameState, dayDurationMs: number): GameState {
     systemConditions,
     faultHistory,
   };
+  const taskMissFailure = findFailedVital(resources);
+  if (taskMissFailure) {
+    closingState = { ...closingState, gameStatus: 'failed', failureReason: taskMissFailure };
+  }
   const systemResources: Record<SystemKey, ResourceKey> = {
     power: 'power',
     lifeSupport: 'oxygen',
@@ -959,6 +1239,7 @@ function beginDayClosing(state: GameState, dayDurationMs: number): GameState {
     equipment: 'equipment',
   };
   for (const system of Object.keys(systemResources) as SystemKey[]) {
+    if (closingState.gameStatus !== 'playing') break;
     const overdueTask = closingState.dailyChallenges.find((task) => (
       task.status === 'overdue' && task.affectedSystem === system
     ));
@@ -998,17 +1279,37 @@ function beginDayClosing(state: GameState, dayDurationMs: number): GameState {
     };
     const failedVital = findFailedVital(resources);
     if (failedVital) {
-      return { ...closingState, gameStatus: 'failed', failureReason: failedVital };
+      closingState = { ...closingState, gameStatus: 'failed', failureReason: failedVital };
+      break;
     }
   }
-  return createDayReport(closingState);
+  closingState = triggerEndOfDayCriticalConsequences(closingState);
+  const settledResources = settlePendingResourceEffects(
+    closingState.resources,
+    closingState.pendingResourceEffects,
+  );
+  const closingFailure = findFailedVital(settledResources.resources);
+  closingState = {
+    ...closingState,
+    ...settledResources,
+    ...(closingFailure ? { gameStatus: 'failed', failureReason: closingFailure } : {}),
+  };
+  return closingState.currentEvent
+    || closingState.queuedEvents.length > 0
+    || closingState.endOfDayEvents.length > 0
+    ? closingState
+    : createDayReport(closingState);
 }
 
-function createNextDayChallenges(day: number): DailyChallenge[] {
-  return createDailyChallenges(day);
+function createNextDayChallenges(
+  day: number,
+  selectionSeed: number,
+  usedTaskIds: string[],
+): DailyChallenge[] {
+  return createDailyChallenges(day, selectionSeed, usedTaskIds);
 }
 
-function advanceClockState(
+export function advanceClockState(
   initialState: GameState,
   elapsedMs: number,
   dayDurationMs: number,
@@ -1022,21 +1323,36 @@ function advanceClockState(
     && nextState.gameStatus === 'playing'
     && !nextState.warningTaskId
   ) {
-    const untilDayEnd = nextState.dayPhase === 'active'
+    // Task and event notices are non-blocking UI; their visibility must never
+    // pause the lunar day or the independent task/event clocks.
+    const criticalNoticeOpen = false;
+    const dayClockPaused = false;
+    const untilDayEnd = nextState.dayPhase === 'active' && !dayClockPaused
       ? Math.max(0, dayDurationMs - nextState.dayElapsedMs)
+      : Number.POSITIVE_INFINITY;
+    const independentWindowEndMs = getIndependentEventWindowEndMs(dayDurationMs);
+    const untilIndependentWindowEnd = nextState.dayPhase === 'active'
+      && !dayClockPaused
+      && nextState.dayElapsedMs < independentWindowEndMs
+      ? independentWindowEndMs - nextState.dayElapsedMs
       : Number.POSITIVE_INFINITY;
     // Scheduler boundaries only gate gameplay while the day is active. If the
     // day ends on the same tick as a scheduler check, carrying a zero interval
     // into `closing` makes the clock loop spin forever while queued incidents
     // resolve, which appears as a freeze just before the report.
-    const untilSchedulerCheck = nextState.dayPhase === 'active' && !hasEventOccurredOnDay(nextState)
+    const untilSchedulerCheck = nextState.dayPhase === 'active'
+      && !criticalNoticeOpen
+      && nextState.dayElapsedMs < independentWindowEndMs
+      && !hasEventOccurredOnDay(nextState)
       ? Math.max(0, EVENT_SCHEDULER_CONFIG.checkIntervalMs - nextState.schedulerElapsedMs)
       : Number.POSITIVE_INFINITY;
-    const untilTaskTransition = nextState.dayPhase === 'active'
+    const untilTaskTransition = nextState.dayPhase === 'active' && !criticalNoticeOpen
       ? nextState.dailyChallenges.reduce((nearest, challenge) => {
       if (challenge.status === 'completed') return nearest;
-      const transitionAt = !challenge.urgentConsequenceApplied
-        ? challenge.urgentDeadlineAtMs
+      const transitionAt = challenge.recoveryStatus === 'active'
+        ? challenge.recoveryDeadlineAtMs
+        : !challenge.urgentConsequenceApplied
+          ? challenge.urgentDeadlineAtMs
         : !challenge.escalationApplied
           ? challenge.escalationAtMs
           : null;
@@ -1049,77 +1365,119 @@ function advanceClockState(
       nextState.eventDeadlineAtMs,
       ...nextState.queuedEvents.map((queued) => queued.deadlineAtMs),
     ].filter((deadline): deadline is number => deadline !== null);
-    const untilEventTimeout = eventDeadlines.length > 0
+    const untilEventTimeout = !criticalNoticeOpen && eventDeadlines.length > 0
       ? Math.max(0, Math.min(...eventDeadlines) - nextState.campaignElapsedMs)
       : Number.POSITIVE_INFINITY;
-    const step = Math.min(remainingMs, untilDayEnd, untilSchedulerCheck, untilTaskTransition, untilEventTimeout);
+    const step = Math.min(
+      remainingMs,
+      CLOCK_UPDATE_INTERVAL_MS,
+      untilDayEnd,
+      untilIndependentWindowEnd,
+      untilSchedulerCheck,
+      untilTaskTransition,
+      untilEventTimeout,
+    );
+    const previousResourceElapsedMs = nextState.resourceElapsedMs;
     nextState = {
       ...nextState,
-      dayElapsedMs: nextState.dayPhase === 'active'
+      dayElapsedMs: nextState.dayPhase === 'active' && !dayClockPaused
         ? nextState.dayElapsedMs + step
         : nextState.dayElapsedMs,
-      campaignElapsedMs: nextState.campaignElapsedMs + step,
-      schedulerElapsedMs: nextState.dayPhase === 'active'
+      resourceElapsedMs: nextState.dayPhase === 'active'
+        ? nextState.resourceElapsedMs + step
+        : nextState.resourceElapsedMs,
+      campaignElapsedMs: nextState.campaignElapsedMs + (criticalNoticeOpen ? 0 : step),
+      schedulerElapsedMs: nextState.dayPhase === 'active' && !criticalNoticeOpen
         ? nextState.schedulerElapsedMs + step
         : nextState.schedulerElapsedMs,
     };
     remainingMs -= step;
 
-    // Each active event drains its threatened resources in visible half point
-    // steps while preserving the rate of one point per lunar day per event.
-    const eventDrains: Partial<Record<ResourceKey, number>> = {};
-    const halfDayMs = dayDurationMs / 2;
+    // Baseline consumption accumulates gradually over the lunar day.
+    const eventDrains: Partial<Record<ResourceKey, number>> = nextState.dayPhase === 'active'
+      ? getElapsedResourceEffects(
+        BASELINE_DAILY_CONSUMPTION,
+        previousResourceElapsedMs,
+        nextState.resourceElapsedMs,
+        dayDurationMs,
+      )
+      : {};
     const activeEvent = nextState.currentEvent;
-    if (activeEvent && nextState.eventPhase !== 'resolving') {
+    if (!criticalNoticeOpen && activeEvent && nextState.eventPhase !== 'resolving'
+      && activeEvent.ongoingEffectIntervalMs && activeEvent.ongoingResourceEffects) {
       const totalElapsedMs = nextState.eventDrainElapsedMs + step;
-      const halfPointSteps = Math.floor(totalElapsedMs / halfDayMs);
-      const drain = halfPointSteps * 0.5;
+      const impactSteps = Math.floor(totalElapsedMs / activeEvent.ongoingEffectIntervalMs);
       nextState = {
         ...nextState,
-        eventDrainElapsedMs: totalElapsedMs - halfPointSteps * halfDayMs,
+        eventDrainElapsedMs: totalElapsedMs - impactSteps * activeEvent.ongoingEffectIntervalMs,
       };
-      if (drain > 0) {
-        for (const resource of activeEvent.riskResources) {
-          eventDrains[resource] = (eventDrains[resource] ?? 0) - drain;
+      if (impactSteps > 0) {
+        for (const [resource, loss] of Object.entries(activeEvent.ongoingResourceEffects) as [ResourceKey, number][]) {
+          eventDrains[resource] = (eventDrains[resource] ?? 0) + loss * impactSteps;
         }
       }
     }
-    nextState = {
+    if (!criticalNoticeOpen) nextState = {
       ...nextState,
       queuedEvents: nextState.queuedEvents.map((queued) => {
+        const { ongoingEffectIntervalMs, ongoingResourceEffects } = queued.event;
+        if (!ongoingEffectIntervalMs || !ongoingResourceEffects) return queued;
         const totalElapsedMs = queued.drainElapsedMs + step;
-        const halfPointSteps = Math.floor(totalElapsedMs / halfDayMs);
-        const drain = halfPointSteps * 0.5;
-        if (drain > 0) {
-          for (const resource of queued.event.riskResources) {
-            eventDrains[resource] = (eventDrains[resource] ?? 0) - drain;
+        const impactSteps = Math.floor(totalElapsedMs / ongoingEffectIntervalMs);
+        if (impactSteps > 0) {
+          for (const [resource, loss] of Object.entries(ongoingResourceEffects) as [ResourceKey, number][]) {
+            eventDrains[resource] = (eventDrains[resource] ?? 0) + loss * impactSteps;
           }
         }
         return {
           ...queued,
-          drainElapsedMs: totalElapsedMs - halfPointSteps * halfDayMs,
+          drainElapsedMs: totalElapsedMs - impactSteps * ongoingEffectIntervalMs,
         };
       }),
     };
+    const pendingResourceEffects = { ...nextState.pendingResourceEffects };
+    for (const [resource, pendingChange] of Object.entries(pendingResourceEffects) as [ResourceKey, number][]) {
+      if (pendingChange === 0) {
+        delete pendingResourceEffects[resource];
+        continue;
+      }
+      if (pendingChange < 0 && nextState.resources[resource] <= 0) {
+        delete pendingResourceEffects[resource];
+        continue;
+      }
+      if (eventDrains[resource]) continue;
+      const appliedChange = Math.sign(pendingChange);
+      eventDrains[resource] = appliedChange;
+      const remaining = pendingChange - appliedChange;
+      if (remaining === 0) delete pendingResourceEffects[resource];
+      else pendingResourceEffects[resource] = remaining;
+    }
+    nextState = { ...nextState, pendingResourceEffects };
     if (Object.keys(eventDrains).length > 0) {
       const resources = applyEffects(nextState.resources, eventDrains);
       const failedVital = findFailedVital(resources);
       nextState = {
         ...nextState,
         resources,
-        ...(failedVital ? { gameStatus: 'failed' as const, failureReason: failedVital } : {}),
+        ...(failedVital && !hasUnresolvedCriticalTaskEvent(nextState.dailyChallenges)
+          ? { gameStatus: 'failed' as const, failureReason: failedVital }
+          : {}),
       };
+      nextState = refreshDayReportResources(nextState);
       if (nextState.gameStatus !== 'playing') return nextState;
     }
 
-    if (nextState.dayPhase === 'active') {
+    if (nextState.dayPhase === 'active' && !criticalNoticeOpen) {
       nextState = applyTimedTaskConsequences(nextState);
-      nextState = queueOverdueTaskEvents(nextState);
+      if (nextState.dayElapsedMs < dayDurationMs) {
+        nextState = queueOverdueTaskEvents(nextState);
+      }
     }
     if (nextState.gameStatus !== 'playing') return nextState;
 
-    const expiredEventIds = [
+    const expiredEventIds = criticalNoticeOpen ? [] : [
       ...(nextState.currentEvent
+        && nextState.eventPhase !== 'resolving'
         && nextState.eventDeadlineAtMs !== null
         && nextState.campaignElapsedMs >= nextState.eventDeadlineAtMs
         ? [eventOccurrenceKey(nextState.currentEvent)] : []),
@@ -1138,10 +1496,18 @@ function advanceClockState(
       if (nextState.dayPhase === 'report') return nextState;
     }
 
+    if (
+      nextState.dayPhase === 'closing'
+      && !nextState.currentEvent
+      && nextState.queuedEvents.length === 0
+      && (nextState.endOfDayEvents.length === 0 || nextState.endOfDaySequenceFinished)
+    ) return createDayReport(nextState);
+
     const forceDayTwoIndependentEvent = nextState.day === 2
       && nextState.dayElapsedMs >= EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs
       && !nextState.independentEventHistory.some((entry) => entry.day === 2);
     if (nextState.dayPhase === 'active'
+      && nextState.dayElapsedMs < independentWindowEndMs
       && (!hasEventOccurredOnDay(nextState) || forceDayTwoIndependentEvent)
       && nextState.schedulerElapsedMs >= EVENT_SCHEDULER_CONFIG.checkIntervalMs) {
       nextState = { ...nextState, schedulerElapsedMs: 0 };
@@ -1161,6 +1527,9 @@ function advanceClockState(
         systemConditions: nextState.systemConditions,
         resources: nextState.resources,
         eventHistory: nextState.independentEventHistory,
+        seenEventIds: nextState.eventHistory.flatMap((entry) => (
+          [entry.eventId, entry.sourceEventId].filter((id): id is string => Boolean(id))
+        )),
         ignorePreventedByFlags: true,
         forceEvent: (nextState.day === 1 || nextState.day === 2)
           && nextState.dayElapsedMs >= EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs,
@@ -1177,8 +1546,16 @@ function advanceClockState(
           nextState.flags,
           nextState.systemConditions,
         );
+        const resources = applyIncidentEffects(
+          nextState.resources,
+          event.initialResourceEffects ?? {},
+        );
+        const failedVital = findFailedVital(resources);
         nextState = {
           ...nextState,
+          pendingResourceEffects: nextState.pendingResourceEffects,
+          resources,
+          ...(failedVital ? { gameStatus: 'failed', failureReason: failedVital } : {}),
           ...(nextState.currentEvent
             ? {
               queuedEvents: [...nextState.queuedEvents, {
@@ -1293,6 +1670,32 @@ export function useGameSimulation({
   ]);
 
   useEffect(() => {
+    if (
+      state.dayPhase !== 'closing'
+      || state.endOfDayEvents.length === 0
+      || state.endOfDaySequenceFinished
+    ) return undefined;
+    const closingDay = state.day;
+    const timerId = window.setTimeout(() => {
+      setState((currentState) => {
+        if (
+          currentState.day !== closingDay
+          || currentState.dayPhase !== 'closing'
+          || currentState.endOfDaySequenceFinished
+        ) return currentState;
+        let nextState: GameState = { ...currentState, endOfDaySequenceFinished: true };
+        if (
+          nextState.gameStatus === 'playing'
+          && !nextState.currentEvent
+          && nextState.queuedEvents.length === 0
+        ) nextState = createDayReport(nextState);
+        return nextState;
+      });
+    }, 2000);
+    return () => window.clearTimeout(timerId);
+  }, [state.day, state.dayPhase, state.endOfDayEvents.length, state.endOfDaySequenceFinished]);
+
+  useEffect(() => {
     if (state.dayPhase !== 'transition') return undefined;
     const transitionDay = state.day;
     const timerId = window.setTimeout(() => {
@@ -1398,11 +1801,18 @@ export function useGameSimulation({
         return occurrenceId ? failEventOccurrence(currentState, occurrenceId, true) : currentState;
       }
 
-      const eventRecovery = getTaskEventRecovery(event) as Partial<Record<ResourceKey, number>>;
-      const resources = applyEffects(
-        applyEffects(currentState.resources, decision.effects),
-        eventRecovery,
-      );
+      const resolvedLinkedTasks = getResolvedLinkedTasks(currentState.dailyChallenges, event);
+      const resolutionEffects: Partial<Record<ResourceKey, number>> = {
+        ...getSuccessfulEventResourceEffects(event, decision),
+      };
+      for (const task of resolvedLinkedTasks) {
+        for (const [resource, amount] of Object.entries(getTaskCompletionResourceEffects(task))
+          .filter(([key]) => isEventOptionResource(key)) as [SurvivalResourceKey, number][]) {
+          resolutionEffects[resource] = (resolutionEffects[resource] ?? 0) + amount;
+        }
+      }
+      const resources = applyIncidentEffects(currentState.resources, resolutionEffects);
+      const pendingResourceEffects = currentState.pendingResourceEffects;
       const failedVital = findFailedVital(resources);
       const systemConditions = applyConditionEffects(
         currentState.systemConditions,
@@ -1428,33 +1838,27 @@ export function useGameSimulation({
       const conditionSummary = (Object.entries(decision.conditionEffects ?? {}) as [SystemKey, number][])
         .map(([system]) => {
           const change = systemConditions[system] - currentState.systemConditions[system];
-          return `${system} condition ${change > 0 ? '+' : ''}${change}`;
+          return `${SYSTEM_DISPLAY_NAMES[system]} ${change >= 0 ? 'improved' : 'dropped'} by ${Math.abs(change)}%`;
         })
         .join('; ');
       const outcomeFeedback = conditionSummary
         ? `${conditionSummary}. ${decision.futureConsequence}`
         : decision.futureConsequence;
-      const actualResourceChanges = [...new Set([
-        ...(Object.keys(decision.effects) as ResourceKey[]),
-        ...(Object.keys(eventRecovery) as ResourceKey[]),
-      ])]
-        .reduce((changes, resource) => {
-          const change = resources[resource] - currentState.resources[resource];
-          if (change !== 0) changes[resource] = change;
-          return changes;
-        }, {} as Partial<Record<ResourceKey, number>>);
-      const actualEffects = (Object.entries(actualResourceChanges) as [ResourceKey, number][])
-        .map(([resource, change]) => `${resource} ${change > 0 ? '+' : ''}${change}`)
+      const actualResourceChanges = getVisibleResourceChanges(
+        getVisibleResourceLevels(resources),
+        getVisibleResourceLevels(currentState.resources),
+      );
+      const actualEffects = (Object.entries(actualResourceChanges) as [DisplayResourceKey, number][])
+        .map(([resource, change]) => `${RESOURCE_DISPLAY_NAMES[resource]} ${change > 0 ? '+' : ''}${Number(change.toFixed(1))}%`)
         .concat((Object.entries(decision.conditionEffects ?? {}) as [SystemKey, number][])
           .map(([system]) => {
             const change = systemConditions[system] - currentState.systemConditions[system];
-            return `${system} condition ${change > 0 ? '+' : ''}${change}`;
+            return `${SYSTEM_DISPLAY_NAMES[system]} ${change >= 0 ? 'improved' : 'dropped'} by ${Math.abs(change)}%`;
           }))
         .join('; ');
       const flags = decision.setFlags
         ? [...new Set([...currentState.flags, ...decision.setFlags])]
         : currentState.flags;
-      const resolvedLinkedTasks = getResolvedLinkedTasks(currentState.dailyChallenges, event);
       const linkedTaskIds = new Set(resolvedLinkedTasks.map((task) => task.id));
       const nextFlags = [...new Set([
         ...flags,
@@ -1485,20 +1889,10 @@ export function useGameSimulation({
           preventedEscalation: false,
         })),
       ];
-      const emergencyTaskDefinition = shouldCreateEmergencyFollowUp(event)
-        ? event.emergencyTask
-        : undefined;
-      const emergencyTask = emergencyTaskDefinition
-        ? createEmergencyChallenge(
-          emergencyTaskDefinition,
-          `emergency-${event.id}-${currentState.eventHistory.length}`,
-          event.day ?? currentState.day,
-        )
-        : null;
-
-      return {
+      return refreshDayReportResources({
         ...currentState,
         resources,
+        pendingResourceEffects,
         systemConditions,
         faultHistory,
         ...(isCurrentEvent
@@ -1517,19 +1911,14 @@ export function useGameSimulation({
         flags: nextFlags,
         gameStatus: failedVital ? 'failed' : 'playing',
         failureReason: failedVital,
-        challengeFeedback: emergencyTask
-          ? `CRITICAL: ${emergencyTask.title}. ${emergencyTask.riskIfDelayed}`
-          : `${event.name}: ${decision.label}. ${outcomeFeedback}`,
-        dailyChallenges: emergencyTask
-          ? [...dailyChallenges, emergencyTask]
-          : dailyChallenges,
+        challengeFeedback: null,
+        dailyChallenges,
         challengeHistory,
-        activeChallengeId: emergencyTask?.id
-          ?? (currentState.activeChallengeId && linkedTaskIds.has(currentState.activeChallengeId)
-            ? dailyChallenges.find((task) => (
-              task.status === 'inProgress' || task.status === 'overdue'
-            ))?.id ?? null
-            : currentState.activeChallengeId),
+        activeChallengeId: currentState.activeChallengeId && linkedTaskIds.has(currentState.activeChallengeId)
+          ? dailyChallenges.find((task) => (
+            task.status === 'inProgress' || task.status === 'overdue'
+          ))?.id ?? null
+          : currentState.activeChallengeId,
         decisionHistory: [
           ...currentState.decisionHistory,
           {
@@ -1539,6 +1928,7 @@ export function useGameSimulation({
             lesson: event.lesson,
             futureConsequence: decision.futureConsequence,
             actualOutcome: actualEffects || 'No immediate resource or condition changes.',
+            resourceChanges: actualResourceChanges,
           },
         ],
         eventOutcomeHistory: [
@@ -1551,20 +1941,24 @@ export function useGameSimulation({
             status: 'resolved',
             decision: decision.label,
             feedback: outcomeFeedback,
+          resourceChanges: actualResourceChanges,
           },
         ],
-        eventSuccessNotices: [
-          ...currentState.eventSuccessNotices,
-          {
+        eventFailureNotices: currentState.eventFailureNotices.some((notice) => (
+          notice.id === (eventOccurrenceKey(event) ?? `${event.id}-${currentState.day}`)
+        ))
+          ? currentState.eventFailureNotices
+          : [...currentState.eventFailureNotices, {
             id: eventOccurrenceKey(event) ?? `${event.id}-${currentState.day}`,
             day: event.day ?? currentState.day,
             name: event.name,
-            decision: decision.label,
             feedback: outcomeFeedback,
             changes: actualResourceChanges,
-          },
-        ],
-      };
+            expired: false,
+            status: 'resolved',
+            decision: decision.label,
+          }],
+      });
     });
   }, []);
 
@@ -1591,6 +1985,7 @@ export function useGameSimulation({
         && nextState.dayPhase === 'closing'
         && !nextState.currentEvent
         && nextState.queuedEvents.length === 0
+        && (nextState.endOfDayEvents.length === 0 || nextState.endOfDaySequenceFinished)
       ) {
         nextState = createDayReport(nextState);
       }
@@ -1604,6 +1999,7 @@ export function useGameSimulation({
         currentState.gameStatus !== 'playing'
         || currentState.dayPhase !== 'report'
         || !currentState.dayReport
+        || hasPendingCriticalTaskNotice(currentState)
       ) {
         return currentState;
       }
@@ -1616,20 +2012,55 @@ export function useGameSimulation({
         };
       }
 
+      const nextDailyChallenges = createNextDayChallenges(
+        currentState.day + 1,
+        currentState.rngState,
+        currentState.usedDailyChallengeIds,
+      );
       let nextState: GameState = {
         ...currentState,
+        taskMissionHistory: [
+          ...currentState.taskMissionHistory,
+          ...currentState.dailyChallenges.map((task) => ({
+            id: task.id,
+            title: task.title,
+            priority: task.priority,
+            status: task.status,
+            affectedSystem: task.affectedSystem,
+            day: currentState.day,
+            emergency: task.emergency,
+            completedAfterDeadline: task.completedAfterDeadline,
+            responseTimeMs: task.responseTimeMs,
+            emergencyPrevented: task.emergencyPrevented,
+            escalationApplied: task.escalationApplied,
+            targetComponentName: task.targetComponentName,
+            deadlineDay: task.deadlineDay,
+          })),
+        ],
         day: currentState.day + 1,
         dayPhase: 'transition',
         dayReport: null,
         dayElapsedMs: 0,
+        resourceElapsedMs: 0,
         schedulerElapsedMs: 0,
+        pendingResourceEffects: {},
+        currentEvent: null,
+        queuedEvents: [],
+        endOfDayEvents: [],
+        endOfDaySequenceFinished: false,
+        eventPhase: 'idle',
+        eventDrainElapsedMs: 0,
+        eventEffectId: null,
+        eventDeadlineAtMs: null,
         dayStartResources: { ...currentState.resources },
         eventFailureNotices: [],
-        eventSuccessNotices: [],
-        taskFailureNotices: [],
         eventResolutionLocked: false,
         endOfDayCriticalTransition: false,
-        dailyChallenges: createNextDayChallenges(currentState.day + 1),
+        dailyChallenges: nextDailyChallenges,
+        usedDailyChallengeIds: [
+          ...currentState.usedDailyChallengeIds,
+          ...nextDailyChallenges.map(({ id }) => id),
+        ],
         activeChallengeId: null,
         challengeFeedback: null,
         warningTaskId: null,
@@ -1638,12 +2069,39 @@ export function useGameSimulation({
     });
   }, []);
 
+  const dismissEndOfDayTaskNotice = useCallback((occurrenceId: string) => {
+    setState((currentState) => {
+      if (!currentState.endOfDayNoticeHistory.some((event) => eventOccurrenceKey(event) === occurrenceId)) {
+        return currentState;
+      }
+      return resumePendingDayReport({
+        ...currentState,
+        endOfDayNoticeHistory: currentState.endOfDayNoticeHistory.filter(
+          (event) => eventOccurrenceKey(event) !== occurrenceId,
+        ),
+        endOfDayNoticePresentationIds: currentState.endOfDayNoticePresentationIds.filter(
+          (id) => id !== occurrenceId,
+        ),
+      });
+    });
+  }, []);
+
+  const presentEndOfDayTaskNotice = useCallback((occurrenceId: string) => {
+    setState((currentState) => {
+      if (!currentState.endOfDayNoticeHistory.some((event) => eventOccurrenceKey(event) === occurrenceId)
+        || currentState.endOfDayNoticePresentationIds.includes(occurrenceId)) return currentState;
+      return {
+        ...currentState,
+        endOfDayNoticePresentationIds: [...currentState.endOfDayNoticePresentationIds, occurrenceId],
+      };
+    });
+  }, []);
+
   const startDailyChallenge = useCallback((challengeId: string) => {
     setState((currentState) => {
       if (
         currentState.gameStatus !== 'playing' ||
         currentState.dayPhase !== 'active' ||
-        !['idle', 'awaitingDecision'].includes(currentState.eventPhase) ||
         currentState.warningTaskId
       ) {
         return currentState;
@@ -1674,12 +2132,41 @@ export function useGameSimulation({
     });
   }, []);
 
+  const startCriticalTaskRecovery = useCallback((challengeId: string) => {
+    setState((currentState) => {
+      if (
+        currentState.gameStatus !== 'playing'
+        || currentState.dayPhase !== 'active'
+        || currentState.warningTaskId
+      ) return currentState;
+      const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
+      if (!challenge || challenge.priority !== 'critical'
+        || challenge.status !== 'overdue'
+        || challenge.recoveryStatus !== 'available'
+        || !TASK_CONSEQUENCE_EVENTS.some((event) => event.riskTaskIds?.includes(challenge.id))) {
+        return currentState;
+      }
+      return {
+        ...currentState,
+        activeChallengeId: challenge.id,
+        challengeFeedback: `Let’s help the crew! Finish ${challenge.title} in 45 seconds to win back half of the supplies lost.`,
+        dailyChallenges: currentState.dailyChallenges.map((task) => task.id === challenge.id
+          ? {
+            ...task,
+            recoveryStatus: 'active',
+            recoveryAttempted: true,
+            recoveryDeadlineAtMs: currentState.campaignElapsedMs + CRITICAL_TASK_RECOVERY_DURATION_MS,
+          }
+          : task),
+      };
+    });
+  }, []);
+
   const completeDailyChallenge = useCallback((challengeId: string, componentId: string) => {
     setState((currentState) => {
       if (
         currentState.gameStatus !== 'playing' ||
         currentState.dayPhase !== 'active' ||
-        !['idle', 'awaitingDecision'].includes(currentState.eventPhase) ||
         currentState.warningTaskId
       ) {
         return currentState;
@@ -1689,6 +2176,11 @@ export function useGameSimulation({
       if (
         !challenge ||
         (challenge.status !== 'inProgress' && challenge.status !== 'overdue') ||
+        (challenge.recoveryStatus === 'available') ||
+        (challenge.priority === 'critical'
+          && TASK_CONSEQUENCE_EVENTS.some((event) => event.riskTaskIds?.includes(challenge.id))
+          && challenge.urgentConsequenceApplied
+          && challenge.recoveryStatus !== 'active') ||
         challenge.targetComponentId !== componentId
       ) {
         return currentState;
@@ -1705,15 +2197,39 @@ export function useGameSimulation({
         && !completedAfterDeadline
         && !challenge.urgentConsequenceApplied
         && !challenge.escalationApplied;
-      const resources = applyEffects(
+      let resources = applyEffects(
         currentState.resources,
-        getTaskCompletionResourceEffects(challenge),
+        challenge.recoveryStatus === 'active'
+          ? roundResourceEffects(getTaskCompletionResourceEffects(challenge))
+          : getTaskCompletionResourceEffects(challenge),
       );
+      const recoveryRestoration = challenge.recoveryStatus === 'active'
+        ? getHalfResourceRestoration(challenge.recoveryResourceLosses)
+        : {};
+      if (Object.keys(recoveryRestoration).length > 0) {
+        resources = applyEffects(resources, recoveryRestoration);
+      }
       const systemConditions = changeSystemCondition(
         currentState.systemConditions,
         challenge.affectedSystem,
         challenge.conditionRecovery,
       );
+      const taskResourceChanges = (Object.entries(getVisibleResourceChanges(
+        getVisibleResourceLevels(resources),
+        getVisibleResourceLevels(currentState.resources),
+      )) as [DisplayResourceKey, number][])
+        .map(([resource, change]) => ({ resource, change }));
+      const taskResourceSummary = taskResourceChanges.length > 0
+        ? ` Supply changes: ${taskResourceChanges.map(({ resource, change }) => `${RESOURCE_DISPLAY_NAMES[resource]} ${change > 0 ? '+' : ''}${Number(change.toFixed(1))}%`).join(', ')}.`
+        : ' Your supply bars stayed the same.';
+      const taskConditionChange = systemConditions[challenge.affectedSystem]
+        - currentState.systemConditions[challenge.affectedSystem];
+      const taskConditionSummary = taskConditionChange > 0
+        ? ` ${SYSTEM_DISPLAY_NAMES[challenge.affectedSystem]} is working ${taskConditionChange}% better.`
+        : taskConditionChange < 0
+          ? ` ${SYSTEM_DISPLAY_NAMES[challenge.affectedSystem]} is working ${Math.abs(taskConditionChange)}% less well.`
+          : '';
+      const taskSuccessFeedback = `You did it! ${challenge.title} is done. ${challenge.completionFeedback}${taskResourceSummary}${taskConditionSummary}`;
 
       let nextState: GameState = {
         ...currentState,
@@ -1730,6 +2246,8 @@ export function useGameSimulation({
               completedAfterDeadline,
               responseTimeMs,
               emergencyPrevented,
+              recoveryStatus: challenge.recoveryStatus === 'active' ? 'completed' : challenge.recoveryStatus,
+              recoveryDeadlineAtMs: null,
             }
             : task,
         ),
@@ -1754,11 +2272,15 @@ export function useGameSimulation({
             preventedEscalation: emergencyPrevented,
           },
         ],
-        challengeFeedback: emergencyPrevented
-          ? `Emergency contained: ${challenge.title} completed before escalation. ${challenge.completionFeedback}`
+        challengeFeedback: challenge.recoveryStatus === 'active'
+          ? `Great recovery! You won back half the supplies from this job. ${challenge.completionFeedback}`
+          : emergencyPrevented
+          ? `Nice work! You finished ${challenge.title} in time and stopped a bigger problem. ${challenge.completionFeedback}`
           : completedAfterDeadline
-            ? `Recovery complete: ${challenge.title} was finished after its response deadline. ${challenge.completionFeedback}`
-            : challenge.completionFeedback,
+            ? `Job saved! You finished ${challenge.title} late. ${challenge.completionFeedback}`
+            : challenge.priority === 'normal' || challenge.priority === 'high'
+              ? taskSuccessFeedback
+              : challenge.completionFeedback,
       };
       const failedVital = findFailedVital(resources);
       if (failedVital) {
@@ -1919,17 +2441,17 @@ export function useGameSimulation({
   const dismissEventFailureNotice = useCallback((id: string) => {
     setState((current) => ({ ...current, eventFailureNotices: current.eventFailureNotices.filter((notice) => notice.id !== id) }));
   }, []);
-  const dismissEventSuccessNotice = useCallback((id: string) => {
-    setState((current) => ({ ...current, eventSuccessNotices: current.eventSuccessNotices.filter((notice) => notice.id !== id) }));
-  }, []);
   const dismissTaskFailureNotice = useCallback((id: string) => {
-    setState((current) => ({ ...current, taskFailureNotices: current.taskFailureNotices.filter((notice) => notice.id !== id) }));
+    setState((current) => resumePendingDayReport({
+      ...current,
+      taskFailureNotices: current.taskFailureNotices.filter((notice) => notice.id !== id),
+    }));
   }, []);
 
-  // Notifications remain queued through event cinematics and dismiss only when
-  // the idle gameplay state can actually display the toast.
+  // Task feedback uses its own timer and does not wait for event presentation.
   useEffect(() => {
-    if (!state.challengeFeedback || state.eventPhase !== 'idle') return undefined;
+    if (!state.challengeFeedback) return undefined;
+    if (state.challengeFeedback.startsWith('Initial deadline missed')) return undefined;
     const feedback = state.challengeFeedback;
     const feedbackDay = state.day;
     const timerId = window.setTimeout(
@@ -1939,7 +2461,10 @@ export function useGameSimulation({
       CHALLENGE_FEEDBACK_DURATION_MS,
     );
     return () => window.clearTimeout(timerId);
-  }, [state.challengeFeedback, state.eventPhase, state.day]);
+  }, [
+    state.challengeFeedback,
+    state.day,
+  ]);
 
   return {
     ...state,
@@ -1956,12 +2481,14 @@ export function useGameSimulation({
     completeQueuedPresentation,
     completeResolution,
     advanceDay,
+    dismissEndOfDayTaskNotice,
+    presentEndOfDayTaskNotice,
     startDailyChallenge,
+    startCriticalTaskRecovery,
     completeDailyChallenge,
     dismissChallengeFeedback,
     abandonEvent,
     dismissEventFailureNotice,
-    dismissEventSuccessNotice,
     dismissTaskFailureNotice,
     makeDecision,
     restart,

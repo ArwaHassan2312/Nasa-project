@@ -2,12 +2,22 @@ import type { Decision, GameEvent } from '../data/moonEvents';
 
 const RESOURCE_LABELS: Record<string, string> = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
-  habitat: 'Habitat integrity', equipment: 'Equipment', health: 'Crew health',
-  radProtection: 'Radiation protection', comms: 'Communications', science: 'Science',
-  emergencyReserve: 'Emergency reserve', potentialWater: 'Potential water',
+  habitat: 'Crew health', equipment: 'Outpost tools', health: 'Crew health',
+  radProtection: 'Crew health', comms: 'Power', science: 'Food',
+  emergencyReserve: 'Water', potentialWater: 'Water',
+};
+const RESOURCE_GROUPS: Record<string, string> = {
+  battery: 'Battery', comms: 'Power', equipment: 'Power',
+  habitat: 'Crew health', radProtection: 'Crew health',
+  emergencyReserve: 'Water', potentialWater: 'Water',
+  science: 'Food',
 };
 const SYSTEM_LABELS: Record<string, string> = {
-  power: 'Power system', lifeSupport: 'Life support', water: 'Water system', equipment: 'Equipment systems',
+  power: 'Power', lifeSupport: 'Air', water: 'Water', equipment: 'Outpost tools',
+};
+
+const SEVERITY_LABELS: Record<string, string> = {
+  critical: 'Help now', high: 'Needs help', medium: 'Worth a look', low: 'Small problem',
 };
 
 interface EventModalProps {
@@ -33,7 +43,7 @@ export default function EventModal({ event, events = [], onSelectEvent, taskTitl
         aria-modal="true"
         aria-labelledby="event-title"
       >
-        <div className="simulation-eyebrow">Mission event · Lunar day {event.day ?? '—'}</div>
+        <div className="simulation-eyebrow">The crew needs help · Day {event.day ?? '—'}</div>
         {events.length > 1 && (
           <nav className="simulation-event-tabs" aria-label="Active mission alerts" role="tablist">
             {events.map((entry, index) => {
@@ -47,7 +57,7 @@ export default function EventModal({ event, events = [], onSelectEvent, taskTitl
                 className={`simulation-event-tab${selected ? ' is-selected' : ''}`}
                 onClick={() => onSelectEvent?.(entry)}
               >
-                <span>ISSUE {index + 1}</span>{entry.name}
+                <span>Problem {index + 1}</span>{entry.name}
               </button>;
             })}
           </nav>
@@ -55,34 +65,31 @@ export default function EventModal({ event, events = [], onSelectEvent, taskTitl
         <div className="simulation-event-heading">
           <h2 id="event-title">{event.name}</h2>
           <span className={`severity-badge severity-${event.severity}`}>
-            {event.severity}
+            {SEVERITY_LABELS[event.severity] ?? 'Needs help'}
           </span>
         </div>
-        {!locked && <button className="simulation-event-close" type="button" aria-label="Abandon unresolved event" onClick={onClose}>
+        {!locked && <button className="simulation-event-close" type="button" aria-label="Give up on this problem" onClick={onClose}>
           ×
         </button>}
         {(remainingMs !== null || locked) && (
           <div className="simulation-event-risk-panel">
-            <strong>{locked ? 'Day-end transition · response locked' : `Response window · ${formatCountdown(remainingMs ?? 0)}`}</strong>
-            <span>Resources at risk: {event.riskResources.map((resource) => RESOURCE_LABELS[resource] ?? resource).join(', ')}</span>
-            <span>Failure impact: {Object.entries(event.failureEffects).map(([resource, change]) => `${RESOURCE_LABELS[resource] ?? resource} ${change > 0 ? '+' : ''}${change}%`).join(' · ')}</span>
+            <strong>{locked ? 'The day has ended' : `Time to help · ${formatCountdown(remainingMs ?? 0)}`}</strong>
+            <span>Supplies to protect: {[...new Set(event.riskResources.map((resource) => RESOURCE_GROUPS[resource] ?? RESOURCE_LABELS[resource] ?? resource))].join(', ')}</span>
             <span>{event.failureFeedback}</span>
           </div>
         )}
         {event.triggerSource === 'task' && (
           <div className="simulation-event-cause">
-            <strong>Missed task connection</strong>
-            <span>Task not completed: {event.riskTaskIds?.map((id) => taskTitles[id] ?? id).join(', ') || 'Required maintenance task'}</span>
-            <span>Resulting problem: {event.name}</span>
-            <span>Location / system: {event.affectedSystems.map((system) => SYSTEM_LABELS[system] ?? system).join(', ')}</span>
-            <span>Outpost impact: {event.failureFeedback}</span>
+          <strong>This problem started after a job was missed.</strong>
+          <span>Job to remember: {event.riskTaskIds?.map((id) => taskTitles[id] ?? id).join(', ') || 'Outpost check'}</span>
+          <span>Where the crew needs help: {event.affectedSystems.map((system) => SYSTEM_LABELS[system] ?? system).join(', ')}</span>
           </div>
         )}
         <p className="simulation-event-situation">{event.situation}</p>
-        {locked ? <p className="simulation-event-prompt">The day has ended. The incident will be recorded before the day report.</p>
+        {locked ? <p className="simulation-event-prompt">The day is over. We’ll add this problem to your day report.</p>
           : canDecide
-            ? <p className="simulation-event-prompt">Choose how the crew should respond:</p>
-            : <p className="simulation-event-prompt">This alert is being presented. Response options will be available when the presentation completes.</p>}
+            ? <p className="simulation-event-prompt">How will you help the crew?</p>
+            : <p className="simulation-event-prompt">Getting the choices ready. You can pick one in a moment.</p>}
         {!locked && canDecide && <div className="simulation-decision-list">
           {event.decisions.map((decision) => (
             <button
@@ -94,9 +101,9 @@ export default function EventModal({ event, events = [], onSelectEvent, taskTitl
               <span className="simulation-decision-id">{decision.id}</span>
               <span className="simulation-decision-copy">
                 <strong>{decision.label}</strong>
-                <span><b>Benefit:</b> {decision.benefit}</span>
+                <span><b>Good thing:</b> {decision.benefit}</span>
                 <span><b>Cost:</b> {decision.cost}</span>
-                <span className="simulation-decision-risk"><b>Risk:</b> {decision.risk}</span>
+                <span className="simulation-decision-risk"><b>Watch out:</b> {decision.risk}</span>
               </span>
               <span className="simulation-decision-arrow" aria-hidden="true">→</span>
             </button>

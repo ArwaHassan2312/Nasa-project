@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import NeonTypewriter from './NeonTypewriter';
 
-const FINAL_LINES = ['A new world. A new frontier. An extraordinary journey awaits.'];
+const FINAL_LINES = ['A new world to explore. Your space adventure starts here.'];
 
 export default function IntroOverlay({ visible, finished = false, onStart, onSkip }) {
   const [textVisible, setTextVisible] = useState(false);
@@ -27,7 +27,7 @@ export default function IntroOverlay({ visible, finished = false, onStart, onSki
 
   return (
     <div className={`intro-overlay ui-fade ${visible ? '' : 'ui-hidden'} ${finished ? 'intro-overlay--finished' : ''}`}>
-      {!finished && <button type="button" className="intro-skip" onClick={onSkip}>SKIP</button>}
+      {!finished && <button type="button" className="intro-skip" onClick={onSkip}>Skip intro</button>}
       <div className={`intro-title intro-final-title ui-fade ${finished && textVisible ? '' : 'ui-hidden'}`}>
         {finished && <NeonTypewriter lines={FINAL_LINES} startDelay={350} speed={11} lineDelay={110} punctDelay={50} onDone={handleTextDone} />}
       </div>
