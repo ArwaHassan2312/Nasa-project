@@ -150,6 +150,12 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     (challenge) => (challenge.status === 'inProgress' || challenge.status === 'overdue')
       && challenge.targetComponentId === prompt.data?.id,
   );
+  // The plant reports its own prompt id, so its active task is matched on the
+  // component instead of the prompt id.
+  const plantChallenge = simulation.dailyChallenges.find(
+    (challenge) => (challenge.status === 'inProgress' || challenge.status === 'overdue')
+      && challenge.targetComponentId === '025',
+  );
   const taskActionRef = useRef(null);
   taskActionRef.current = (componentId, taskId) => {
     const challenge = taskId
@@ -313,6 +319,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       if (key !== 'enter' && code !== 'Enter' && code !== 'NumpadEnter') return;
       event.preventDefault();
       if (prompt.type === 'component') engineRef.current?.enterNearbyComponent();
+      else if (prompt.type === 'regolithPlant') engineRef.current?.runRegolithMaintenance();
       else if (prompt.type === 'airlock') engineRef.current?.enterAirlock();
       else if (prompt.type === 'greenhouseDoor') engineRef.current?.leaveGreenhouse();
       else if (prompt.type === 'roverMonitor') engineRef.current?.controlRover(prompt.data?.roverId);
@@ -1572,6 +1579,29 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             onClick={() => engineRef.current?.controlRover(prompt.data?.roverId)}
           >
             DRIVE ⏎
+          </button>
+        </div>
+      )}
+
+      {['idle', 'awaitingDecision'].includes(simulation.eventPhase) && prompt.type === 'regolithPlant' && (
+        <div className="lunar-proximity-prompt" role="dialog" aria-live="polite" aria-label="Regolith plant prompt">
+          <span className="lunar-proximity-dot" aria-hidden="true" />
+          <div className="lunar-proximity-text">
+            <strong>
+              {prompt.data?.title || 'Run a regolith maintenance cycle?'}
+              {plantChallenge ? ' ★' : ''}
+            </strong>
+            <small>
+              <kbd>Enter</kbd> to service the digester · <kbd>N</kbd> to dismiss
+              {plantChallenge ? ` · Task: ${plantChallenge.actionLabel}` : ''}
+            </small>
+          </div>
+          <button
+            type="button"
+            className="lunar-proximity-enter"
+            onClick={() => engineRef.current?.runRegolithMaintenance()}
+          >
+            SERVICE ⏎
           </button>
         </div>
       )}

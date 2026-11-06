@@ -452,6 +452,78 @@ export const MOON_EVENTS: GameEvent[] = [
       }
     ],
     lesson: "Resources must be confirmed, extracted and processed before they help."
+  },
+  {
+    id: "oxygen_plant_failure",
+    name: "Regolith Plant Fault",
+    severity: "high",
+    situation: "The digester has jammed on a hard rock seam. Oxygen extraction from the regolith has stopped and the tanks are draining.",
+    affectedSystems: ["lifeSupport"],
+    riskResources: ["oxygen", "health", "power"],
+    failureEffects: { oxygen: -12, health: -5, power: -4 },
+    failureConditionEffects: { lifeSupport: -11 },
+    failureFeedback: 'The digester stayed seized and the reserve oxygen kept draining while the crew worked around it.',
+    baseWeight: 1.0,
+    minDay: 3,
+    cooldownDays: 5,
+    maxOccurrences: 2,
+    riskTaskIds: ['regolith-plant-maintenance'],
+    preventedByFlags: ['regolithPlantMaintained'],
+    preparationFlags: ['regolithPlantMaintained'],
+    emergencyTask: {
+      title: 'Clear the Digester Jam',
+      description: 'Clear the rock jam and restart the regolith digester before the oxygen reserve runs down.',
+      objective: 'Reach the Regolith Plant and run an emergency maintenance cycle.',
+      actionLabel: 'Clear digester jam',
+      targetComponentId: '025',
+      targetComponentName: 'Regolith Plant',
+      affectedSystem: 'lifeSupport',
+      readinessFlag: 'regolithDigesterCleared',
+      responseDeadlineMs: 60_000,
+      escalationDelayMs: 60_000,
+      urgentConditionLoss: 6,
+      urgentResourceEffects: { oxygen: -5 },
+      escalationConditionAtOrBelow: 75,
+      escalationConditionLoss: 8,
+      escalationResourceEffects: { oxygen: -8, health: -3 },
+      riskIfDelayed: 'The jam is compacting further; every minute without a cycle drains more of the oxygen reserve.',
+      completionFeedback: 'Digester cleared and restarted. Oxygen production is back online.',
+    },
+    decisions: [
+      {
+        id: "A",
+        label: "Seal and Bypass",
+        effects: { oxygen: -6, equipment: 4, power: 3 },
+        conditionEffects: { lifeSupport: 5, equipment: 3 },
+        benefit: "Life support protected; tanks stop draining",
+        cost: "Oxygen -6, extraction offline for the day",
+        risk: "Low",
+        setFlags: ["digesterBypassed"],
+        futureConsequence: "No regolith oxygen until the bypass is removed"
+      },
+      {
+        id: "B",
+        label: "Manual Jam Clear",
+        effects: { oxygen: 4, health: -7, equipment: -5 },
+        conditionEffects: { lifeSupport: -4, equipment: -5 },
+        benefit: "Extraction restored immediately; Oxygen +4",
+        cost: "Health -7, Equipment -5",
+        risk: "Crew injury at the crusher (30%)",
+        setFlags: ["digesterCleared"],
+        futureConsequence: "Worn crusher teeth need servicing sooner"
+      },
+      {
+        id: "C",
+        label: "Vent and Wait",
+        effects: { oxygen: -11, science: 6, health: -3 },
+        conditionEffects: { lifeSupport: -8 },
+        benefit: "No crew exposure; Science +6 from the seam sample",
+        cost: "Oxygen -11, Life support -8",
+        risk: "Medium — tanks keep draining",
+        futureConsequence: "Reserve oxygen is lower for later incidents"
+      }
+    ],
+    lesson: "Regolith processing is the outpost's oxygen lifeline — a jammed digester is a life-support emergency."
   }
 ];
 
