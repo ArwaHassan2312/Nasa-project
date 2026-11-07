@@ -10,7 +10,7 @@ export type SystemKey = "power" | "lifeSupport" | "water" | "equipment";
 export interface Decision {
   id: string;
   label: string;
-  effects: Partial<Record<SurvivalResourceKey, number>>;
+  effects: Partial<Record<SurvivalResourceKey | 'science', number>>;
   conditionEffects?: Partial<Record<SystemKey, number>>;
   benefit: string;
   cost: string;
@@ -448,9 +448,9 @@ export const MOON_EVENTS: GameEvent[] = [
       {
         id: "A",
         label: "Explore the Crater",
-        effects: { water: 25, food: -8 },
+        effects: { water: 25, food: -8, science: 8 },
         conditionEffects: { water: 4, power: -5, equipment: -5 },
-        benefit: "Water +25; ice is collected",
+        benefit: "Water +25; Science +8; ice is collected",
         cost: "Food -8",
         risk: "Dust may slow the work and use power",
         futureConsequence: "The crew will learn sooner if the ice can help"
@@ -458,9 +458,9 @@ export const MOON_EVENTS: GameEvent[] = [
       {
         id: "B",
         label: "Take a Small Sample",
-        effects: { water: 12, food: -5 },
+        effects: { water: 12, food: -5, science: 4 },
         conditionEffects: { water: 2, power: -2 },
-        benefit: "Water +12; a small sample is collected",
+        benefit: "Water +12; Science +4; a small sample is collected",
         cost: "Food -5",
         risk: "The sample may not tell us much",
         futureConsequence: "It may take longer to learn if the ice can help"
@@ -468,9 +468,9 @@ export const MOON_EVENTS: GameEvent[] = [
       {
         id: "C",
         label: "Skip the Search",
-        effects: { power: 5, water: -5 },
+        effects: { power: 5, water: -5, science: -2 },
         conditionEffects: { power: 1 },
-        benefit: "Power +5",
+        benefit: "Power +5; Science -2",
         cost: "Water -5",
         risk: "The crew may miss useful ice",
         futureConsequence: "The ice search will not continue"

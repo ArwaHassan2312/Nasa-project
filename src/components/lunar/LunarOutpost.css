@@ -1965,6 +1965,36 @@
   margin-left: auto;
 }
 
+.lunar-equipped-tool {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border: 1px solid rgba(200, 237, 139, 0.42);
+  border-radius: 5px;
+  background: rgba(8, 13, 20, 0.88);
+  color: #eef6f0;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.3);
+  font: 600 0.68rem var(--lunar-font-mono);
+  pointer-events: none;
+}
+.lunar-equipped-tool span { color: var(--lunar-lime); font-size: 0.64rem; letter-spacing: 0.08em; }
+.lunar-equipped-tool strong { font-size: 0.84rem; white-space: nowrap; }
+.lunar-inside-panel button:disabled { opacity: 0.48; cursor: not-allowed; }
+.lunar-tool-route-notice { position: absolute; z-index: 6; left: 50%; top: clamp(70px, 12vh, 112px); transform: translateX(-50%); display: flex; align-items: center; gap: 12px; max-width: min(420px, calc(100vw - 28px)); padding: 9px 13px; border: 1px solid rgba(200, 237, 139, 0.42); border-radius: 8px; background: rgba(8, 13, 20, 0.92); color: #eef6f0; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); font-size: 0.76rem; pointer-events: auto; }
+.lunar-tool-route-notice button { border: 0; color: #c8ed8b; background: transparent; font-size: 1.1rem; cursor: pointer; }
+
+/* Keep the task drawer scrollable while hiding only its scrollbar chrome. */
+.lunar-daily-tasks {
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.lunar-daily-tasks::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
 .lunar-btn {
   pointer-events: auto;
   padding: clamp(7px, 1.6vh, 10px) clamp(10px, 2.5vw, 16px);
@@ -2991,11 +3021,11 @@
 .lunar-root .lunar-task-locate { font-size: 0.84rem; }
 .lunar-root .lunar-task-title-row > span,
 .lunar-root .lunar-task-card > small { font-size: 0.7rem; }
-.lunar-root .lunar-proximity-text strong { font-size: 0.78rem; }
-.lunar-root .lunar-proximity-text small { font-size: 0.7rem; }
+.lunar-root .lunar-proximity-text strong { font-size: 0.84rem; }
+.lunar-root .lunar-proximity-text small { font-size: 0.74rem; }
 .lunar-root .lunar-proximity-text kbd { font-size: 0.66rem; }
 .lunar-root .lunar-proximity-enter,
-.lunar-root .lunar-proximity-resolve-event { font-size: 0.74rem; }
+.lunar-root .lunar-proximity-resolve-event { font-size: 0.8rem; padding: 9px 13px; }
 .lunar-root .lunar-task-toast,
 .lunar-root .lunar-persistent-notice,
 .lunar-root .lunar-end-of-day-event-message p { font-size: 0.82rem; }

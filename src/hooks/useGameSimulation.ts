@@ -39,7 +39,7 @@ export type GameStatus = 'playing' | 'success' | 'failed';
 export type ResourceLevels = Record<ResourceKey, number>;
 export type EventPhase = 'idle' | 'pending' | 'presenting' | 'awaitingDecision' | 'resolving';
 export type DayPhase = 'active' | 'closing' | 'report' | 'transition';
-type DisplayResourceKey = 'power' | 'battery' | 'oxygen' | 'water' | 'food' | 'health';
+type DisplayResourceKey = 'power' | 'battery' | 'oxygen' | 'water' | 'food' | 'health' | 'science';
 
 export interface DayReport {
   day: number;
@@ -212,7 +212,7 @@ const CLOCK_UPDATE_INTERVAL_MS = 1000;
 const RESOURCE_DISPLAY_NAMES: Record<ResourceKey, string> = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
   habitat: 'Crew health', equipment: 'Crew health', health: 'Crew health',
-  radProtection: 'Crew health', comms: 'Power', science: 'Food',
+  radProtection: 'Crew health', comms: 'Power', science: 'Science',
   emergencyReserve: 'Water', potentialWater: 'Water',
 };
 const SYSTEM_DISPLAY_NAMES: Record<SystemKey, string> = {
@@ -811,6 +811,7 @@ function getVisibleResourceLevels(resources: ResourceLevels): Record<DisplayReso
     water: resources.water,
     food: resources.food,
     health: (resources.health + resources.habitat + resources.radProtection) / 3,
+    science: resources.science,
   };
 }
 
@@ -1807,7 +1808,7 @@ export function useGameSimulation({
       };
       for (const task of resolvedLinkedTasks) {
         for (const [resource, amount] of Object.entries(getTaskCompletionResourceEffects(task))
-          .filter(([key]) => isEventOptionResource(key)) as [SurvivalResourceKey, number][]) {
+          .filter(([key]) => isEventOptionResource(key) || key === 'science') as [SurvivalResourceKey | 'science', number][]) {
           resolutionEffects[resource] = (resolutionEffects[resource] ?? 0) + amount;
         }
       }
@@ -2162,7 +2163,7 @@ export function useGameSimulation({
     });
   }, []);
 
-  const completeDailyChallenge = useCallback((challengeId: string, componentId: string) => {
+  const completeDailyChallenge = useCallback((challengeId: string, componentId: string, selectedSolution?: { resourceEffects?: Partial<Record<ResourceKey, number>>; conditionDelta?: number }) => {
     setState((currentState) => {
       if (
         currentState.gameStatus !== 'playing' ||
@@ -2197,11 +2198,15 @@ export function useGameSimulation({
         && !completedAfterDeadline
         && !challenge.urgentConsequenceApplied
         && !challenge.escalationApplied;
+      const completionEffects: Partial<Record<ResourceKey, number>> = challenge.recoveryStatus === 'active'
+        ? roundResourceEffects(getTaskCompletionResourceEffects(challenge))
+        : getTaskCompletionResourceEffects(challenge);
+      for (const [resource, amount] of Object.entries(selectedSolution?.resourceEffects ?? {}) as [ResourceKey, number][]) {
+        completionEffects[resource] = (completionEffects[resource] ?? 0) + amount;
+      }
       let resources = applyEffects(
         currentState.resources,
-        challenge.recoveryStatus === 'active'
-          ? roundResourceEffects(getTaskCompletionResourceEffects(challenge))
-          : getTaskCompletionResourceEffects(challenge),
+        completionEffects,
       );
       const recoveryRestoration = challenge.recoveryStatus === 'active'
         ? getHalfResourceRestoration(challenge.recoveryResourceLosses)
@@ -2212,7 +2217,7 @@ export function useGameSimulation({
       const systemConditions = changeSystemCondition(
         currentState.systemConditions,
         challenge.affectedSystem,
-        challenge.conditionRecovery,
+        challenge.conditionRecovery + (selectedSolution?.conditionDelta ?? 0),
       );
       const taskResourceChanges = (Object.entries(getVisibleResourceChanges(
         getVisibleResourceLevels(resources),

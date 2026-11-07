@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createLunarEngine } from './lunarOutpostEngine';
 import EventModal from '../EventModal';
 import EndGameReport from '../EndGameReport';
-import DailyTaskExperience from './DailyTaskExperience';
+import DailyTaskExperience, { ToolPicture } from './DailyTaskExperience';
+import { getAllDailyTaskTools, getDailyTaskExperience } from '../../data/dailyTaskExperiences';
 import './LunarOutpost.css';
 import '../../simulation.css';
 
@@ -13,6 +14,7 @@ const RESOURCE_ITEMS = [
   ['water', 'Water', '💧'],
   ['food', 'Food', '🥕'],
   ['health', 'Crew health', '💚'],
+  ['science', 'Science', '🔬'],
 ];
 
 // Keep detailed simulation values intact while presenting one simple crew meter.
@@ -28,8 +30,23 @@ const TASK_EVENT_TESTS = [
 const RESOURCE_LABELS = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
   habitat: 'Crew health', equipment: 'Crew health', health: 'Crew health',
-  radProtection: 'Crew health', comms: 'Power', science: 'Food',
+  radProtection: 'Crew health', comms: 'Power', science: 'Science',
   emergencyReserve: 'Water', potentialWater: 'Water',
+};
+const TOOL_DESCRIPTIONS = {
+  cable: 'Connects or recharges electrical equipment, such as batteries and backup power systems.',
+  wrench: 'Tightens fittings and fasteners on pipes, mounts, panels, and workshop equipment.',
+  brush: 'Removes lunar dust from solar panels, filters, and exposed equipment surfaces.',
+  patch: 'Replaces or seals worn gaskets, covers, and small leaks in habitat hardware.',
+  'filter-kit': 'Replaces a dirty air or water filter so the system can work cleanly again.',
+  tester: 'Checks electrical signals, sensor readings, and system response during diagnostics.',
+  watering: 'Measures and delivers water to greenhouse crops during plant care.',
+  checklist: 'Tracks inspection steps and verifies stored supplies or backup readiness.',
+  screwdriver: 'Adjusts small fasteners and access panels during equipment servicing.',
+  clamp: 'Secures loose connectors, pipe joints, or parts while a repair is completed.',
+  scissors: 'Trims plant growth during greenhouse harvest and maintenance.',
+  gloves: 'Protects hands during dusty exterior inspection and surface cleaning.',
+  cloth: 'Wipes sensor lenses, panels, and cleanable equipment surfaces.',
 };
 const EVENT_LOCATIONS = {
   fire_lab: { componentId: '010', name: 'Workshop' },
@@ -114,6 +131,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const previousEventPresentationIdsRef = useRef([]);
   const eventOptionsEventIdRef = useRef(null);
   const eventAlertMenuRef = useRef(null);
+  const requiredInventoryToolRef = useRef(null);
   const dayStartCameraDayRef = useRef(null);
   const alertPanelDayRef = useRef(simulation.day);
   const setSceneReady = simulation.setSceneReady;
@@ -151,6 +169,12 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const [selectedMapComponentId, setSelectedMapComponentId] = useState(null);
   const [taskExperienceId, setTaskExperienceId] = useState(null);
   const [taskExperienceStage, setTaskExperienceStage] = useState('idea');
+  const [taskJourneys, setTaskJourneys] = useState({});
+  const [equippedTool, setEquippedTool] = useState(null);
+  const [toolInventoryOpen, setToolInventoryOpen] = useState(false);
+  const [taskOutcomeStart, setTaskOutcomeStart] = useState(null);
+  const [toolPickupNotice, setToolPickupNotice] = useState('');
+  const observedTaskDayRef = useRef(simulation.day);
   const [taskMarkerTargets, setTaskMarkerTargets] = useState([]);
   const [mapSnapshot, setMapSnapshot] = useState(null);
   const [miniSnapshot, setMiniSnapshot] = useState(null);
@@ -165,15 +189,57 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     completeDailyChallenge,
     dismissChallengeFeedback,
   } = simulation;
+  useEffect(() => {
+    if (observedTaskDayRef.current === simulation.day) return;
+    observedTaskDayRef.current = simulation.day;
+    setEquippedTool(null);
+    setTaskJourneys({});
+    setToolPickupNotice('');
+    setToolInventoryOpen(false);
+    setTaskExperienceId(null);
+  }, [simulation.day]);
+  useEffect(() => {
+    if (!toolPickupNotice) return undefined;
+    const timeout = window.setTimeout(() => setToolPickupNotice(''), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [toolPickupNotice]);
   const eventGameplayActive = eventPhase === 'idle' || eventPhase === 'awaitingDecision';
   const openTaskIdea = (challenge) => {
+    if (taskJourneys[challenge.id]?.solution) {
+      showTaskLocation(challenge.id);
+      return;
+    }
     startDailyChallenge(challenge.id);
     setTaskExperienceId(challenge.id);
     setTaskExperienceStage('idea');
   };
   const openTaskAtLocation = (challengeId) => {
+    const journey = taskJourneys[challengeId];
     setTaskExperienceId(challengeId);
-    setTaskExperienceStage('inspect');
+    setTaskExperienceStage(journey?.solution ? (journey.pickedUp && equippedTool?.id === journey.solution.tool.id && equippedTool?.name === journey.solution.tool.name ? 'perform' : journey.pickedUp ? 'waiting' : 'tool') : 'solutions');
+  };
+  const chooseTaskSolution = (challengeId, solution) => setTaskJourneys((items) => ({ ...items, [challengeId]: { ...items[challengeId], solution, pickedUp: false } }));
+  const requestTaskTool = (challengeId) => {
+    const requiredTool = taskJourneys[challengeId]?.solution?.tool?.name;
+    setToolPickupNotice(requiredTool ? `Return to the Workshop to pick up the ${requiredTool}.` : 'Return to the Workshop to pick up the selected tool.');
+    setTaskJourneys((items) => ({ ...items, [challengeId]: { ...items[challengeId], pendingPickup: true } }));
+    setTaskExperienceId(null);
+  };
+  useEffect(() => {
+    if (simulation.warningTaskId && taskExperienceId) setTaskExperienceId(null);
+  }, [simulation.warningTaskId, taskExperienceId]);
+  const pendingToolTask = Object.entries(taskJourneys).find(([, journey]) => journey.pendingPickup && journey.solution);
+  useEffect(() => {
+    if (toolInventoryOpen && pendingToolTask) requiredInventoryToolRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [toolInventoryOpen, pendingToolTask?.[0], pendingToolTask?.[1]?.solution?.tool?.name]);
+  const availableTools = getAllDailyTaskTools();
+  const pickUpTool = (tool) => {
+    setEquippedTool(tool);
+    if (pendingToolTask && pendingToolTask[1].solution.tool.id === tool.id && pendingToolTask[1].solution.tool.name === tool.name) {
+      setTaskJourneys((items) => ({ ...items, [pendingToolTask[0]]: { ...items[pendingToolTask[0]], pickedUp: true, pendingPickup: false } }));
+      setToolPickupNotice('Tool picked up. Return to the task location and continue.');
+    }
+    setToolInventoryOpen(false);
   };
   const showTaskLocation = (challengeId) => {
     const challenge = simulation.dailyChallenges.find((task) => task.id === challengeId);
@@ -189,7 +255,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const insideComponentTasks = insidePanel.componentId
     ? simulation.dailyChallenges.filter(
         (challenge) => challenge.targetComponentId === insidePanel.componentId
-          && (challenge.status === 'inProgress' || challenge.status === 'overdue'),
+          && (challenge.status === 'available' || challenge.status === 'inProgress' || challenge.status === 'overdue'),
       )
     : [];
   const nearbyTaskMarker = taskMarkerTargets
@@ -202,7 +268,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     .map((task) => `${task.id}:${task.status}:${task.recoveryStatus ?? ''}`)
     .join('|');
   const promptedChallenge = simulation.dailyChallenges.find(
-    (challenge) => (challenge.status === 'inProgress' || challenge.status === 'overdue')
+    (challenge) => (challenge.status === 'available' || challenge.status === 'inProgress' || challenge.status === 'overdue')
       && challenge.targetComponentId === prompt.data?.id,
   );
   const taskActionRef = useRef(null);
@@ -328,9 +394,10 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         taskId: challenge.id,
         label: challenge.actionLabel,
         status: challenge.status,
+          isActive: simulation.activeChallengeId === challenge.id,
       }))
     );
-  }, [simulation.dailyChallenges]);
+  }, [simulation.dailyChallenges, simulation.activeChallengeId]);
 
   useEffect(() => {
     if (
@@ -657,7 +724,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       ? 'At Risk'
       : 'Ready';
   const readinessForecast = vitalRisk
-    ? 'Some supplies are very low. Help the crew save them.'
+    ? 'Some resources are very low. Help the crew save them.'
     : simulation.systemConditions[lowestSystem[0]] < 75
     ? `${lowestSystem[1]} may need help.`
     : overdueTasks.length > 0
@@ -809,6 +876,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
     >
       <div className="lunar-grain" />
       <div className="lunar-shade" />
+      {toolPickupNotice && <div className="lunar-tool-route-notice" role="status"><span>{toolPickupNotice}</span><button type="button" aria-label="Dismiss tool instruction" onClick={() => setToolPickupNotice('')}>×</button></div>}
     {activeEventVisuals.some(({ eventId }) => eventId === 'lunar_night') && (
       <div className="lunar-night-overlay" aria-hidden="true" />
     )}
@@ -859,6 +927,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                   : 'Mission ended'}
           </span>
         </div>
+
+        {equippedTool && <div className="lunar-equipped-tool" aria-label={`Equipped tool: ${equippedTool.name}`}><span>EQUIPPED TOOL</span><strong>{equippedTool.name}</strong></div>}
 
         <div className="lunar-actions-group">
           {activeEventEntries.length > 0 && (
@@ -928,7 +998,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 disabled={!eventGameplayActive || simulation.dayPhase !== 'active'}
                 onClick={() => setStatusOpen((open) => !open)}
               >
-                 Supplies
+                 Resources
               </button>
             </>
           )}
@@ -939,14 +1009,25 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 <button
                   type="button"
                   className="lunar-task-start-button"
+                  disabled={nearbyTask.recoveryStatus !== 'available' && Boolean(taskJourneys[nearbyTask.id]?.solution && (!taskJourneys[nearbyTask.id]?.pickedUp || equippedTool?.id !== taskJourneys[nearbyTask.id]?.solution.tool.id || equippedTool?.name !== taskJourneys[nearbyTask.id]?.solution.tool.name))}
                   onClick={() => {
                     if (nearbyTask.recoveryStatus === 'available') {
                       simulation.startCriticalTaskRecovery(nearbyTask.id);
+                      setTaskJourneys((items) => { const next = { ...items }; delete next[nearbyTask.id]; return next; });
+                      setTaskExperienceId(nearbyTask.id);
+                      setTaskExperienceStage('solutions');
+                      return;
+                    }
+                    if (nearbyTask.status === 'available') {
+                      simulation.startDailyChallenge(nearbyTask.id);
+                      setTaskExperienceId(nearbyTask.id);
+                      setTaskExperienceStage('idea');
+                      return;
                     }
                     openTaskAtLocation(nearbyTask.id);
                   }}
                 >
-                  Start task
+                  {taskJourneys[nearbyTask.id]?.pickedUp && equippedTool?.id === taskJourneys[nearbyTask.id]?.solution?.tool.id && equippedTool?.name === taskJourneys[nearbyTask.id]?.solution?.tool.name ? 'Continue' : taskJourneys[nearbyTask.id]?.solution ? 'Required tool not equipped' : 'Start Task'}
                 </button>
               )}
               <button
@@ -955,6 +1036,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
               >
                 {insidePanel.buttonText || 'EXIT'}
               </button>
+              {insidePanel.componentId === '010' && <button type="button" className="lunar-task-start-button" onClick={() => setToolInventoryOpen(true)}>What’s in Your Bag?</button>}
               <button
                 type="button"
                 className={consoleEdit ? 'lunar-console-edit-active' : ''}
@@ -1621,6 +1703,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                       className="lunar-task-action"
                       onClick={() => {
                         simulation.startCriticalTaskRecovery(challenge.id);
+                        setTaskJourneys((items) => { const next = { ...items }; delete next[challenge.id]; return next; });
                         setTaskExperienceId(challenge.id);
                         setTaskExperienceStage('idea');
                       }}
@@ -1708,7 +1791,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
           <div className="lunar-drawer-heading">
             <div>
               <span className="lunar-modal-kicker">Day {simulation.day}</span>
-              <h2>Outpost supplies</h2>
+              <h2>Outpost resources</h2>
             </div>
             <button type="button" aria-label="Close outpost status" onClick={() => setStatusOpen(false)}>×</button>
           </div>
@@ -1975,12 +2058,63 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             key={`${experienceTask.id}-${taskExperienceStage}`}
             task={experienceTask}
             initialStage={taskExperienceStage}
+            progressState={taskJourneys[experienceTask.id] ?? {}}
             onClose={() => setTaskExperienceId(null)}
-            onFindLocation={() => showTaskLocation(experienceTask.id)}
-            onComplete={() => completeDailyChallenge(experienceTask.id, experienceTask.targetComponentId)}
+            onFindLocation={() => {
+              if (insidePanel.visible && insidePanel.componentId === experienceTask.targetComponentId) {
+                setTaskExperienceStage('solutions');
+              } else {
+                showTaskLocation(experienceTask.id);
+              }
+            }}
+            onSelectSolution={(solution) => chooseTaskSolution(experienceTask.id, solution)}
+            onPickUpTool={() => requestTaskTool(experienceTask.id)}
+            resourceChanges={taskOutcomeStart?.taskId === experienceTask.id && experienceTask.status === 'completed'
+              ? Object.fromEntries(Object.entries(simulation.resources).map(([key, value]) => [key, Math.round(value - taskOutcomeStart.resources[key])]).filter(([, amount]) => amount !== 0))
+              : null}
+            componentChange={taskOutcomeStart?.taskId === experienceTask.id && experienceTask.status === 'completed'
+              ? simulation.systemConditions[experienceTask.affectedSystem] - taskOutcomeStart.condition
+              : null}
+            onComplete={(solution) => {
+              setTaskOutcomeStart({ taskId: experienceTask.id, resources: simulation.resources, condition: simulation.systemConditions[experienceTask.affectedSystem] });
+              setEquippedTool(null);
+              completeDailyChallenge(experienceTask.id, experienceTask.targetComponentId, solution);
+            }}
           />
         ) : null;
       })()}
+      {toolInventoryOpen && (
+        <div className="daily-task-experience-backdrop" role="presentation">
+          <section className="daily-task-experience lunar-tool-inventory" role="dialog" aria-modal="true" aria-labelledby="tool-inventory-title">
+            <button className="daily-task-experience-close" type="button" aria-label="Close tool inventory" onClick={() => setToolInventoryOpen(false)}>×</button>
+            <header className="daily-task-experience-header"><span className="daily-task-experience-kicker">Workshop inventory</span><h2 id="tool-inventory-title">What’s in Your Bag?</h2></header>
+            <p>Choose the required tool to equip it. Tools are listed for the jobs assigned to this mission day.</p>
+            {pendingToolTask && <p className="daily-task-location-note">Required for {simulation.dailyChallenges.find((task) => task.id === pendingToolTask[0])?.title}: <strong>{pendingToolTask[1].solution.tool.name}</strong></p>}
+            <div className="daily-task-tool-grid">
+              {availableTools.map((tool) => {
+                const isRequired = tool.id === pendingToolTask?.[1].solution.tool.id && tool.name === pendingToolTask?.[1].solution.tool.name;
+                const toolDescription = TOOL_DESCRIPTIONS[tool.id] ?? 'Used for mission inspection and maintenance.';
+                return (
+                  <button
+                    key={`${tool.id}-${tool.name}`}
+                    ref={isRequired ? requiredInventoryToolRef : null}
+                    title={`${tool.name}: ${toolDescription}`}
+                    aria-label={`${tool.name}. ${toolDescription}${isRequired ? '. Required for current task.' : ''}`}
+                    aria-pressed={equippedTool?.id === tool.id && equippedTool?.name === tool.name}
+                    className={`${equippedTool?.id === tool.id && equippedTool?.name === tool.name ? 'is-equipped' : ''}${isRequired ? ' is-required' : ''}`}
+                    onClick={() => pickUpTool(tool)}
+                  >
+                    <ToolPicture kind={tool.picture} />
+                    <strong>{tool.name}</strong>
+                    {isRequired && <b className="lunar-required-tool-label">Required for Current Task</b>}
+                  </button>
+                );
+              })}
+            </div>
+            {equippedTool && <p role="status">Picked up and equipped: <strong>{equippedTool.name}</strong></p>}
+          </section>
+        </div>
+      )}
       {visibleEndOfDayNotices.length > 0 && (
           <div className="lunar-end-of-day-event-messages" role="status" aria-live="assertive">
             {visibleEndOfDayNotices.map((event) => (
@@ -2085,7 +2219,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                 ) : <p>All caught up!</p>}
               </div>
             </div>
-            <h3 className="lunar-day-report-impact-title">Your supplies</h3>
+            <h3 className="lunar-day-report-impact-title">Your resources</h3>
             <div className="lunar-day-report-resources">
               {RESOURCE_ITEMS.map(([resource, label]) => {
                 const start = Math.round(simulation.dayReport.resourceStart[resource]);

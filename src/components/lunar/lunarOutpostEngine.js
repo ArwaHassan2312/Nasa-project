@@ -2649,6 +2649,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           taskId: target.taskId ?? null,
           label: target.label || '',
           status: target.status || 'available',
+          isActive: target.isActive === true,
         }))
       : [];
     console.log(
@@ -5501,9 +5502,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
       hideTaskGuide();
       return [];
     }
-    const activeTargets = activeTaskTargets.filter(
-      (entry) => entry.status === 'inProgress' || entry.status === 'overdue',
-    );
+    const activeTargets = activeTaskTargets
+      .filter((entry) => entry.status === 'available' || entry.status === 'inProgress' || entry.status === 'overdue')
+      .sort((first, second) => Number(second.isActive) - Number(first.isActive));
     if (activeTargets.length === 0) {
       hideTaskGuide();
       return [];
@@ -5563,17 +5564,23 @@ export function createLunarEngine(canvas, callbacks = {}) {
 
     // Keep one deterministic task spot active; the beacon must not jump to a
     // different task as the player walks around the room.
+    const groundDistance = (anchor) => Math.hypot(
+      camera.position.x - anchor.worldPosition.x,
+      camera.position.z - anchor.worldPosition.z,
+    );
+    anchors.sort((first, second) => Number(second.target.isActive) - Number(first.target.isActive)
+      || groundDistance(first) - groundDistance(second));
     const beaconAnchor = anchors[0];
     const beacon = ensureTaskGuideBeacon();
     beacon.position.copy(beaconAnchor.worldPosition);
     beacon.visible = true;
 
-    const distance = camera.position.distanceTo(beaconAnchor.worldPosition);
+    const distance = groundDistance(beaconAnchor);
     return [{
       taskId: beaconAnchor.target.taskId,
       label: beaconAnchor.target.label,
       distance,
-      nearby: distance < 2.6,
+      nearby: distance < 3.4,
     }];
   }
 

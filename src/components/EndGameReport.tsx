@@ -36,13 +36,13 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   health: 'Crew health',
   radProtection: 'Crew health',
   comms: 'Power',
-  science: 'Food',
+  science: 'Science',
   emergencyReserve: 'Water',
   potentialWater: 'Water',
 };
 
 const VITAL_RESOURCES: ResourceKey[] = [
-  'oxygen', 'water', 'power', 'battery', 'food', 'health',
+  'oxygen', 'water', 'power', 'battery', 'food', 'health', 'science',
 ];
 
 const REPORT_RESOURCE_LABELS: Partial<Record<ResourceKey, string>> = {
@@ -112,7 +112,7 @@ export default function EndGameReport({
           </h2>
           <p className="report-intro">
             {isSuccess
-              ? `The outpost made it to Day ${day} of ${maxDays}. See how the crew’s choices, jobs, and supplies helped.`
+              ? `The outpost made it to Day ${day} of ${maxDays}. See how the crew’s choices, jobs, and resources helped.`
               : analysis.explanation[0]}
           </p>
         </header>
@@ -120,7 +120,7 @@ export default function EndGameReport({
         <section className="report-section">
           <h3>Mission summary</h3>
           <p>{isSuccess
-            ? `Mission completed on Day ${day} of ${maxDays}. See how your choices, jobs, problems, and supplies shaped the mission.`
+            ? `Mission completed on Day ${day} of ${maxDays}. See how your choices, jobs, problems, and resources shaped the mission.`
             : analysis.explanation[0]}</p>
           <div className="report-stat-grid report-summary-grid">
             <article className="report-stat-card"><span>How it went</span><strong>{isSuccess ? 'Mission complete' : 'Mission paused early'}</strong><small>{isSuccess ? 'The outpost made it through the mission' : `A supply got too low: ${failureReason ? REPORT_RESOURCE_LABELS[failureReason] ?? failureReason : 'check the bars'}`}</small></article>
@@ -167,13 +167,13 @@ export default function EndGameReport({
         </section>
 
         <section className="report-section">
-          <h3>Supplies</h3>
+          <h3>Resources</h3>
           <div className="report-analysis-list">
             {analysis.resourceAnalysis.map((item) => <article className="report-insight-card report-insight-card--neutral" key={item}><span aria-hidden="true">◉</span><p>{item}</p></article>)}
           </div>
           <div className="report-resource-grid" aria-label="Final vital resource status">
             {resourceMeters.map(({ resource, label, value }) => (
-              <div className={`report-resource-card${value <= MISSION_FAILURE_RESOURCE_THRESHOLD ? ' is-critical' : ''}`} key={resource}>
+              <div className={`report-resource-card${resource !== 'science' && value <= MISSION_FAILURE_RESOURCE_THRESHOLD ? ' is-critical' : ''}`} key={resource}>
                 <div><span>{label}</span><strong>{value}%</strong></div>
                 <progress value={value} max={100} aria-label={`${label}: ${value}%`} />
               </div>

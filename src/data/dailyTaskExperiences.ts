@@ -1,9 +1,10 @@
 import type { DailyChallengeDefinition } from './dailyChallenges';
+import type { ResourceKey } from './moonEvents';
 
 export interface TaskToolChoice {
   id: string;
   name: string;
-  picture: 'cable' | 'wrench' | 'brush' | 'patch' | 'tester' | 'watering' | 'checklist' | 'screwdriver' | 'clamp' | 'scissors' | 'gloves' | 'cloth';
+  picture: 'cable' | 'wrench' | 'brush' | 'patch' | 'filter' | 'tester' | 'watering' | 'checklist' | 'screwdriver' | 'clamp' | 'scissors' | 'gloves' | 'cloth';
 }
 
 export interface DailyTaskExperience {
@@ -16,6 +17,17 @@ export interface DailyTaskExperience {
   correctTool: string;
   action: string;
   fact: string;
+}
+
+export interface DailyTaskSolutionOption {
+  id: string;
+  name: string;
+  description: string;
+  playerDescription: string;
+  tool: TaskToolChoice;
+  toolExplanation: string;
+  resourceEffects: Partial<Record<ResourceKey, number>>;
+  conditionDelta: number;
 }
 
 const tool = (id: string, name: string, picture: TaskToolChoice['picture']): TaskToolChoice => ({ id, name, picture });
@@ -291,6 +303,239 @@ const VARIANT_EXPERIENCES: Record<string, Pick<DailyTaskExperience, 'scenario' |
     fact: 'Backups give people another way to keep important equipment working.',
   },
 };
+
+const option = (
+  name: string,
+  description: string,
+  requiredTool: TaskToolChoice,
+  resourceEffects: DailyTaskSolutionOption['resourceEffects'] = {},
+  conditionDelta = 1,
+): Omit<DailyTaskSolutionOption, 'id' | 'toolExplanation' | 'playerDescription'> => ({ name, description, tool: requiredTool, resourceEffects, conditionDelta });
+
+// Each task has its own workable approaches. Their resource changes are
+// scaled by task priority in the task experience UI.
+const TASK_SOLUTION_OPTIONS: Record<string, [Omit<DailyTaskSolutionOption, 'id' | 'toolExplanation' | 'playerDescription'>, Omit<DailyTaskSolutionOption, 'id' | 'toolExplanation' | 'playerDescription'>, Omit<DailyTaskSolutionOption, 'id' | 'toolExplanation' | 'playerDescription'>]> = {
+  'battery-readiness-check': [
+    option('Charge from the solar panels', 'Connect the battery to the panels for a quick charge. This uses more power now.', tool('cable', 'Charging cable', 'cable'), { power: -1, battery: 1 }, 2),
+    option('Charge it slowly', 'Use the charging cable at a lower rate to save power for other equipment.', tool('cable', 'Charging cable', 'cable'), { power: -1, battery: 2 }, 2),
+    option('Check the battery and send charge where it is needed', 'Test the battery first, then send charge to the cells that need it most.', tool('tester', 'Battery tester', 'tester'), { battery: 1 }, 3),
+  ],
+  'workshop-equipment-maintenance': [
+    option('Tighten the loose handle', 'Use the wrench to tighten the handle before the tool is used again.', tool('wrench', 'Wrench', 'wrench'), {}, 3),
+    option('Replace the handle screw', 'Fit a new screw so the handle stays firm for longer.', tool('screwdriver', 'Screwdriver', 'screwdriver'), {}, 3),
+    option('Take it apart and refit it', 'Remove the loose handle, clean the joint, and fit it back tightly.', tool('wrench', 'Wrench', 'wrench'), {}, 2),
+  ],
+  'habitat-waterline-inspection': [
+    option('Add a new band around the pipe', 'Replace the loose clamp around the dripping pipe joint.', tool('clamp', 'Pipe clamp', 'clamp'), {}, 3),
+    option('Seal the joint', 'Wrap the small leak with a fresh water-safe seal strip.', tool('patch', 'Pipe seal patch', 'patch'), {}, 2),
+    option('Tighten the pipe fitting', 'Use the pipe wrench to tighten the joint, then check for drips.', tool('wrench', 'Pipe wrench', 'wrench'), {}, 2),
+  ],
+  'habitat-air-seal-check': [
+    option('Replace the worn seal strip', 'Remove the old strip and press a fresh one around the doorway.', tool('patch', 'Fresh seal strip', 'patch'), {}, 3),
+    option('Clean and put the same seal back', 'Clean its groove and press the existing seal back into place.', tool('clamp', 'Door clamp', 'clamp'), {}, 2),
+    option('Test, then patch weak spots', 'Check where air could escape and patch only those small areas.', tool('tester', 'Air seal tester', 'tester'), { science: 1 }, 2),
+  ],
+  'solar-array-inspection': [
+    option('Brush dust off the panels', 'Use a soft brush to clear dust quickly from the sunlight-facing surface.', tool('brush', 'Soft dust brush', 'brush'), { power: 1 }, 2),
+    option('Wipe each panel gently', 'Use a clean cloth to remove dust without scratching the panels.', tool('cloth', 'Panel cloth', 'cloth'), {}, 2),
+    option('Clean the panel edges too', 'Use the brush to clear dust from the panel edges and hinges.', tool('brush', 'Soft dust brush', 'brush'), { power: 1 }, 3),
+  ],
+  'oxygen-loop-filter-service': [
+    option('Replace the dirty filter', 'Remove the dusty filter and fit a clean spare so air can flow again.', tool('filter-kit', 'Spare air filter kit', 'filter'), {}, 3),
+    option('Clean and reuse the filter', 'Brush dust from the filter and put it back in place.', tool('brush', 'Filter brush', 'brush'), { oxygen: -1 }, 2),
+    option('Check the airflow, then clean', 'Use the airflow tester to find the blocked area, then brush it clean.', tool('tester', 'Airflow tester', 'tester'), { science: 1 }, 2),
+  ],
+  'water-recycler-backflush': [
+    option('Replace the clogged filter', 'Fit a clean filter so the recycler can clean water again.', tool('filter-kit', 'Spare water filter kit', 'filter'), { water: 1 }, 3),
+    option('Rinse and reuse the filter', 'Brush away the blockage and flush the filter with saved water.', tool('brush', 'Cleaning brush', 'brush'), { water: -1 }, 2),
+    option('Test the water path', 'Check the water flow, then clear the blocked part of the filter.', tool('tester', 'Water tester', 'tester'), { science: 1 }, 2),
+  ],
+  'greenhouse-nutrient-balance': [
+    option('Mix fresh plant food', 'Add the right plant food and water to the feed tank.', tool('watering', 'Plant water jug', 'watering'), { water: -1 }, 2),
+    option('Clear the feed tube', 'Brush out the blocked tube so the plants receive their mix.', tool('brush', 'Feed-line brush', 'brush'), {}, 3),
+    option('Test the plant mix first', 'Check the mix, then adjust the water and plant food to suit the crop.', tool('tester', 'Plant-feed tester', 'tester'), { science: 1 }, 2),
+  ],
+  'food-storage-inventory': [
+    option('Move older meals to the front', 'Use the list to bring the soonest-to-expire packs forward.', tool('checklist', 'Food checklist', 'checklist'), {}, 2),
+    option('Sort meals by use-by date', 'Group packs by date so the crew can choose meals before they expire.', tool('checklist', 'Food checklist', 'checklist'), { food: 1 }, 2),
+    option('Check seals as you sort', 'Inspect each pack for damage, then move the oldest safe meals forward.', tool('gloves', 'Food gloves', 'gloves'), {}, 3),
+  ],
+  'solar-tracker-alignment': [
+    option('Set the tracker by hand', 'Turn the panel hinge toward the Sun and lock it in place.', tool('wrench', 'Hinge wrench', 'wrench'), { power: -1 }, 3),
+    option('Set the Sun sensor so panels follow the Sun', 'Use the alignment tool so the tracker can follow the Sun by itself.', tool('tester', 'Panel alignment tool', 'tester'), { science: 1 }, 3),
+    option('Aim panels at the strongest sunlight', 'Aim the panels for the strongest sunlight during this work period.', tool('tester', 'Panel alignment tool', 'tester'), {}, 2),
+  ],
+  'battery-terminal-inspection': [
+    option('Tighten the battery connection', 'Secure the loose terminal so power can flow safely.', tool('wrench', 'Insulated wrench', 'wrench'), { power: 1 }, 3),
+    option('Replace the worn wire holder', 'Replace the worn clamp that holds the wire against the battery.', tool('clamp', 'Cable clamp', 'clamp'), {}, 3),
+    option('Check the power reading and reconnect the wire', 'Check the power reading, then reconnect the wire firmly.', tool('tester', 'Power tester', 'tester'), { science: 1 }, 2),
+  ],
+  'nuclear-unit-coolant-check': [
+    option('Check the cooling water temperature', 'Read the temperature while the power unit is running.', tool('tester', 'Temperature checker', 'tester'), { science: 1 }, 2),
+    option('Look for a leak in the cooling pipe', 'Check the pipe joints and tighten any loose fitting.', tool('wrench', 'Pipe wrench', 'wrench'), {}, 3),
+    option('Compare warm and cool readings', 'Take readings before and after the unit runs to check its cooling.', tool('tester', 'Temperature checker', 'tester'), { science: 2 }, 3),
+  ],
+  'habitat-pressure-door-test': [
+    option('Run a seal test', 'Close the door and use the tester to check for escaping air.', tool('tester', 'Seal tester', 'tester'), { science: 1 }, 3),
+    option('Check the seal by hand', 'Look around the seal and patch any worn section you find.', tool('patch', 'Seal patch', 'patch'), {}, 2),
+    option('Adjust the door wheel', 'Tighten the wheel so the door presses evenly against its seal.', tool('wrench', 'Door wrench', 'wrench'), {}, 3),
+  ],
+  'radiation-shelter-seal-check': [
+    option('Replace the worn seal', 'Remove the weak strip and fit a new seal around the hatch.', tool('patch', 'Seal patch', 'patch'), {}, 3),
+    option('Patch the weak area', 'Cover the worn spot while keeping the rest of the seal in place.', tool('patch', 'Seal patch', 'patch'), {}, 2),
+    option('Test the hatch, then patch it', 'Find the small leak with the tester and patch that spot.', tool('tester', 'Leak tester', 'tester'), { science: 1 }, 3),
+  ],
+  'communications-mast-diagnostic': [
+    option('Tighten the antenna connection', 'Secure the loose cable where it joins the antenna.', tool('clamp', 'Antenna clip', 'clamp'), {}, 3),
+    option('Test and line up the antenna', 'Check the signal, then point the antenna for a clearer link.', tool('tester', 'Signal tester', 'tester'), { science: 1 }, 3),
+    option('Replace the signal cable', 'Fit a fresh cable if the old one is damaged.', tool('cable', 'Antenna cable', 'cable'), {}, 2),
+  ],
+  'medical-kit-expiry-audit': [
+    option('Move older items forward', 'Use the checklist to put the soonest-to-expire items in front.', tool('checklist', 'Supply checklist', 'checklist'), {}, 2),
+    option('Sort kits by what they treat', 'Group supplies so the crew can find the right kit quickly.', tool('checklist', 'Supply checklist', 'checklist'), {}, 2),
+    option('Check packs as you sort', 'Wear gloves and remove any pack with a damaged seal.', tool('gloves', 'Medical gloves', 'gloves'), {}, 3),
+  ],
+  'eva-suit-life-support-check': [
+    option('Replace the air hose', 'Fit a sound hose so air can reach the astronaut.', tool('patch', 'Hose repair kit', 'patch'), {}, 3),
+    option('Test the air flow', 'Check the air flow through the hose before the suit is used.', tool('tester', 'Suit air tester', 'tester'), { science: 1 }, 2),
+    option('Secure the hose joint', 'Fit a fresh clamp and test that the hose stays connected.', tool('clamp', 'Hose clamp', 'clamp'), {}, 3),
+  ],
+  'rover-wheel-and-brake-check': [
+    option('Tighten the wheel parts', 'Secure the wheel fasteners so it can turn safely.', tool('wrench', 'Wheel wrench', 'wrench'), {}, 3),
+    option('Check the tire pressure', 'Use the tire tester and add air if the tire is soft.', tool('tester', 'Tire tester', 'tester'), { power: -1 }, 2),
+    option('Adjust the brake cable', 'Tighten the brake cable, then test that the wheel stops.', tool('wrench', 'Wheel wrench', 'wrench'), {}, 3),
+  ],
+  'science-instrument-calibration': [
+    option('Match the telescope to a clear test picture', 'Use the calibration card so the telescope gives clear readings.', tool('tester', 'Calibration card', 'tester'), { science: 2 }, 3),
+    option('Clean the lens, then test it', 'Wipe the lens and check that the picture is clear.', tool('cloth', 'Lens cloth', 'cloth'), { science: 1 }, 2),
+    option('Adjust the telescope stand', 'Straighten and tighten the stand before checking the reading again.', tool('wrench', 'Tripod wrench', 'wrench'), {}, 2),
+  ],
+  'thermal-radiator-cleaning': [
+    option('Brush dust from the panels', 'Use the soft brush to clear dust quickly from the cooling panels.', tool('brush', 'Soft cleaning brush', 'brush'), { power: 1 }, 2),
+    option('Wipe between the panel fins', 'Use a cloth to reach dust left between the narrow spaces.', tool('cloth', 'Radiator cloth', 'cloth'), {}, 2),
+    option('Clean, then check the heat', 'Brush the dusty area and use the heat tester to check the result.', tool('tester', 'Heat tester', 'tester'), { science: 1 }, 3),
+  ],
+  'emergency-reserve-seal-audit': [
+    option('Replace the lid seal', 'Fit a fresh seal so dust and air stay out of the backup supplies.', tool('patch', 'Container patch', 'patch'), {}, 3),
+    option('Tighten the lid clamp', 'Secure the lid with a clamp so it closes tightly.', tool('clamp', 'Lid clamp', 'clamp'), {}, 2),
+    option('Test the seal, then fix it', 'Check for a leak and patch the small area that needs help.', tool('tester', 'Seal checker', 'tester'), { science: 1 }, 3),
+  ],
+  'greenhouse-harvest-and-preservation': [
+    option('Pick only the ready leaves', 'Cut ripe leaves and pack them carefully for meals.', tool('scissors', 'Plant scissors', 'scissors'), { food: 1 }, 2),
+    option('Harvest the full ripe tray', 'Pick all ready greens now so they do not spoil on the plant.', tool('scissors', 'Plant scissors', 'scissors'), { food: 2 }, 3),
+    option('Pick and record the crop', 'Harvest ripe leaves and note how well this crop grew.', tool('scissors', 'Plant scissors', 'scissors'), { science: 1, food: 1 }, 2),
+  ],
+  'communications-backup-beacon-test': [
+    option('Test the backup signal', 'Send a short test message and check that it comes through.', tool('tester', 'Radio tester', 'tester'), { science: 1 }, 2),
+    option('Check the antenna cable', 'Make sure the backup antenna has a firm power connection.', tool('cable', 'Backup power cable', 'cable'), { power: -1 }, 3),
+    option('Compare both radios', 'Test the backup and main radio so the crew knows which is clearer.', tool('tester', 'Radio tester', 'tester'), { science: 2 }, 3),
+  ],
+  'sensor-calibration': [
+    option('Match the sensor to a trusted reading', 'Use the calibration card to correct the sensor reading.', tool('tester', 'Calibration card', 'tester'), { science: 2 }, 3),
+    option('Clean the sensor lens first', 'Wipe away dust, then check the reading again.', tool('cloth', 'Sensor cloth', 'cloth'), { science: 1 }, 2),
+    option('Compare it with a spare reader', 'Check the sensor against a trusted reader and adjust it.', tool('tester', 'Calibration card', 'tester'), { science: 1 }, 2),
+  ],
+  'connection-integrity': [
+    option('Secure the loose connector', 'Fit a new clip so the two parts stay joined.', tool('clamp', 'Connector clip', 'clamp'), {}, 3),
+    option('Replace the worn connector', 'Swap the loose connector for a sound spare.', tool('cable', 'Connector cable', 'cable'), { power: -1 }, 3),
+    option('Test it after tightening', 'Use the connection tester, then secure the connector clip.', tool('tester', 'Connection tester', 'tester'), { science: 1 }, 2),
+  ],
+  'load-response': [
+    option('Run a gentle system test', 'Run the system gently and make sure it still works.', tool('tester', 'Test reader', 'tester'), {}, 2),
+    option('Try the system at a few power levels', 'Raise the load step by step and record how the system responds.', tool('tester', 'Test reader', 'tester'), { power: -1, science: 2 }, 3),
+    option('Compare before and after readings', 'Check the system readings, adjust it, then test once more.', tool('tester', 'Test reader', 'tester'), { science: 1 }, 3),
+  ],
+  'control-signal': [
+    option('Replace the signal cable', 'Fit a sound cable so the warning light gets a clear signal.', tool('cable', 'Signal cable', 'cable'), {}, 3),
+    option('Clean the light contact', 'Wipe the contact and reconnect it so the warning light works.', tool('cloth', 'Panel cloth', 'cloth'), {}, 2),
+    option('Test the signal, then reconnect', 'Use the tester to find the weak point and secure the connection.', tool('tester', 'Signal tester', 'tester'), { science: 1 }, 3),
+  ],
+  'thermal-stability': [
+    option('Clear the cooling vent', 'Brush dust from the vent so warm air can escape.', tool('brush', 'Vent brush', 'brush'), { power: 1 }, 3),
+    option('Check and set the temperature sensor', 'Use the reader to set the sensor, then check the temperature again.', tool('tester', 'Temperature reader', 'tester'), { science: 1 }, 2),
+    option('Open the airflow path', 'Check the vent and move anything blocking the cool air.', tool('brush', 'Vent brush', 'brush'), {}, 2),
+  ],
+  'backup-readiness': [
+    option('Run a short backup test', 'Switch to the backup briefly and check that it starts.', tool('tester', 'Backup tester', 'tester'), { science: 1 }, 3),
+    option('Check its power cable', 'Reconnect the cable and make sure the backup can charge.', tool('cable', 'Backup power cable', 'cable'), { power: -1 }, 3),
+    option('Check each item on the backup list', 'Check each backup step and confirm its status light is on.', tool('checklist', 'Backup checklist', 'checklist'), {}, 2),
+  ],
+};
+
+export function getDailyTaskSolutions(task: DailyChallengeDefinition, experience: DailyTaskExperience): DailyTaskSolutionOption[] {
+  const baseId = Object.keys(TASK_EXPERIENCES).sort((a, b) => b.length - a.length)
+    .find((id) => task.id === id || task.id.startsWith(`${id}-`));
+  const variantId = baseId && task.id !== baseId ? task.id.slice(baseId.length + 1) : '';
+  const definitions = TASK_SOLUTION_OPTIONS[variantId] ?? (baseId ? TASK_SOLUTION_OPTIONS[baseId] : undefined);
+  const priorityFactor = task.priority === 'critical' ? 3 : task.priority === 'high' ? 2 : 1;
+  const toolReasons: Record<string, string> = {
+    cable: `It connects the ${experience.brokenPart.toLowerCase()} to the power or signal it needs.`,
+    wrench: `It helps tighten or adjust the parts around the ${experience.brokenPart.toLowerCase()}.`,
+    brush: `It helps clear dust or a blockage from the ${experience.brokenPart.toLowerCase()}.`,
+    patch: `It helps seal or repair the ${experience.brokenPart.toLowerCase()}.`,
+    'filter-kit': `It gives you a clean filter to replace the one in the ${experience.brokenPart.toLowerCase()}.`,
+    tester: `It helps you check the ${experience.brokenPart.toLowerCase()} and see how it is working.`,
+    watering: 'It helps you add the right water and plant food to the feed system.',
+    checklist: 'It helps you keep track of the items or checks as you work.',
+    screwdriver: `It helps you remove or tighten the screw holding the ${experience.brokenPart.toLowerCase()}.`,
+    clamp: `It holds the ${experience.brokenPart.toLowerCase()} firmly in place.`,
+    scissors: 'They let you cut the ready leaves without hurting the rest of the plant.',
+    gloves: `They protect your hands while you handle the ${experience.brokenPart.toLowerCase()}.`,
+    cloth: `It helps you wipe dust or dirt from the ${experience.brokenPart.toLowerCase()}.`,
+  };
+  const getPlayerDescription = (name: string): string => {
+    const action = name.toLowerCase();
+    if (/charge from the solar panels/.test(action)) return 'Send power from the solar panels into the battery.';
+    if (/charge it slowly/.test(action)) return 'Add power to the battery little by little.';
+    if (/check the battery/.test(action)) return 'Find which battery cells need more charge.';
+    if (/test, then patch|test the hatch|run a seal test/.test(action)) return 'Check the seal, then cover any weak spots you find.';
+    if (/compare warm and cool/.test(action)) return 'Compare the water temperature before and after the unit runs.';
+    if (/compare both radios/.test(action)) return 'Try both radios and compare how clearly each one sends a message.';
+    if (/compare it with a spare|trusted reading/.test(action)) return 'Compare the reading with one known to be correct.';
+    if (/compare before and after/.test(action)) return 'Compare the system readings before and after the check.';
+    if (/look for a leak/.test(action)) return 'Look along the cooling pipe and its joints for a leak.';
+    if (/check the cooling water temperature/.test(action)) return 'Read how warm the cooling water is while the unit runs.';
+    if (/set the sun sensor|aim panels|tracker by hand/.test(action)) return 'Point the panels so they face the sunlight.';
+    if (/check the power reading and reconnect/.test(action)) return 'Read the power level, then reconnect the loose wire.';
+    if (/clean the lens|clean the sensor lens/.test(action)) return 'Wipe dust from the lens, then check what it can see.';
+    if (/pick and record/.test(action)) return 'Pick ripe leaves and note how the crop has grown.';
+    if (/harvest/.test(action)) return 'Pick the ripe greens from the tray.';
+    if (/pick only/.test(action)) return 'Choose and pick only the leaves that are ready.';
+    if (/replace/.test(action)) return `Take out the worn ${experience.brokenPart.toLowerCase()} and fit a fresh one.`;
+    if (/patch|seal the joint/.test(action)) return `Cover the weak spot on the ${experience.brokenPart.toLowerCase()}.`;
+    if (/tighten|secure|adjust/.test(action)) return `Make the loose parts around the ${experience.brokenPart.toLowerCase()} firm and steady.`;
+    if (/clean|wipe|brush/.test(action)) return `Clear dust or dirt from the ${experience.brokenPart.toLowerCase()}.`;
+    if (/sort/.test(action)) return 'Group the items so they are easy to find.';
+    if (/move .*forward|move .*front/.test(action)) return 'Put the items to use first where they are easy to reach.';
+    if (/mix fresh/.test(action)) return 'Prepare a fresh plant-food mix for the feed tank.';
+    if (/clear the feed tube/.test(action)) return 'Clear the blockage inside the plant feed tube.';
+    if (/test the plant mix/.test(action)) return 'Check the plant mix and adjust what goes into it.';
+    if (/check seals as you sort|check packs/.test(action)) return 'Look over each pack for a damaged seal as you sort.';
+    if (/test|check|read|match|calibrat/.test(action)) return `Check the ${experience.brokenPart.toLowerCase()} and see how it is working.`;
+    if (/run|try/.test(action)) return 'Run the system in the way described and watch how it responds.';
+    if (/aim|point|line up/.test(action)) return `Point the ${experience.brokenPart.toLowerCase()} in the right direction.`;
+    if (/open the airflow|clear the cooling vent/.test(action)) return 'Clear the path so air can move through the vent.';
+    return `Work on the ${experience.brokenPart.toLowerCase()} using the approach described above.`;
+  };
+  return (definitions ?? [
+    option('Repair the affected part', `Use the ${experience.action.toLowerCase()} method for ${experience.brokenPart.toLowerCase()}.`, experience.tools.find((item) => item.id === experience.correctTool) ?? experience.tools[0], {}, 1),
+  ]).map((definition, index) => ({
+    ...definition,
+    id: `${task.id}-solution-${index}`,
+    playerDescription: getPlayerDescription(definition.name),
+    toolExplanation: toolReasons[definition.tool.id] ?? `It helps you work on the ${experience.brokenPart.toLowerCase()}.`,
+    resourceEffects: Object.fromEntries(Object.entries(definition.resourceEffects).map(([key, amount]) => [key, amount * priorityFactor])) as DailyTaskSolutionOption['resourceEffects'],
+    conditionDelta: definition.conditionDelta * priorityFactor,
+  }));
+}
+
+export function getAllDailyTaskTools(): TaskToolChoice[] {
+  const allExperiences = [...Object.values(TASK_EXPERIENCES), ...Object.values(VARIANT_EXPERIENCES)];
+  return [...new Map([
+    ...allExperiences.flatMap((experience) => experience.tools),
+    ...Object.values(TASK_SOLUTION_OPTIONS).flatMap((options) => options.map((solution) => solution.tool)),
+  ].map((item) => [`${item.id}:${item.name}`, item])).values()];
+}
 
 export function getDailyTaskExperience(task: DailyChallengeDefinition): DailyTaskExperience {
   const baseId = Object.keys(TASK_EXPERIENCES)

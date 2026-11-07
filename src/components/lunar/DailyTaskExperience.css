@@ -5,6 +5,8 @@
   display: grid;
   place-items: center;
   overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   padding: 18px;
   background: rgba(3, 9, 17, 0.78);
   backdrop-filter: blur(8px);
@@ -16,6 +18,8 @@
   width: min(650px, 100%);
   max-height: min(900px, calc(100dvh - 36px));
   overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   padding: clamp(20px, 4vw, 32px);
   border: 1px solid rgba(122, 222, 235, 0.42);
   border-radius: 24px;
@@ -23,6 +27,8 @@
   background: linear-gradient(155deg, rgba(25, 48, 67, 0.99), rgba(10, 22, 38, 0.99));
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.52), 0 0 28px rgba(91, 211, 229, 0.14);
 }
+.daily-task-experience-backdrop::-webkit-scrollbar,
+.daily-task-experience::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 .daily-task-experience-close {
   position: absolute;
@@ -106,9 +112,16 @@
 .daily-task-tool-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .daily-task-tool-grid button { min-height: 162px; padding: 12px 9px; background: linear-gradient(160deg, rgba(76, 130, 154, 0.2), rgba(41, 77, 102, 0.2)); }
 .daily-task-tool-grid button strong { font-size: 0.88rem; line-height: 1.25; }
-.daily-task-tool-picture { display: grid; width: 54px; height: 54px; place-items: center; border: 1px solid rgba(163, 225, 233, 0.26); border-radius: 16px; color: #b9f1e1; background: rgba(89, 159, 165, 0.14); }
-.daily-task-tool-picture svg { width: 44px; height: 44px; }
-.daily-task-tool-picture.is-large { width: 86px; height: 86px; margin: 0 auto; border-radius: 24px; }
+.daily-task-solution-options button small { color: #c5d9e4; font-size: 0.77rem; font-weight: 400; line-height: 1.4; }
+.daily-task-option-icon { display: grid; width: 62px; height: 62px; place-items: center; border: 0; border-radius: 50%; color: #9ce8e2; background: rgba(67, 139, 152, 0.28); }
+.daily-task-option-icon svg { display: block; width: 42px; height: 42px; }
+.daily-task-solution-options button { transition: border-color 160ms ease, background 160ms ease, transform 160ms ease, box-shadow 160ms ease; }
+.daily-task-solution-options button:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22); }
+.daily-task-solution-options button:active { transform: scale(0.98); }
+.daily-task-solution-options button:focus-visible { border-color: #a8f1e7; box-shadow: 0 0 0 3px rgba(168, 241, 231, 0.16); }
+.daily-task-tool-picture { display: grid; width: 62px; height: 62px; place-items: center; border: 0; border-radius: 50%; color: #9ce8e2; background: rgba(67, 139, 152, 0.28); }
+.daily-task-tool-picture svg { width: 48px; height: 48px; }
+.daily-task-tool-picture.is-large { width: 86px; height: 86px; margin: 0 auto; }
 .daily-task-tool-picture.is-large svg { width: 70px; height: 70px; }
 
 .daily-task-hint { margin: 0; padding: 11px 13px; border: 1px solid rgba(255, 209, 137, 0.32); border-radius: 12px; color: #ffe5b6 !important; background: rgba(154, 107, 51, 0.16); font-size: 0.9rem !important; line-height: 1.45 !important; }
@@ -144,3 +157,23 @@
   .daily-task-tool-grid button,
   .daily-task-progress-fill { transition: none; }
 }
+.daily-task-solution-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.daily-task-solution-grid > button { display: grid; align-content: start; gap: 8px; min-height: 150px; padding: 12px; border: 1px solid rgba(121, 216, 230, 0.3); border-radius: 12px; color: inherit; background: rgba(16, 31, 43, 0.92); text-align: left; cursor: pointer; }
+.daily-task-solution-grid > button:hover { border-color: #c8ed8b; background: rgba(31, 52, 60, 0.96); }
+.daily-task-solution-grid > button strong { color: #c8ed8b; }
+.daily-task-solution-grid > button span, .daily-task-solution-grid > button small { color: #c5d3da; line-height: 1.4; }
+.daily-task-required-tool { display: flex; align-items: center; gap: 16px; }
+.daily-task-required-tool p { margin: 6px 0; }
+.lunar-tool-inventory { max-height: min(86vh, 760px); overflow: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.lunar-tool-inventory::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.lunar-tool-inventory .daily-task-tool-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.lunar-tool-inventory .daily-task-tool-picture { width: 48px; height: 48px; }
+.lunar-tool-inventory .daily-task-tool-picture svg { width: 38px; height: 38px; }
+.lunar-tool-inventory .daily-task-tool-grid button { display: grid; align-content: start; justify-items: center; gap: 7px; min-height: 118px; padding: 10px 6px; border: 1px solid rgba(121, 216, 230, 0.3); border-radius: 10px; color: #eef6f0; background: rgba(16, 31, 43, 0.92); text-align: center; cursor: pointer; transition: border-color 140ms ease, background 140ms ease, transform 140ms ease, box-shadow 140ms ease; }
+.lunar-tool-inventory .daily-task-tool-grid button strong { font-size: 0.75rem; line-height: 1.2; }
+.lunar-tool-inventory .daily-task-tool-grid button:hover { transform: translateY(-2px); border-color: #a2e8e7; background: rgba(28, 57, 69, 0.98); box-shadow: 0 8px 18px rgba(0, 0, 0, 0.2); }
+.lunar-tool-inventory .daily-task-tool-grid button[aria-pressed="true"], .lunar-tool-inventory .daily-task-tool-grid button.is-equipped { border-color: #c8ed8b; box-shadow: inset 0 0 0 1px rgba(200, 237, 139, 0.3); }
+.lunar-tool-inventory .daily-task-tool-grid button.is-required { border-color: #ffd47d; background: linear-gradient(150deg, rgba(88, 68, 31, 0.88), rgba(20, 35, 45, 0.96)); box-shadow: inset 0 0 0 1px rgba(255, 212, 125, 0.45), 0 0 16px rgba(255, 212, 125, 0.2); }
+.lunar-required-tool-label { justify-self: center; padding: 3px 7px; border-radius: 999px; background: rgba(255, 212, 125, 0.18); color: #ffe3a2; font-size: 0.62rem; letter-spacing: 0.03em; }
+@media (max-width: 640px) { .daily-task-solution-grid { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .lunar-tool-inventory .daily-task-tool-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
