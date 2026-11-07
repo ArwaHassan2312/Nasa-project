@@ -4,23 +4,32 @@ import test, { before, describe } from 'node:test';
 import { transformWithOxc } from 'vite';
 import {
   applyResourceEffects,
+  BASELINE_DAILY_CONSUMPTION,
   canTriggerLinkedTaskEvent,
   excludeTaskEventSources,
   getTaskCompletionResourceEffects,
-  getTaskEventRecovery,
+  getHalfResourceRestoration,
+  getElapsedResourceEffects,
+  findFailedEssentialResource,
   getTaskMissResourceEffects,
+  getSuccessfulEventResourceEffects,
   getResolvedLinkedTasks,
+  getUnresolvedEventOccurrenceIdsAtDayEnd,
   hasEventOccurredOnDay,
+  hasEventOccurredInSession,
   hasTaskEventOccurredOnDay,
   removeEventOccurrence,
-  shouldCreateEmergencyFollowUp,
-  shouldDeferCriticalTaskAtDayEnd,
+  selectRandomDailyTaskDefinitions,
   selectDailyTaskDefinitions,
+  selectUntriggeredCriticalTaskEvents,
+  settlePendingResourceEffects,
   startTaskOccurrence,
 } from './taskLifecycle.js';
 
 let scheduler;
 let events;
+let challengeDefinitions;
+let buildMissionFailureNarrative;
 
 before(async () => {
   const source = await readFile(new URL('./eventScheduler.ts', import.meta.url), 'utf8');
@@ -28,7 +37,17 @@ before(async () => {
   scheduler = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
   const eventSource = await readFile(new URL('../data/moonEvents.ts', import.meta.url), 'utf8');
   const transformedEvents = await transformWithOxc(eventSource, 'moonEvents.ts');
-  events = await import(`data:text/javascript;base64,${Buffer.from(transformedEvents.code).toString('base64')}`);
+  const eventModuleUrl = `data:text/javascript;base64,${Buffer.from(transformedEvents.code).toString('base64')}`;
+  events = await import(eventModuleUrl);
+  const challengeSource = await readFile(new URL('../data/dailyChallenges.ts', import.meta.url), 'utf8');
+  const transformedChallenges = await transformWithOxc(challengeSource, 'dailyChallenges.ts');
+  challengeDefinitions = await import(`data:text/javascript;base64,${Buffer.from(transformedChallenges.code).toString('base64')}`);
+  const narrativeSource = await readFile(new URL('../components/missionFailureNarrative.ts', import.meta.url), 'utf8');
+  const transformedNarrative = await transformWithOxc(narrativeSource, 'missionFailureNarrative.ts');
+  const narrativeCode = transformedNarrative.code.replaceAll('"../data/moonEvents"', `"${eventModuleUrl}"`);
+  ({ buildMissionFailureNarrative } = await import(
+    `data:text/javascript;base64,${Buffer.from(narrativeCode).toString('base64')}`
+  ));
 });
 
 function task(overrides = {}) {
@@ -44,32 +63,30 @@ function task(overrides = {}) {
     escalationDelayMs: 60_000,
     overdueEffectApplied: false,
     completionResourceEffects: { power: 3 },
-    missedResourceEffects: { battery: -7 },
+    missedResourceEffects: { battery: -1 },
     ...overrides,
   };
 }
 
 describe('task lifecycle', () => {
-  test('leaves unstarted Critical timers idle and starts only the selected task', () => {
+  test('starts a Critical response timer only when selected; incomplete tasks fail at day end', () => {
     const taskA = task({ id: 'a' });
     const taskB = task({ id: 'b' });
-    assert.equal(shouldDeferCriticalTaskAtDayEnd(taskA, 120_000), true);
     const startedA = startTaskOccurrence(taskA, 1, 10_000);
     const tasks = [taskA, taskB].map((entry) => entry.id === 'a' ? startedA : entry);
     assert.equal(tasks[0].urgentDeadlineAtMs, 70_000);
     assert.equal(tasks[1], taskB);
     assert.equal(tasks[1].urgentDeadlineAtMs, null);
-    assert.equal(shouldDeferCriticalTaskAtDayEnd(startedA, 20_000), true);
-    assert.equal(shouldDeferCriticalTaskAtDayEnd(startedA, 70_000), false);
+    assert.equal(startedA.urgentDeadlineAtMs, 70_000);
   });
 
-  test('only a started overdue task can trigger its own linked event', () => {
+  test('an overdue Critical task triggers its linked event whether started or not', () => {
     const eventA = { riskTaskIds: ['a'] };
     const overdueA = task({ id: 'a', status: 'overdue', startedDay: 1 });
-    const unstartedB = task({ id: 'b', status: 'overdue' });
+    const unstartedB = task({ id: 'a', status: 'overdue' });
     assert.equal(canTriggerLinkedTaskEvent(overdueA, eventA), true);
-    assert.equal(canTriggerLinkedTaskEvent(unstartedB, eventA), false);
-    assert.equal(canTriggerLinkedTaskEvent(task({ id: 'a', status: 'overdue' }), eventA), false);
+    assert.equal(canTriggerLinkedTaskEvent(unstartedB, eventA), true);
+    assert.equal(canTriggerLinkedTaskEvent(task({ id: 'a', status: 'available' }), eventA), false);
     assert.equal(canTriggerLinkedTaskEvent(task({
       id: 'a',
       priority: 'high',
@@ -77,25 +94,52 @@ describe('task lifecycle', () => {
     }), eventA), false);
   });
 
-  test('applies task resource effects by outcome and limits resource recovery to task events', () => {
-    assert.deepEqual(getTaskMissResourceEffects(task({ priority: 'high' })), { battery: -7 });
+  test('applies targeted task resource effects only once and avoids blanket event recovery', () => {
+    assert.deepEqual(getTaskMissResourceEffects(task({ priority: 'high' })), { battery: -1 });
     assert.deepEqual(getTaskMissResourceEffects(task({
       priority: 'high',
       overdueEffectApplied: true,
     })), {});
-    assert.deepEqual(getTaskMissResourceEffects(task()), {});
+    assert.deepEqual(getTaskMissResourceEffects(task({ missedResourceEffects: { power: -4 } })), { power: -4 });
+    assert.deepEqual(getTaskMissResourceEffects(task({
+      missedResourceEffects: { power: -4 },
+      overdueEffectApplied: true,
+    })), {});
     assert.deepEqual(getTaskCompletionResourceEffects(task()), { power: 3 });
-    assert.deepEqual(getTaskEventRecovery({ triggerSource: 'task', riskResources: ['power', 'oxygen'] }), {
-      power: 3,
-      oxygen: 3,
-    });
-    assert.deepEqual(getTaskEventRecovery({ triggerSource: 'independent', riskResources: ['power'] }), {});
   });
 
-  test('a resolved task-triggered event does not create an automatically started emergency task', () => {
-    const event = { triggerSource: 'task', emergencyTask: { title: 'follow-up' } };
-    assert.equal(shouldCreateEmergencyFollowUp(event), false);
-    assert.equal(shouldCreateEmergencyFollowUp({ ...event, triggerSource: 'independent' }), true);
+  test('recovery restores only half of the resources actually lost to the missed-task penalty', () => {
+    assert.deepEqual(getHalfResourceRestoration({ power: 20, water: 7, oxygen: 1 }), {
+      power: 10,
+      water: 4,
+      oxygen: 1,
+    });
+    assert.deepEqual(getHalfResourceRestoration({ power: 20 }), { power: 10 });
+  });
+
+  test('scales baseline resource use by elapsed time and clamps resource levels', () => {
+    const dailyUse = BASELINE_DAILY_CONSUMPTION;
+    const halfDay = getElapsedResourceEffects(dailyUse, 0, 60_000, 120_000);
+    const otherHalf = getElapsedResourceEffects(dailyUse, 60_000, 120_000, 120_000);
+    assert.equal(halfDay.power ?? 0, 0);
+    assert.equal(halfDay.oxygen ?? 0, 0);
+    assert.deepEqual({
+      ...Object.fromEntries(Object.keys(dailyUse).map((resource) => [
+        resource,
+        (halfDay[resource] ?? 0) + (otherHalf[resource] ?? 0),
+      ])),
+    }, dailyUse);
+    assert.deepEqual(getElapsedResourceEffects(dailyUse, 0, 500, 0), {});
+    assert.deepEqual(applyResourceEffects({ oxygen: 5, power: 98 }, { oxygen: -9, power: 20 }), {
+      oxygen: 4, power: 99,
+    });
+    assert.deepEqual(applyResourceEffects({ oxygen: 42.7 }, { oxygen: -0.8 }), { oxygen: 42 });
+  });
+
+  test('mission failure threshold applies to survival resources, not progress or equipment', () => {
+    assert.equal(findFailedEssentialResource({ oxygen: 10, water: 80, power: 80 }), 'oxygen');
+    assert.equal(findFailedEssentialResource({ science: 0, equipment: 0, health: 60 }), null);
+    assert.equal(findFailedEssentialResource({ battery: 9 }), 'battery');
   });
 
   test('only resolving a task-caused event completes its overdue linked task', () => {
@@ -127,6 +171,108 @@ describe('task lifecycle', () => {
       queuedEvents: [{ event: { day: 2 }, presented: false }],
     }), true);
     assert.equal(hasEventOccurredOnDay({ day: 2, eventHistory: [], currentEvent: null, queuedEvents: [] }), false);
+  });
+
+  test('session history recognizes task events by their regular Moon event source', () => {
+    assert.equal(hasEventOccurredInSession([
+      { eventId: 'task_power_failure', sourceEventId: 'power_failure' },
+    ], 'power_failure'), true);
+    assert.equal(hasEventOccurredInSession([
+      { eventId: 'power_failure' },
+    ], 'task_power_failure'), false);
+  });
+
+  test('day-end expiration collects unresolved active and queued events, but not an already resolving event', () => {
+    const active = { id: 'active-event', occurrenceId: 'active-1' };
+    const queued = { id: 'queued-event', occurrenceId: 'queued-1' };
+    assert.deepEqual(getUnresolvedEventOccurrenceIdsAtDayEnd(
+      active, [{ event: queued }], 'awaitingDecision',
+    ), ['active-1', 'queued-1']);
+    assert.deepEqual(getUnresolvedEventOccurrenceIdsAtDayEnd(
+      active, [{ event: queued }], 'resolving',
+    ), ['queued-1']);
+  });
+
+  test('day-end settlement applies pending incident losses once and clears them before the next day', () => {
+    const settled = settlePendingResourceEffects(
+      { power: 70, water: 50 },
+      { power: -12, water: -7 },
+    );
+    assert.deepEqual(settled, {
+      resources: { power: 58, water: 43 },
+      pendingResourceEffects: {},
+    });
+  });
+
+  test('successful event choices protect event-risk resources while retaining unrelated decision costs', () => {
+    assert.deepEqual(getSuccessfulEventResourceEffects(
+      { riskResources: ['power', 'battery'] },
+      { effects: { power: -10, battery: 5, science: -4, food: 2 } },
+    ), { battery: 5, science: -4, food: 2 });
+  });
+
+  test('selects zero, one, or multiple unresolved Critical task consequences without duplicates', () => {
+    const consequenceEvents = events.TASK_CONSEQUENCE_EVENTS;
+    const criticalTasks = consequenceEvents.slice(0, 2).map((event) => ({
+      id: event.riskTaskIds[0],
+      priority: 'critical',
+      status: 'overdue',
+      triggeredEventIds: [],
+    }));
+    const firstOnly = selectUntriggeredCriticalTaskEvents(
+      [criticalTasks[0]], consequenceEvents, [], [],
+    );
+    const both = selectUntriggeredCriticalTaskEvents(
+      criticalTasks, consequenceEvents, [], [],
+    );
+    const highPriorityTask = {
+      ...criticalTasks[0],
+      priority: 'high',
+    };
+
+    assert.deepEqual(selectUntriggeredCriticalTaskEvents([], consequenceEvents, [], []), []);
+    assert.deepEqual(selectUntriggeredCriticalTaskEvents(
+      [highPriorityTask], consequenceEvents, [], [],
+    ), []);
+    assert.equal(firstOnly.length, 1);
+    assert.equal(firstOnly[0].task.id, criticalTasks[0].id);
+    assert.equal(both.length, 2);
+    assert.equal(new Set(both.map(({ event }) => event.sourceEventId)).size, 2);
+    const sourceAlreadyOccurred = [{
+      eventId: firstOnly[0].event.sourceEventId,
+      sourceEventId: firstOnly[0].event.sourceEventId,
+      source: 'independent',
+    }];
+    assert.equal(selectUntriggeredCriticalTaskEvents(
+      [criticalTasks[0]], consequenceEvents, sourceAlreadyOccurred,
+    ).length, 1);
+    assert.equal(selectUntriggeredCriticalTaskEvents(
+      [criticalTasks[0]], consequenceEvents,
+      [{ eventId: firstOnly[0].event.id, sourceEventId: firstOnly[0].event.sourceEventId }],
+    ).length, 0);
+  });
+
+  test('a started Critical task that expires still triggers its unique linked event exactly once', () => {
+    const linkedEvent = events.TASK_CONSEQUENCE_EVENTS.find((event) => (
+      event.riskTaskIds.includes('solar-array-inspection')
+    ));
+    const started = startTaskOccurrence(task({
+      id: 'solar-array-inspection',
+      status: 'available',
+      triggeredEventIds: [],
+    }), 1, 10_000);
+    const expired = { ...started, status: 'overdue', urgentConsequenceApplied: true };
+
+    assert.equal(started.status, 'inProgress');
+    assert.equal(selectUntriggeredCriticalTaskEvents(
+      [expired], [linkedEvent], [{ eventId: linkedEvent.sourceEventId, source: 'independent' }],
+    ).length, 1);
+    assert.equal(selectUntriggeredCriticalTaskEvents(
+      [{ ...expired, status: 'completed' }], [linkedEvent], [],
+    ).length, 0);
+    assert.equal(selectUntriggeredCriticalTaskEvents(
+      [{ ...expired, triggeredEventIds: [linkedEvent.id] }], [linkedEvent], [],
+    ).length, 0);
   });
 
   test('a Day 1 independent event does not block the missed Critical task consequence', () => {
@@ -167,16 +313,63 @@ describe('task lifecycle', () => {
   });
 });
 
-test('an expired Power Failure event applies its defined severe losses once', () => {
+test('the one-point task/background update helper stays separate from authored event impact values', () => {
   const event = events.MOON_EVENTS.find(({ id }) => id === 'power_failure');
   const startingResources = {
     power: 100,
     battery: 100,
     equipment: 100,
   };
-  const failedResources = applyResourceEffects(startingResources, event.failureEffects);
-  assert.deepEqual(failedResources, { power: 82, battery: 88, equipment: 92 });
+  const failedResources = applyResourceEffects(startingResources, { power: -1, battery: -1, equipment: -1 });
+  assert.deepEqual(failedResources, { power: 99, battery: 99, equipment: 99 });
+  assert.deepEqual(event.failureEffects, { power: -30, battery: -25, equipment: -20 });
   assert.equal(startingResources.power, 100);
+});
+
+test('every Moon event has a relevant resource risk map and ongoing losses stay within that map', () => {
+  const penaltyProfiles = new Set();
+  for (const event of events.MOON_EVENTS) {
+    assert.ok(event.riskResources.length > 0, `${event.id} should retain its scheduler risk map`);
+    for (const resource of event.riskResources) {
+      assert.ok(event.failureEffects[resource] <= -15,
+        `${event.id} should apply a noticeable ${resource} loss on timeout`);
+    }
+    assert.deepEqual(Object.keys(event.failureEffects).sort(), [...event.riskResources].sort(),
+      `${event.id} should penalize only its directly affected resources`);
+    assert.ok(new Set(Object.values(event.failureEffects)).size > 1,
+      `${event.id} should scale losses to each resource's exposure`);
+    penaltyProfiles.add(Object.entries(event.failureEffects).sort().map(([resource, amount]) => `${resource}:${amount}`).join('|'));
+    for (const resource of Object.keys(event.failureEffects)) {
+      assert.ok(event.riskResources.includes(resource), `${event.id} failure ${resource} must be a mapped risk`);
+    }
+    for (const resource of Object.keys(event.initialResourceEffects ?? {})) {
+      assert.ok(event.riskResources.includes(resource), `${event.id} initial ${resource} must be a mapped risk`);
+    }
+    for (const resource of Object.keys(event.ongoingResourceEffects ?? {})) {
+      assert.ok(event.riskResources.includes(resource), `${event.id} ongoing ${resource} must be a mapped risk`);
+    }
+    for (const amount of Object.values(event.initialResourceEffects ?? {})) {
+      assert.ok(Number.isInteger(amount), `${event.id} initial impact must be an integer`);
+    }
+    for (const amount of Object.values(event.ongoingResourceEffects ?? {})) {
+      assert.ok(Number.isInteger(amount) && amount < 0, `${event.id} ongoing impact must be integer deterioration`);
+    }
+    for (const amount of Object.values(event.failureEffects)) {
+      assert.ok(Number.isInteger(amount), `${event.id} failure impact must be an integer`);
+    }
+    if (event.id !== 'water_ice_exploration') {
+      assert.ok(event.initialResourceEffects, `${event.id} should apply a defined incident-start impact`);
+      assert.ok(event.ongoingResourceEffects, `${event.id} should deteriorate while unresolved`);
+      assert.ok(Number.isInteger(event.ongoingEffectIntervalMs) && event.ongoingEffectIntervalMs > 0);
+    }
+  }
+  assert.equal(penaltyProfiles.size, events.MOON_EVENTS.length,
+    'Each event should have an event-specific unresolved-penalty profile');
+  const leak = events.MOON_EVENTS.find(({ id }) => id === 'water_leak');
+  assert.deepEqual(leak.ongoingResourceEffects, { water: -1, emergencyReserve: -1, oxygen: -1 });
+  assert.equal(leak.failureEffects.water, -30);
+  const waterSurvey = events.MOON_EVENTS.find(({ id }) => id === 'water_ice_exploration');
+  assert.equal(waterSurvey.ongoingResourceEffects, undefined);
 });
 
 test('independent event scheduling uses each day timer and can select at 20 seconds on every day', () => {
@@ -221,6 +414,44 @@ test('independent event scheduling uses each day timer and can select at 20 seco
     assert.equal(selected?.id, 'timing-probe');
   }
   assert.equal(scheduler.EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs, 20_000);
+});
+
+test('independent event scheduler skips events already seen in the gameplay session', () => {
+  const event = {
+    id: 'session-unique', minDay: 1, cooldownDays: 1, maxOccurrences: 5,
+    baseWeight: 1, affectedSystems: ['power'], riskResources: ['power'],
+  };
+  const input = {
+    events: [event], day: 4, maxDays: 30, dayDurationMs: 120_000,
+    elapsedMs: 380_000, independentElapsedMs: 20_000, rngState: 11,
+    flags: [],
+    systemConditions: { power: 100, lifeSupport: 100, water: 100, equipment: 100 },
+    resources: { power: 100, battery: 100, oxygen: 100, water: 100 },
+    eventHistory: [{ eventId: event.id, day: 1, elapsedMs: 20_000 }],
+    forceEvent: true,
+  };
+  const selection = scheduler.selectMajorEvent(input, 10_000);
+  assert.equal(selection.event, null);
+  assert.equal(selection.rngState, input.rngState);
+});
+
+test('task consequence source IDs exclude their regular Moon event from future draws', () => {
+  const event = {
+    id: 'power_failure', minDay: 1, cooldownDays: 1, maxOccurrences: 3,
+    baseWeight: 1, affectedSystems: ['power'], riskResources: ['power'],
+  };
+  const selection = scheduler.selectMajorEvent({
+    events: [event], day: 4, maxDays: 30, dayDurationMs: 120_000,
+    elapsedMs: 380_000, independentElapsedMs: 20_000, rngState: 5,
+    flags: [],
+    systemConditions: { power: 100, lifeSupport: 100, water: 100, equipment: 100 },
+    resources: { power: 100, battery: 100, oxygen: 100, water: 100 },
+    eventHistory: [{
+      eventId: 'task_power_failure', sourceEventId: event.id, day: 1, elapsedMs: 20_000,
+    }],
+    forceEvent: true,
+  }, 10_000);
+  assert.equal(selection.event, null);
 });
 
 test('Day 1 independent event is guaranteed at 20 seconds, even if the ordinary roll misses', () => {
@@ -333,6 +564,88 @@ test('new day task generation replaces prior High and Critical tasks', () => {
   }
 });
 
+test('random daily challenge selection varies between three and four tasks without session repeats', () => {
+  const definitions = [
+    ...Array.from({ length: 3 }, (_, index) => ({ id: `critical-${index}`, priority: 'critical' })),
+    ...Array.from({ length: 7 }, (_, index) => ({ id: `high-${index}`, priority: 'high' })),
+    ...Array.from({ length: 8 }, (_, index) => ({ id: `normal-${index}`, priority: 'normal' })),
+  ];
+  const generated = [];
+  const taskCounts = [];
+  let previousTaskIds = [];
+  for (let day = 1; day <= 30; day += 1) {
+    const tasks = selectRandomDailyTaskDefinitions(definitions, day, 0x1248abcd, previousTaskIds);
+    assert.ok(tasks.length <= 4);
+    if (definitions.length - previousTaskIds.length >= 3) {
+      assert.ok(tasks.length >= 3);
+    }
+    assert.equal(new Set(tasks.map(({ id }) => id)).size, tasks.length);
+    assert.equal(tasks.some(({ id }) => previousTaskIds.includes(id)), false);
+    assert.ok(tasks.filter(({ priority }) => priority === 'critical').length <= 1);
+    if (tasks.length > 0) {
+      assert.ok(tasks.some(({ priority }) => priority === 'normal' || priority === 'high'));
+    }
+    generated.push(tasks.map(({ id }) => id).sort().join('|'));
+    taskCounts.push(tasks.length);
+    previousTaskIds = [...previousTaskIds, ...tasks.map(({ id }) => id)];
+  }
+  assert.ok(new Set(generated.filter(Boolean)).size > 2);
+  assert.ok(taskCounts.includes(3));
+  assert.ok(taskCounts.includes(4));
+  assert.equal(taskCounts.at(-1), 0);
+});
+
+test('the mission task pool supplies three or four fresh task IDs on every mission day', () => {
+  const definitions = challengeDefinitions.DAILY_CHALLENGES;
+  const usedTaskIds = [];
+  for (let day = 1; day <= 30; day += 1) {
+    const tasks = selectRandomDailyTaskDefinitions(definitions, day, 0x6a09e667, usedTaskIds);
+    assert.ok(tasks.length >= 3 && tasks.length <= 4, `day ${day} should receive 3–4 tasks`);
+    assert.equal(tasks.some(({ id }) => usedTaskIds.includes(id)), false);
+    usedTaskIds.push(...tasks.map(({ id }) => id));
+  }
+  assert.equal(new Set(usedTaskIds).size, usedTaskIds.length);
+});
+
+test('every Critical daily challenge has a timer and a matching task consequence event', () => {
+  const tasks = challengeDefinitions.DAILY_CHALLENGES;
+  const criticalTasks = tasks.filter(
+    ({ priority }) => priority === 'critical',
+  );
+  assert.ok(criticalTasks.length >= 3);
+  for (const task of criticalTasks) {
+    assert.ok(task.responseDeadlineMs > 0, `${task.id} must have a response timer`);
+    assert.ok(events.TASK_CONSEQUENCE_EVENTS.some((event) => (
+      event.riskTaskIds?.includes(task.id)
+    )), `${task.id} must link to its consequence event`);
+  }
+  assert.ok(challengeDefinitions.DAILY_CHALLENGES
+    .filter(({ priority }) => priority !== 'critical')
+    .every((task) => !events.TASK_CONSEQUENCE_EVENTS.some((event) => (
+      event.riskTaskIds?.includes(task.id)
+    ))));
+  for (const task of tasks.filter(({ priority }) => priority === 'high')) {
+    assert.ok(Object.keys(task.missedResourceEffects ?? {}).length > 0,
+      `${task.id} must have a targeted missed-task resource impact`);
+  }
+  for (const task of tasks.filter(({ priority }) => priority === 'normal')) {
+    assert.ok(Object.keys(task.missedResourceEffects ?? {}).length > 0,
+      `${task.id} should have a small, targeted missed-task resource impact`);
+    assert.ok(task.overdueConditionLoss <= 1,
+      `${task.id} should have only a negligible missed-task condition impact`);
+  }
+  for (const task of tasks) {
+    const rewards = Object.values(task.completionResourceEffects ?? {});
+    assert.ok(rewards.length > 0 && rewards.some((reward) => reward > 0),
+      `${task.id} should provide a relevant resource reward when completed`);
+    const minimumReward = task.priority === 'critical' ? 5
+      : task.priority === 'high' ? 3
+        : 2;
+    assert.ok(rewards.some((reward) => reward >= minimumReward),
+      `${task.id} should receive a reward appropriate to its ${task.priority} priority`);
+  }
+});
+
 test('the independent-event delay resets on a new day while campaign cooldown time stays cumulative', () => {
   const event = {
     id: 'timing-probe', minDay: 1, cooldownDays: 1, maxOccurrences: 1,
@@ -357,4 +670,54 @@ test('the independent-event delay resets on a new day while campaign cooldown ti
     }, 10_000).event;
   }
   assert.equal(selected?.id, 'timing-probe');
+});
+
+test('mission failure analysis summarizes recorded behavior without listing task or event names', () => {
+  const taskEvent = events.TASK_CONSEQUENCE_EVENTS.find((event) => (
+    event.riskTaskIds.includes('solar-array-inspection')
+  ));
+  const narrative = buildMissionFailureNarrative({
+    day: 3,
+    failureReason: 'power',
+    threshold: 10,
+    resources: { power: 8, battery: 12, oxygen: 44, water: 50 },
+    tasks: [{
+      id: 'solar-array-inspection',
+      title: 'Inspect Solar Array',
+      priority: 'critical',
+      status: 'overdue',
+      day: 2,
+      affectedSystem: 'power',
+    }],
+    events: [{ eventId: taskEvent.id, day: 2, occurrenceId: 'task-solar-array-inspection-2' }],
+    outcomes: [{
+      eventId: taskEvent.id,
+      eventName: taskEvent.name,
+      day: 2,
+      occurrenceId: 'task-solar-array-inspection-2',
+      status: 'expired',
+      feedback: taskEvent.failureFeedback,
+      resourceChanges: { power: -24, battery: -20 },
+    }],
+    decisions: [{
+      day: 1,
+      eventName: 'Power Failure',
+      decisionLabel: 'Reroute Through the Battery Bus',
+      actualOutcome: 'Battery -10; Power +5',
+      resourceChanges: { battery: -10, power: 5 },
+    }],
+  });
+
+  assert.match(narrative.explanation[0], /Day 3/);
+  assert.match(narrative.explanation[0], /Power ended at 8%/);
+  assert.match(narrative.explanation[0], /1 missed Critical\/High task/);
+  assert.match(narrative.explanation[0], /1 unresolved event/);
+  assert.equal(narrative.explanation[0].includes('Inspect Solar Array'), false);
+  assert.equal(narrative.explanation[0].includes(taskEvent.name), false);
+  assert.equal(narrative.stats.completedTasks, 0);
+  assert.equal(narrative.stats.missedTasks, 1);
+  assert.equal(narrative.stats.taskCompletionRate, 0);
+  assert.equal(narrative.stats.resolvedEvents, 0);
+  assert.equal(narrative.stats.unresolvedEvents, 1);
+  assert.equal(narrative.behavior[1].detail, '1 missed · 100%');
 });

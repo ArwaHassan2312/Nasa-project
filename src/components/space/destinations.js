@@ -1,40 +1,40 @@
 export const DESTINATIONS = {
   moon: {
-    eyebrow: 'Mission briefing // Destination 01',
+    eyebrow: 'Moon mission',
     title: 'Moon',
-    type: 'Earth’s natural satellite',
+    type: 'The Moon travels around Earth',
     stats: [
       { label: 'Gravity', value: '16.5% of Earth' },
       { label: 'Temperature', value: '+127°C to −173°C' },
-      { label: 'Day–night cycle', value: '≈ 29.5 Earth days' },
+      { label: 'One day and night', value: 'About 29.5 Earth days' },
     ],
     sections: [
       {
-        heading: 'Atmosphere & radiation',
-        body: 'The Moon has almost no atmosphere and no global magnetic field, leaving its surface highly exposed to solar and cosmic radiation.',
+        heading: 'Air and space radiation',
+        body: 'The Moon has almost no air or magnetic shield. Radiation from the Sun and space can reach the ground.',
       },
       {
-        heading: 'Temperature & day–night cycle',
-        body: 'Temperatures range from about 127°C to −173°C, and its day-night cycle lasts about 29.5 Earth days, creating major energy challenges.',
+        heading: 'Heat and cold',
+        body: 'Temperatures can go from about 127°C to −173°C. Day and night together last about 29.5 Earth days, so saving power is important.',
       },
       {
-        heading: 'Gravity & terrain',
-        body: 'Its gravity is only 16.5% of Earth’s. The surface is covered with lunar regolith and contains craters, mountains, valleys, and plains.',
+        heading: 'Gravity and ground',
+        body: 'Gravity is only 16.5% of Earth’s. The ground has Moon dust, craters, mountains, valleys, and flat plains.',
       },
       {
-        heading: 'Water resources',
-        body: 'Water ice may exist in permanently shadowed polar regions and could be used for drinking, life support, oxygen, and fuel.',
+        heading: 'Water',
+        body: 'Ice may be hidden in dark places near the poles. It could help provide drinking water, air, and fuel.',
       },
       {
         heading: 'Energy',
-        body: 'Solar energy is abundant in illuminated areas, but the long lunar night makes reliable energy storage or alternative power sources necessary.',
+        body: 'Sunlight can make lots of power, but the long Moon night means the outpost must save power or find another source.',
       },
     ],
   },
   mars: {
-    eyebrow: 'Mission briefing // Destination 02',
+    eyebrow: 'Mars mission',
     title: 'Mars',
-    type: 'Fourth planet from the Sun',
+    type: 'The fourth planet from the Sun',
     stats: [
       { label: 'Gravity', value: '38% of Earth' },
       { label: 'Atmosphere', value: 'Very thin · ≈ 95% CO₂' },
@@ -42,24 +42,24 @@ export const DESTINATIONS = {
     ],
     sections: [
       {
-        heading: 'Atmosphere & radiation',
-        body: 'Mars has a very thin atmosphere made mostly of carbon dioxide (~95%), which provides limited protection from radiation and cannot support human breathing. It has no global magnetic field, so radiation remains a major risk.',
+        heading: 'Air and space radiation',
+        body: 'Mars has very thin air. About 95% is carbon dioxide. People cannot breathe it, and it gives little protection from radiation. Mars has no magnetic shield, so radiation is still a danger.',
       },
       {
-        heading: 'Climate & gravity',
-        body: 'Temperatures are generally very cold and vary by location and season. Mars has 38% of Earth’s gravity.',
+        heading: 'Weather and gravity',
+        body: 'Mars is usually very cold, but the temperature changes by place and season. Its gravity is 38% of Earth’s.',
       },
       {
         heading: 'Terrain',
-        body: 'Diverse terrain including plains, craters, dunes, valleys, and volcanoes.',
+        body: 'Mars has plains, craters, sand dunes, valleys, and volcanoes.',
       },
       {
-        heading: 'Water & resources',
-        body: 'Water ice exists mainly underground and near the polar regions, making it an important resource for future settlements. Its atmosphere and surface resources could potentially be used to produce oxygen, water, and other supplies needed for a long-term outpost.',
+        heading: 'Water and supplies',
+        body: 'Most water ice is underground or near the poles. It could help future homes. Mars’s air and ground may also help make oxygen, water, and other supplies for a long stay.',
       },
       {
         heading: 'Hazards',
-        body: 'Mars also experiences winds and dust storms, which can reduce solar power and damage equipment.',
+        body: 'Strong winds and dust storms can block sunlight and damage machines.',
       },
     ],
   },

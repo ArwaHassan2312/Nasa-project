@@ -8,6 +8,7 @@ export interface EventOccurrence {
   independentElapsedMs?: number;
   source?: 'independent' | 'task';
   occurrenceId?: string;
+  sourceEventId?: string;
 }
 
 export interface EventSchedulerInput {
@@ -21,6 +22,7 @@ export interface EventSchedulerInput {
   systemConditions: Record<SystemKey, number>;
   resources: Record<ResourceKey, number>;
   eventHistory: EventOccurrence[];
+  seenEventIds?: string[];
   forceEvent?: boolean;
   ignoreMinimumDay?: boolean;
   ignorePreventedByFlags?: boolean;
@@ -32,10 +34,15 @@ export const EVENT_SCHEDULER_CONFIG = {
   maximumGapDays: 5.5,
   firstEventEarliestDay: 1,
   minimumIndependentEventElapsedMs: 20_000,
+  maximumIndependentEventElapsedMs: 60_000,
   baseDailyProbability: 0.18,
   elevatedSeverityCondition: 40,
   criticalSeverityCondition: 20,
 } as const;
+
+export function getIndependentEventWindowEndMs(dayDurationMs: number): number {
+  return Math.min(dayDurationMs / 2, EVENT_SCHEDULER_CONFIG.maximumIndependentEventElapsedMs);
+}
 
 function nextRandom(state: number): { value: number; state: number } {
   let nextState = (state + 0x6D2B79F5) >>> 0;
@@ -58,20 +65,24 @@ export function selectMajorEvent(
     maxDays,
     dayDurationMs,
     elapsedMs,
-    independentElapsedMs = elapsedMs,
+    independentElapsedMs,
     flags,
     systemConditions,
     resources,
     eventHistory,
+    seenEventIds = [],
     forceEvent = false,
     ignoreMinimumDay = false,
     ignorePreventedByFlags = false,
   } = input;
+  const independentWindowEndMs = getIndependentEventWindowEndMs(dayDurationMs);
+  const selectionElapsedMs = independentElapsedMs ?? elapsedMs;
   if (
     day < EVENT_SCHEDULER_CONFIG.firstEventEarliestDay
     || day > maxDays
     || !Number.isFinite(dayDurationMs)
     || dayDurationMs <= 0
+    || (independentElapsedMs !== undefined && selectionElapsedMs >= independentWindowEndMs)
   ) {
     return { event: null, rngState: input.rngState };
   }
@@ -107,15 +118,21 @@ export function selectMajorEvent(
   });
   if (eligible.length === 0) return { event: null, rngState: input.rngState };
 
-  const seenIds = new Set(eventHistory.map((entry) => entry.eventId));
+  const seenIds = new Set([
+    ...eventHistory.flatMap((entry) => [entry.eventId, entry.sourceEventId]),
+    ...seenEventIds,
+  ].filter((id): id is string => Boolean(id)));
   const unencountered = eligible.filter((event) => !seenIds.has(event.id));
-  const candidates = unencountered.length > 0 ? unencountered : eligible;
+  // Independent Moon events are session-unique. Once every eligible event has
+  // occurred, leave the scheduler idle instead of cycling back to old events.
+  const candidates = unencountered;
+  if (candidates.length === 0) return { event: null, rngState: input.rngState };
 
   const overdue = daysSinceLastEvent >= EVENT_SCHEDULER_CONFIG.maximumGapDays;
   let rngState = input.rngState;
   if (
     !forceEvent
-    && independentElapsedMs < EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs
+    && selectionElapsedMs < EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs
   ) {
     return { event: null, rngState: input.rngState };
   }
@@ -132,7 +149,12 @@ export function selectMajorEvent(
       EVENT_SCHEDULER_CONFIG.baseDailyProbability * readinessMultiplier * riskMultiplier,
       0.75,
     );
-    const intervalProbability = 1 - (1 - dailyProbability) ** (intervalMs / dayDurationMs);
+    const selectionWindowMs = Math.max(
+      intervalMs,
+      (independentElapsedMs === undefined ? dayDurationMs : independentWindowEndMs)
+        - EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs,
+    );
+    const intervalProbability = 1 - (1 - dailyProbability) ** (intervalMs / selectionWindowMs);
     if (roll.value >= intervalProbability) return { event: null, rngState };
   }
 

@@ -12,7 +12,6 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 // The rover asset is a single skinned mesh, so a plain Object3D.clone() would
 // leave every copy sharing one skeleton. SkeletonUtils rebuilds the bone rig.
 import { clone as cloneSkinnedRig } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { DAILY_CHALLENGES } from '../../data/dailyChallenges';
 import { loadDownscaledTexture } from '../../utils/textureUtils';
 
 // ─── Player camera ───────────────────────────────────────────────────────────
@@ -264,8 +263,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let mapBounds = null;
   const eventVisualizations = new Map();
   let currentEventAnimations = null;
-  let challengeMarkerGroup = null;
-  let challengeReadinessFlags = [];
   let eventCinematic = null;
   const queuedEventPresentations = [];
   const EVENT_TARGET_PREFIXES = {
@@ -289,10 +286,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let airlockTriggerRadius = 0;
   let airlockInterior = null;
   let airlockInteriorBounds = null;
+  let airlockTaskMarkerObject = null;
   let airlockCenter = new THREE.Vector3();
   let airlockInteriorLight = null;
   let greenhouseInterior = null;
   let greenhouseInteriorBounds = null;
+  let greenhouseTaskMarkerObject = null;
   let greenhouseCenter = new THREE.Vector3();
   let greenhouseInteriorLight = null;
   let componentTargets = [];
@@ -310,6 +309,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let activeModuleMaterials = [];
   let moduleReturnMode = 'exterior';
   let activeTaskTargets = [];
+  let taskGuideBeacon = null;
   let taskConsoleGroup = null;
   let taskConsoleInner = null;
   // One dedicated button + label per daily task bound to the entered component.
@@ -528,71 +528,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const bounds = new THREE.Box3();
     matchedObjects.forEach(object => bounds.expandByObject(object));
     return { bounds, objects: matchedObjects };
-  }
-
-  function setChallengeFlags(flags) {
-    challengeReadinessFlags = [...flags];
-    if (challengeMarkerGroup) {
-      outpostRoot?.remove(challengeMarkerGroup);
-      challengeMarkerGroup.traverse(object => {
-        object.geometry?.dispose();
-        if (object.material) {
-          const materials = Array.isArray(object.material) ? object.material : [object.material];
-          materials.forEach(material => material.dispose());
-        }
-      });
-      challengeMarkerGroup = null;
-    }
-    if (!outpostRoot || flags.length === 0) return;
-
-    const readyFlags = new Set(flags);
-    const group = new THREE.Group();
-    group.name = 'Daily challenge readiness markers';
-
-    for (const challenge of DAILY_CHALLENGES) {
-      if (!readyFlags.has(challenge.readinessFlag)) continue;
-      let component = null;
-      outpostRoot.traverse(object => {
-        if (!component && object.name.startsWith(`${challenge.targetComponentId}-`)) {
-          component = object;
-        }
-      });
-      if (!component) {
-        console.error(
-          `[Daily challenge] No outpost component found for "${challenge.title}" target ${challenge.targetComponentId}.`,
-        );
-        continue;
-      }
-
-      const bounds = new THREE.Box3().setFromObject(component);
-      if (bounds.isEmpty()) continue;
-      const size = bounds.getSize(new THREE.Vector3());
-      const localPosition = outpostRoot.worldToLocal(
-        new THREE.Vector3(
-          (bounds.min.x + bounds.max.x) / 2,
-          bounds.max.y + Math.max(size.y * 0.2, 0.8),
-          (bounds.min.z + bounds.max.z) / 2,
-        ),
-      );
-      const marker = new THREE.Mesh(
-        new THREE.OctahedronGeometry(Math.max(Math.max(size.x, size.z) * 0.075, 0.7)),
-        new THREE.MeshStandardMaterial({
-          color: 0x64e8d2,
-          emissive: 0x1bcab5,
-          emissiveIntensity: 1.8,
-          metalness: 0.15,
-          roughness: 0.3,
-        }),
-      );
-      marker.position.copy(localPosition);
-      marker.name = `Readiness verified: ${challenge.id}`;
-      group.add(marker);
-    }
-
-    if (group.children.length > 0) {
-      challengeMarkerGroup = group;
-      outpostRoot.add(group);
-    }
   }
 
   function createWorldExposureSnapshot() {
@@ -1054,6 +989,22 @@ export function createLunarEngine(canvas, callbacks = {}) {
       return;
     }
     startEventReturn(onReturned);
+  }
+
+  function clearEventPresentations(occurrenceIds) {
+    const ids = new Set(occurrenceIds.filter(Boolean));
+    if (ids.size === 0) return;
+    for (let index = queuedEventPresentations.length - 1; index >= 0; index -= 1) {
+      if (ids.has(queuedEventPresentations[index].occurrenceId)) {
+        queuedEventPresentations.splice(index, 1);
+      }
+    }
+    if (eventCinematic && ids.has(eventCinematic.occurrenceId)) {
+      const cinematic = eventCinematic;
+      eventCinematic = null;
+      restoreWorldExposure(cinematic.snapshot);
+      startNextEventPresentation();
+    }
   }
 
   function returnToOutpostOverview() {
@@ -2463,10 +2414,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
           buildEventVisualization();
 
           addOutpostPartLabels(outpost);
-          // Rasterize the component surfaces into walker collision: their walls
-          // stop the walker, while ramps and low decks stay climbable.
-          rebuildOutpostSpatial(outpost);
-          setChallengeFlags(challengeReadinessFlags);
+          componentTargets = buildComponentTargets(outpost);
+          mapComponents = buildMapComponents(outpost);
+          // Rasterize the component surfaces into walker collision: their
+          // walls stop the walker, while ramps and low decks stay climbable.
+          outpostHeightField = buildOutpostHeightField(outpost);
+          refreshMapBounds();
           startNextEventPresentation();
 
           const airlockEntrance = outpost.getObjectByName('005-airlock-with-dust-lock-vestibule');
@@ -2908,9 +2861,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
     }[unit.status] ?? { emissive: 0x1e9e5c, intensity: 0.7 };
     unit.button.material.emissive.set(styles.emissive);
     unit.button.material.emissiveIntensity = styles.intensity;
+    // The world-space red guide beacon replaces the old green task marker.
+    unit.button.visible = false;
     // Only activated tasks get units here. The label sits above the button;
     // completed units never appear because they are removed on completion.
-    unit.labelSprite.visible = unit.status !== 'standby';
+    unit.labelSprite.visible = false;
     drawTaskConsoleUnitLabel(unit);
   }
 
@@ -3040,7 +2995,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     taskConsoleActive = taskConsoleUnits.some(
       unit => unit.status === 'inProgress' || unit.status === 'overdue',
     );
-    if (taskConsoleArrow) taskConsoleArrow.visible = taskConsoleActive;
+    if (taskConsoleArrow) taskConsoleArrow.visible = false;
   }
 
   function unmountTaskConsole() {
@@ -3372,6 +3327,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
     });
     airlockInterior = interior;
     airlockInteriorBounds = new THREE.Box3().setFromObject(interior);
+    airlockTaskMarkerObject = null;
+    interior.traverse((object) => {
+      if (!airlockTaskMarkerObject && /door|hatch|seal/i.test(object.name ?? '') && object.isMesh) {
+        airlockTaskMarkerObject = object;
+      }
+    });
     airlockCenter = airlockInteriorBounds.getCenter(new THREE.Vector3());
   }
 
@@ -3518,6 +3479,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const rows = Math.max(1, Math.floor((maxZ - minZ) / spacing) + 1);
     const tomatoes = new THREE.Group();
     tomatoes.name = 'Greenhouse Tomato Plants';
+    greenhouseTaskMarkerObject = tomatoes;
     greenhouseInterior.updateMatrixWorld(true);
     const floorLocalY = greenhouseInterior.worldToLocal(new THREE.Vector3(0, greenhouseInteriorBounds.min.y, 0)).y;
 
@@ -5277,8 +5239,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
       }
       return;
     }
-    // Smooth the ride so pads and the airlock ramp read as climbing steps
-    // instead of teleporting the camera: quick uphill, gentle downhill.
+    // Smooth the ride across pads and uneven terrain instead of teleporting
+    // the camera: quick uphill, gentle downhill.
     const rate = targetY > camera.position.y ? 20 : 9;
     camera.position.y += (targetY - camera.position.y) * Math.min(1, Math.max(dt, 0) * rate);
   }
@@ -5704,18 +5666,159 @@ export function createLunarEngine(canvas, callbacks = {}) {
     };
   }
 
+  function ensureTaskGuideBeacon() {
+    if (taskGuideBeacon) return taskGuideBeacon;
+    taskGuideBeacon = new THREE.Group();
+    taskGuideBeacon.name = 'Daily Task Guide Beacon';
+
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.72, 1.02, 2.35, 40, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xff465f,
+        transparent: true,
+        opacity: 0.27,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    beam.position.y = 1.175;
+    beam.renderOrder = 5;
+
+    const floorGlow = new THREE.Mesh(
+      new THREE.CircleGeometry(0.88, 48),
+      new THREE.MeshBasicMaterial({
+        color: 0xff435e,
+        transparent: true,
+        opacity: 0.23,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    floorGlow.rotation.x = -Math.PI / 2;
+    floorGlow.position.y = 0.025;
+    floorGlow.renderOrder = 6;
+
+    const floorRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.74, 0.9, 48),
+      new THREE.MeshBasicMaterial({
+        color: 0xff526b,
+        transparent: true,
+        opacity: 0.84,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    floorRing.rotation.x = -Math.PI / 2;
+    floorRing.position.y = 0.04;
+    floorRing.renderOrder = 7;
+
+    taskGuideBeacon.add(beam, floorGlow, floorRing);
+    scene.add(taskGuideBeacon);
+    taskGuideBeacon.visible = false;
+    return taskGuideBeacon;
+  }
+
+  function hideTaskGuide() {
+    if (taskGuideBeacon) taskGuideBeacon.visible = false;
+  }
+
+  // The guide is a world-space object, so it stays planted at the task spot
+  // while the player turns and looks around.
+  function getTaskMarkerTargets() {
+    if (cameraMode !== 'interior') {
+      hideTaskGuide();
+      return [];
+    }
+    const activeTargets = activeTaskTargets.filter(
+      (entry) => entry.status === 'inProgress' || entry.status === 'overdue',
+    );
+    if (activeTargets.length === 0) {
+      hideTaskGuide();
+      return [];
+    }
+    const anchors = [];
+
+    if (taskConsoleInner && taskConsoleComponentId) {
+      for (const unit of taskConsoleUnits) {
+        if (unit.status !== 'inProgress' && unit.status !== 'overdue') continue;
+        const target = activeTargets.find((entry) => entry.taskId === unit.taskId);
+        if (!target) continue;
+        taskConsoleInner.updateWorldMatrix(true, false);
+        const worldPosition = unit.button.getWorldPosition(new THREE.Vector3());
+        if (activeModuleInteriorBounds) worldPosition.y = activeModuleInteriorBounds.min.y + 0.04;
+        anchors.push({ target, worldPosition });
+      }
+    }
+
+    const specialComponentId = greenhouseInterior?.visible
+      ? '008'
+      : airlockInterior?.visible ? '005' : null;
+    if (anchors.length === 0 && specialComponentId) {
+      const specialTargets = activeTargets.filter((entry) => entry.componentId === specialComponentId);
+      let worldPosition = null;
+      if (specialComponentId === '008' && greenhouseTaskMarkerObject) {
+        greenhouseInterior.updateMatrixWorld(true);
+        // Anchor the task light to the fixed crop area, rather than the
+        // greenhouse group origin beside the entrance.
+        const cropBounds = new THREE.Box3().setFromObject(greenhouseTaskMarkerObject);
+        worldPosition = cropBounds.getCenter(new THREE.Vector3());
+        worldPosition.y = cropBounds.min.y + 0.04;
+      } else if (specialComponentId === '005' && airlockInteriorBounds) {
+        if (airlockTaskMarkerObject) {
+          airlockInterior.updateMatrixWorld(true);
+          const objectBounds = new THREE.Box3().setFromObject(airlockTaskMarkerObject);
+          worldPosition = objectBounds.getCenter(new THREE.Vector3());
+          worldPosition.y = airlockInteriorBounds.min.y + 0.04;
+        } else {
+          worldPosition = airlockInteriorBounds.getCenter(new THREE.Vector3());
+          worldPosition.y = airlockInteriorBounds.min.y + 0.04;
+        }
+      }
+      if (worldPosition) specialTargets.forEach((target) => anchors.push({ target, worldPosition: worldPosition.clone() }));
+    }
+
+    if (anchors.length === 0 && taskConsoleComponentId && activeModuleInteriorBounds) {
+      const moduleTargets = activeTargets.filter((entry) => entry.componentId === taskConsoleComponentId);
+      const worldPosition = activeModuleInteriorBounds.getCenter(new THREE.Vector3());
+      worldPosition.y = activeModuleInteriorBounds.min.y + 0.04;
+      moduleTargets.forEach((target) => anchors.push({ target, worldPosition: worldPosition.clone() }));
+    }
+
+    if (anchors.length === 0) {
+      hideTaskGuide();
+      return [];
+    }
+
+    // Keep one deterministic task spot active; the beacon must not jump to a
+    // different task as the player walks around the room.
+    const beaconAnchor = anchors[0];
+    const beacon = ensureTaskGuideBeacon();
+    beacon.position.copy(beaconAnchor.worldPosition);
+    beacon.visible = true;
+
+    const distance = camera.position.distanceTo(beaconAnchor.worldPosition);
+    return [{
+      taskId: beaconAnchor.target.taskId,
+      label: beaconAnchor.target.label,
+      distance,
+      nearby: distance < 2.6,
+    }];
+  }
+
   animate();
 
   // Public API returned to React
   return {
     getMapSnapshot,
+    getTaskMarkerTargets,
+    hideTaskGuide,
     setEventEffects,
-    setChallengeFlags,
     setTaskTargets,
     setConsoleEditMode,
     resetConsolePlacement,
     presentEvent,
     returnFromEvent,
+    clearEventPresentations,
     returnToOutpostOverview,
     toggleCameraMode,
     toggleRoverCamera,
@@ -5798,17 +5901,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
       roverLinkTransition = null;
       outpostHeightField = null;
       clearEventVisualization();
-      if (challengeMarkerGroup) {
-        outpostRoot?.remove(challengeMarkerGroup);
-        challengeMarkerGroup.traverse(object => {
-          object.geometry?.dispose();
-          if (object.material) {
-            const materials = Array.isArray(object.material) ? object.material : [object.material];
-            materials.forEach(material => material.dispose());
-          }
-        });
-        challengeMarkerGroup = null;
-      }
 
       unmountTaskConsole();
 
