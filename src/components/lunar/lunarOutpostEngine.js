@@ -2652,6 +2652,17 @@ export function createLunarEngine(canvas, callbacks = {}) {
           isActive: target.isActive === true,
         }))
       : [];
+    const activeTaskIds = new Set(
+      activeTaskTargets
+        .filter(entry => entry.status === 'available' || entry.status === 'inProgress' || entry.status === 'overdue')
+        .map(entry => entry.taskId)
+        .filter(Boolean),
+    );
+    // Remove a completed task's beacon as soon as React publishes the new
+    // status; don't wait for the next proximity poll to clear the old light.
+    if (taskGuideBeacon?.userData.taskId && !activeTaskIds.has(taskGuideBeacon.userData.taskId)) {
+      hideTaskGuide();
+    }
     console.log(
       '[TaskConsole] active targets:',
       activeTaskTargets
@@ -4433,6 +4444,31 @@ export function createLunarEngine(canvas, callbacks = {}) {
   window.addEventListener('resize', handleResize);
 
   // Prompt checks (zero per-frame Vector3 allocations)
+  function getNearestComponentPromptTarget() {
+    let nearest = null;
+    let nearestSurfaceDistance = Infinity;
+    let nearestCenterDistance = Infinity;
+    for (let i = 0; i < componentTargets.length; i++) {
+      const target = componentTargets[i];
+      const dx = camera.position.x - target.center.x;
+      const dz = camera.position.z - target.center.z;
+      const centerDistance = Math.hypot(dx, dz);
+      if (centerDistance > target.radius) continue;
+      const outsideX = Math.max(target.bounds.minX - camera.position.x, 0, camera.position.x - target.bounds.maxX);
+      const outsideZ = Math.max(target.bounds.minZ - camera.position.z, 0, camera.position.z - target.bounds.maxZ);
+      const surfaceDistance = Math.hypot(outsideX, outsideZ);
+      if (surfaceDistance < nearestSurfaceDistance
+        || (surfaceDistance === nearestSurfaceDistance && centerDistance < nearestCenterDistance)) {
+        nearest = target;
+        nearestSurfaceDistance = surfaceDistance;
+        nearestCenterDistance = centerDistance;
+      }
+    }
+    return nearest
+      ? { target: nearest, surfaceDistance: nearestSurfaceDistance, centerDistance: nearestCenterDistance }
+      : null;
+  }
+
   function updateAirlockPrompt() {
     if (cameraMode !== 'first-person' || !airlockTriggerCenter) {
       if (currentPromptType === 'airlock') setPrompt(null);
@@ -4441,6 +4477,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const dx = camera.position.x - airlockTriggerCenter.x;
     const dz = camera.position.z - airlockTriggerCenter.z;
     const distance = Math.hypot(dx, dz);
+    const nearestComponent = getNearestComponentPromptTarget();
+    if (nearestComponent && nearestComponent.centerDistance + 1 < distance) {
+      if (currentPromptType === 'airlock') setPrompt(null);
+      return;
+    }
     if (distance > airlockTriggerRadius) {
       if (currentPromptType === 'airlock') setPrompt(null);
       airlockPromptDismissed = false;
@@ -4509,36 +4550,31 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function updateComponentPrompt() {
-    if (cameraMode !== 'first-person' || !componentTargets.length || currentPromptType === 'airlock') {
+    if (cameraMode !== 'first-person' || !componentTargets.length) {
       if (currentPromptType === 'component') setPrompt(null);
       return;
     }
-    let nearest = null;
-    let nearestDistance = Infinity;
-    for (let i = 0; i < componentTargets.length; i++) {
-      const target = componentTargets[i];
-      const distance = Math.hypot(camera.position.x - target.center.x, camera.position.z - target.center.z);
-      if (distance <= target.radius && distance < nearestDistance) {
-        nearest = target;
-        nearestDistance = distance;
-      }
-    }
+    const nearest = getNearestComponentPromptTarget();
     if (!nearest) {
       if (currentPromptType === 'component') setPrompt(null);
       activeComponentTarget = null;
       dismissedComponentId = null;
       return;
     }
-    if (nearest.id === dismissedComponentId) {
+    const airlockDistance = airlockTriggerCenter
+      ? Math.hypot(camera.position.x - airlockTriggerCenter.x, camera.position.z - airlockTriggerCenter.z)
+      : Infinity;
+    if (currentPromptType === 'airlock' && airlockDistance <= nearest.centerDistance + 1) return;
+    if (nearest.target.id === dismissedComponentId) {
       if (currentPromptType === 'component') setPrompt(null);
-      activeComponentTarget = nearest;
+      activeComponentTarget = nearest.target;
       return;
     }
-    activeComponentTarget = nearest;
+    activeComponentTarget = nearest.target;
     setPrompt('component', {
-      id: nearest.id,
-      title: `Enter the ${nearest.name}?`,
-      message: `You are near the ${nearest.name.toLowerCase()}. Enter to explore its interior.`
+      id: nearest.target.id,
+      title: `Enter the ${nearest.target.name}?`,
+      message: `You are near the ${nearest.target.name.toLowerCase()}. Enter to explore its interior.`
     });
   }
 
@@ -5572,6 +5608,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       || groundDistance(first) - groundDistance(second));
     const beaconAnchor = anchors[0];
     const beacon = ensureTaskGuideBeacon();
+    beacon.userData.taskId = beaconAnchor.target.taskId;
     beacon.position.copy(beaconAnchor.worldPosition);
     beacon.visible = true;
 

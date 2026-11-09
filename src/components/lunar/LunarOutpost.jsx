@@ -216,7 +216,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const openTaskAtLocation = (challengeId) => {
     const journey = taskJourneys[challengeId];
     setTaskExperienceId(challengeId);
-    setTaskExperienceStage(journey?.solution ? (journey.pickedUp && equippedTool?.id === journey.solution.tool.id && equippedTool?.name === journey.solution.tool.name ? 'perform' : journey.pickedUp ? 'waiting' : 'tool') : 'solutions');
+    setTaskExperienceStage(journey?.solution ? (journey.pickedUp && equippedTool?.id === journey.solution.tool.id && equippedTool?.name === journey.solution.tool.name ? 'perform' : journey.pickedUp ? 'waiting' : 'tool') : 'discover');
   };
   const chooseTaskSolution = (challengeId, solution) => setTaskJourneys((items) => ({ ...items, [challengeId]: { ...items[challengeId], solution, pickedUp: false } }));
   const requestTaskTool = (challengeId) => {
@@ -1036,7 +1036,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
               >
                 {insidePanel.buttonText || 'EXIT'}
               </button>
-              {insidePanel.componentId === '010' && <button type="button" className="lunar-task-start-button" onClick={() => setToolInventoryOpen(true)}>What’s in Your Bag?</button>}
+              <button type="button" className="lunar-task-start-button" onClick={() => setToolInventoryOpen(true)}>What’s in Your Bag?</button>
               <button
                 type="button"
                 className={consoleEdit ? 'lunar-console-edit-active' : ''}
@@ -2062,7 +2062,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             onClose={() => setTaskExperienceId(null)}
             onFindLocation={() => {
               if (insidePanel.visible && insidePanel.componentId === experienceTask.targetComponentId) {
-                setTaskExperienceStage('solutions');
+                setTaskExperienceStage('discover');
               } else {
                 showTaskLocation(experienceTask.id);
               }
@@ -2087,7 +2087,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
         <div className="daily-task-experience-backdrop" role="presentation">
           <section className="daily-task-experience lunar-tool-inventory" role="dialog" aria-modal="true" aria-labelledby="tool-inventory-title">
             <button className="daily-task-experience-close" type="button" aria-label="Close tool inventory" onClick={() => setToolInventoryOpen(false)}>×</button>
-            <header className="daily-task-experience-header"><span className="daily-task-experience-kicker">Workshop inventory</span><h2 id="tool-inventory-title">What’s in Your Bag?</h2></header>
+            <header className="daily-task-experience-header"><span className="daily-task-experience-kicker">Tool inventory</span><h2 id="tool-inventory-title">What’s in Your Bag?</h2></header>
             <p>Choose the required tool to equip it. Tools are listed for the jobs assigned to this mission day.</p>
             {pendingToolTask && <p className="daily-task-location-note">Required for {simulation.dailyChallenges.find((task) => task.id === pendingToolTask[0])?.title}: <strong>{pendingToolTask[1].solution.tool.name}</strong></p>}
             <div className="daily-task-tool-grid">

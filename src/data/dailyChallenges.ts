@@ -85,7 +85,7 @@ const BASE_DAILY_CHALLENGES: DailyChallengeDefinition[] = [
     completionResourceEffects: { equipment: 5 },
     missedResourceEffects: { equipment: -8 },
     overdueConditionLoss: 5,
-    responseDeadlineMs: 60_000,
+    responseDeadlineMs: 120_000,
     emergency: true,
     riskIfDelayed: 'If we wait too long, a faulty workshop tool could start a fire.',
     postponement: {
@@ -111,7 +111,7 @@ const BASE_DAILY_CHALLENGES: DailyChallengeDefinition[] = [
     completionResourceEffects: { water: 5 },
     missedResourceEffects: { water: -8 },
     overdueConditionLoss: 6,
-    responseDeadlineMs: 60_000,
+    responseDeadlineMs: 120_000,
     emergency: true,
     riskIfDelayed: 'If we wait too long, a weak pipe could start leaking.',
     postponement: {
@@ -161,7 +161,7 @@ const BASE_DAILY_CHALLENGES: DailyChallengeDefinition[] = [
     completionResourceEffects: { power: 5 },
     missedResourceEffects: { power: -8 },
     overdueConditionLoss: 8,
-    responseDeadlineMs: 60_000,
+    responseDeadlineMs: 120_000,
     escalationDelayMs: 60_000,
     urgentConditionLoss: 6,
     urgentResourceEffects: { power: -4 },

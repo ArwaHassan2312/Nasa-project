@@ -33,15 +33,15 @@ export const EVENT_SCHEDULER_CONFIG = {
   minimumCooldownDays: 2,
   maximumGapDays: 5.5,
   firstEventEarliestDay: 1,
-  minimumIndependentEventElapsedMs: 20_000,
-  maximumIndependentEventElapsedMs: 60_000,
+  minimumIndependentEventElapsedMs: 30_000,
+  maximumIndependentEventElapsedMs: 180_000,
   baseDailyProbability: 0.18,
   elevatedSeverityCondition: 40,
   criticalSeverityCondition: 20,
 } as const;
 
 export function getIndependentEventWindowEndMs(dayDurationMs: number): number {
-  return Math.min(dayDurationMs / 2, EVENT_SCHEDULER_CONFIG.maximumIndependentEventElapsedMs);
+  return Math.min(dayDurationMs, EVENT_SCHEDULER_CONFIG.maximumIndependentEventElapsedMs);
 }
 
 function nextRandom(state: number): { value: number; state: number } {

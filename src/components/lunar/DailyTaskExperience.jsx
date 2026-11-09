@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Canvas, useFrame } from '@react-three/fiber';
+import { Bounds, Center, useGLTF } from '@react-three/drei';
+import * as THREE from 'three';
 import { getDailyTaskExperience, getDailyTaskSolutions } from '../../data/dailyTaskExperiences';
 import './DailyTaskExperience.css';
 
-const STEPS = ['Task Idea', 'Choose a Solution', 'Tool Selection', 'Complete Task', 'Conclusion'];
-const STAGE_ORDER = ['idea', 'solutions', 'tool', 'perform', 'conclusion'];
+const STEPS = ['Task Idea', 'Discover Problem', 'Choose a Solution', 'Tool Selection', 'Complete Task', 'Conclusion'];
+const STAGE_ORDER = ['idea', 'discover', 'solutions', 'tool', 'perform', 'conclusion'];
 
 function getSolutionIcon(solution, experience, task, used) {
   const action = solution.name.toLowerCase();
@@ -83,8 +86,13 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
   const selectedSolution = progressState.solution;
   const [progress, setProgress] = useState(0);
   const [holding, setHolding] = useState(false);
+  const [selectedOptionId, setSelectedOptionId] = useState(null);
+  const [problemFound, setProblemFound] = useState(false);
   const completionRef = useRef(false);
   const progressRef = useRef(0);
+  const selectionTimerRef = useRef(null);
+
+  useEffect(() => () => window.clearTimeout(selectionTimerRef.current), []);
 
   useEffect(() => {
     if (task.status === 'completed' && stage === 'complete-pending') setStage('conclusion');
@@ -111,7 +119,24 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
   }, [holding, stage, onComplete, selectedSolution]);
 
   const stopHolding = () => setHolding(false);
-  const handleSolution = (solution) => { onSelectSolution(solution); setStage('tool'); };
+  const handleSolution = (solution) => {
+    if (selectedOptionId) return;
+    setSelectedOptionId(solution.id);
+    onSelectSolution(solution);
+    selectionTimerRef.current = window.setTimeout(() => setStage('tool'), 280);
+  };
+
+  const guideMessages = {
+    idea: 'Mission ready! Let’s find the equipment that needs help.',
+    discover: problemFound ? 'You found the trouble spot! Great eyes, astronaut.' : 'Drag the magnifying glass over the picture to find the trouble spot.',
+    solutions: 'Pick the plan you like best. Every choice can help!',
+    tool: 'Great plan! Here’s the tool you’ll need for the job.',
+    waiting: 'Your plan is saved. Grab the tool, then come back here!',
+    perform: 'You’re ready! Hold the button and keep going until it’s done.',
+    'complete-pending': 'Almost there! The crew is saving your great work.',
+    conclusion: 'Mission complete! You helped the outpost today.',
+    failed: 'This job needs another try. The crew is ready to help.',
+  };
 
   return (
     <div className="daily-task-experience-backdrop" role="presentation">
@@ -120,7 +145,7 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
         <header className="daily-task-experience-header">
           <span className="daily-task-experience-kicker">Crew helper activity · Day {task.scheduledDay}</span>
           <h2 id="daily-task-experience-title">{task.title}</h2>
-          {stage !== 'conclusion' && stage !== 'complete-pending' && stage !== 'failed' && <div className="daily-task-step-list" aria-label={`Step ${Math.max(0, STAGE_ORDER.indexOf(stage)) + 1} of 5`}>
+          {stage !== 'conclusion' && stage !== 'complete-pending' && stage !== 'failed' && <div className="daily-task-step-list" aria-label={`Step ${Math.max(0, STAGE_ORDER.indexOf(stage)) + 1} of 6`}>
             {STEPS.map((label, index) => (
               <span className={index <= STAGE_ORDER.indexOf(stage) ? 'is-current' : ''} key={label}>
                 <b>{index + 1}</b>{label}
@@ -128,6 +153,11 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
             ))}
           </div>}
         </header>
+
+        <div className="daily-task-guide" role="status" aria-live="polite">
+          <MissionBuddy />
+          <p>{guideMessages[stage] ?? guideMessages.idea}</p>
+        </div>
 
         {stage === 'idea' && (
           <div className="daily-task-stage daily-task-idea-stage">
@@ -139,17 +169,44 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
           </div>
         )}
 
+        {stage === 'discover' && (
+          <div className="daily-task-stage daily-task-discover-stage">
+            <span className="daily-task-stage-label">Discover Problem</span>
+            <p>Let’s look closely at the <strong>{experience.picture.toLowerCase()}</strong>. Drag the magnifying glass across it to find the part that needs help.</p>
+            <DiscoverProblemBoard
+              picture={experience.picture}
+              brokenPart={experience.brokenPart}
+              componentId={task.targetComponentId}
+              problemFound={problemFound}
+              onProblemFound={() => setProblemFound(true)}
+            />
+            <p className={`daily-task-discover-feedback${problemFound ? ' is-found' : ''}`} role="status" aria-live="polite">
+              {problemFound
+                ? `You found the ${experience.brokenPart.toLowerCase()}! Nice spotting. Ready to choose a plan?`
+                : 'The trouble spot is hiding in the picture. Keep looking!'}
+            </p>
+            {problemFound && <button className="daily-task-primary" type="button" onClick={() => setStage('solutions')}>Let’s choose a solution!</button>}
+          </div>
+        )}
+
         {stage === 'solutions' && (
           <div className="daily-task-stage">
             <span className="daily-task-stage-label">Choose a Solution</span>
             <p>{experience.scenario}</p>
-            <p>How would you like to help? Every choice can solve the problem.</p>
+            <p>Which plan sounds good to you? Pick one and let’s get to work!</p>
             <ObjectPicture picture={experience.picture} brokenPart={experience.brokenPart} />
             <div className="daily-task-tool-grid daily-task-solution-options">
               {(() => {
                 const usedEmojis = new Set();
                 return getDailyTaskSolutions(task, experience).map((solution) => (
-                <button key={solution.id} type="button" onClick={() => handleSolution(solution)}>
+                <button
+                  key={solution.id}
+                  type="button"
+                  className={selectedOptionId === solution.id ? 'is-selected' : ''}
+                  aria-pressed={selectedOptionId === solution.id}
+                  disabled={Boolean(selectedOptionId)}
+                  onClick={() => handleSolution(solution)}
+                >
                   <span className="daily-task-option-icon" aria-hidden="true"><SolutionIcon kind={getSolutionIcon(solution, experience, task, usedEmojis)} /></span>
                   <strong>{solution.name}</strong>
                   <small>{solution.playerDescription}</small>
@@ -163,7 +220,7 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
         {stage === 'tool' && selectedSolution && (
           <div className="daily-task-stage">
             <span className="daily-task-stage-label">Tool Selection</span>
-            <p>Great choice! You picked <strong>{selectedSolution.name}</strong>.</p>
+            <p>Great pick! You chose <strong>{selectedSolution.name}</strong>. Let’s get the tool we need!</p>
             <ToolPicture kind={selectedSolution.tool.picture} large />
             <p><strong>{selectedSolution.tool.name}</strong> · {selectedSolution.toolExplanation}</p>
             <button className="daily-task-primary" type="button" onClick={onPickUpTool}>Let’s Pick Up the Tool</button>
@@ -177,10 +234,10 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
         {stage === 'perform' && selectedTool && selectedSolution && (
           <div className="daily-task-stage daily-task-perform-stage">
             <span className="daily-task-stage-label">Complete Task</span>
-            <p><strong>{selectedSolution.name}</strong>: use the <strong>{selectedTool.name.toLowerCase()}</strong> to {experience.action.toLowerCase()}.</p>
+            <p>Ready? Hold the button to {experience.action.toLowerCase()} with your <strong>{selectedTool.name.toLowerCase()}</strong>.</p>
             <ToolPicture kind={selectedTool.picture} large />
             <button
-              className="daily-task-hold-button"
+              className={`daily-task-hold-button${holding ? ' is-holding' : ''}`}
               type="button"
               onPointerDown={(event) => {
                 event.currentTarget.setPointerCapture(event.pointerId);
@@ -196,6 +253,7 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
                 }
               }}
               onKeyUp={stopHolding}
+              aria-pressed={holding}
               aria-label={`Hold to ${experience.action.toLowerCase()}`}
             >
               <span className="daily-task-progress-fill" style={{ width: `${progress}%` }} />
@@ -205,14 +263,14 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
           </div>
         )}
 
-        {stage === 'complete-pending' && <div className="daily-task-stage"><span className="daily-task-stage-label">Saving task outcome</span><p>The outpost is recording the repair and its effects.</p></div>}
+        {stage === 'complete-pending' && <div className="daily-task-stage"><span className="daily-task-stage-label">Saving task outcome</span><p>Almost there! The crew is saving what you did.</p></div>}
         {stage === 'failed' && <div className="daily-task-stage"><span className="daily-task-stage-label">Task needs recovery</span><p>The task deadline was reached before this completion could be recorded. Follow the existing recovery instructions to try again.</p><button className="daily-task-primary" type="button" onClick={onClose}>Close</button></div>}
 
         {stage === 'conclusion' && (
           <div className="daily-task-stage daily-task-success-stage">
             <span className="daily-task-success-check" aria-label="Task complete">✓</span>
             <span className="daily-task-stage-label">Conclusion</span>
-            <p>You selected <strong>{selectedSolution?.name}</strong> using the <strong>{selectedTool?.name}</strong>. Nice work!</p>
+            <p>You chose <strong>{selectedSolution?.name}</strong> and used the <strong>{selectedTool?.name}</strong>. Nice work, astronaut!</p>
             <p>{task.completionFeedback}</p>
             {componentChange !== null && componentChange !== undefined && <p>{componentChange > 0 ? `${task.affectedSystem} condition improved by ${componentChange} points.` : componentChange < 0 ? `${task.affectedSystem} condition changed by ${componentChange} points.` : 'The affected component condition stayed the same.'}</p>}
             <p>{resourceChanges && Object.keys(resourceChanges).length > 0
@@ -241,6 +299,320 @@ function ObjectPicture({ picture, brokenPart }) {
       </svg>
       <strong>{picture}</strong>
     </div>
+  );
+}
+
+function DiscoverProblemBoard({ picture, brokenPart, componentId, problemFound, onProblemFound }) {
+  const [lensPosition, setLensPosition] = useState({ x: 32, y: 109 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [targetPosition, setTargetPosition] = useState(null);
+  const draggingRef = useRef(false);
+  const cluePosition = getFaultCluePosition(picture, brokenPart);
+  const activeCluePosition = targetPosition ?? cluePosition;
+  const moveLensTo = (x, y) => {
+    const next = { x: Math.max(17, Math.min(216, x)), y: Math.max(17, Math.min(109, y)) };
+    setLensPosition(next);
+    if (activeCluePosition && Math.hypot(next.x - activeCluePosition.x, next.y - activeCluePosition.y) <= 18) onProblemFound();
+  };
+  const moveLensFromPointer = (event) => {
+    if (!draggingRef.current) return;
+    const svg = event.currentTarget;
+    const matrix = svg.getScreenCTM?.();
+    if (!matrix) return;
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const local = point.matrixTransform(matrix.inverse());
+    moveLensTo(local.x, local.y);
+  };
+
+  return (
+    <div className={`daily-task-discover-board${problemFound ? ' is-found' : ''}`}>
+      <div className="daily-task-discover-scene" aria-label={`3D view of the ${picture}`}>
+        <Suspense fallback={<DiscoverPreviewLoading />}>
+          <OutpostComponentPreview
+            componentId={componentId}
+            cluePosition={cluePosition}
+            problemFound={problemFound}
+            onTargetPosition={setTargetPosition}
+          />
+        </Suspense>
+        <svg
+          className="daily-task-discover-overlay"
+          viewBox="0 0 240 132"
+          aria-label={`Drag the magnifying glass over the ${picture} to discover the ${brokenPart.toLowerCase()}.`}
+          onPointerMove={moveLensFromPointer}
+          onPointerUp={() => { draggingRef.current = false; setIsDragging(false); }}
+          onPointerCancel={() => { draggingRef.current = false; setIsDragging(false); }}
+        >
+          {problemFound && activeCluePosition && <FaultClue x={activeCluePosition.x} y={activeCluePosition.y} kind={cluePosition?.kind ?? 'crack'} />}
+          <g
+            className={`daily-task-discovery-lens${isDragging ? ' is-dragging' : ''}`}
+            transform={`translate(${lensPosition.x} ${lensPosition.y})`}
+            role="button"
+            tabIndex="0"
+            aria-label="Magnifying glass. Drag it over the picture, or use the arrow keys."
+            onPointerDown={(event) => {
+              event.preventDefault();
+              draggingRef.current = true;
+              setIsDragging(true);
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onKeyDown={(event) => {
+              const steps = { ArrowUp: [0, -7], ArrowDown: [0, 7], ArrowLeft: [-7, 0], ArrowRight: [7, 0] };
+              const step = steps[event.key];
+              if (!step) return;
+              event.preventDefault();
+              moveLensTo(lensPosition.x + step[0], lensPosition.y + step[1]);
+            }}
+          >
+            <circle className="daily-task-discovery-lens-glass" r="16" />
+            <circle className="daily-task-discovery-lens-glint" cx="-5" cy="-5" r="3" />
+            <path d="M11 11 23 23" />
+            <circle className="daily-task-discovery-lens-handle" cx="0" cy="0" r="20" />
+          </g>
+        </svg>
+      </div>
+      <span>{problemFound ? 'Problem found!' : 'Drag the glass over the picture. Arrow keys work too.'}</span>
+    </div>
+  );
+}
+
+function OutpostComponentPreview({ componentId, cluePosition, problemFound, onTargetPosition }) {
+  const { scene } = useGLTF('/lunar/model.glb');
+  const component = useMemo(() => {
+    scene.updateMatrixWorld(true);
+    let source = null;
+    scene.traverse((object) => {
+      if (!source && object.name?.match(new RegExp(`^${componentId}-[^/]+$`))) source = object;
+    });
+    if (!source) return null;
+    const isolated = source.clone(true);
+    isolated.applyMatrix4(source.matrixWorld);
+    isolated.updateMatrixWorld(true);
+    return isolated;
+  }, [scene, componentId]);
+
+  if (!component) {
+    return <div className="daily-task-discover-preview-unavailable" role="status">This component preview isn’t available yet.</div>;
+  }
+
+  return (
+    <Canvas className="daily-task-discover-canvas" dpr={[1, 1.5]} camera={{ position: [0, 0, 5], fov: 34 }} gl={{ alpha: true, antialias: true }}>
+      <ambientLight intensity={1.7} />
+      <directionalLight position={[3, 5, 6]} intensity={2.4} />
+      <directionalLight position={[-4, 2, -3]} intensity={0.8} />
+      <Bounds fit clip margin={1.25}>
+        <Center>
+          <OutpostModelPart
+            component={component}
+            cluePosition={cluePosition}
+            problemFound={problemFound}
+            onTargetPosition={onTargetPosition}
+          />
+        </Center>
+      </Bounds>
+    </Canvas>
+  );
+}
+
+function DiscoverPreviewLoading() {
+  return (
+    <div className="daily-task-discover-loading" role="status" aria-live="polite">
+      <span className="daily-task-discover-spinner" aria-hidden="true" />
+      <span>Loading component…</span>
+    </div>
+  );
+}
+
+function OutpostModelPart({ component, cluePosition, problemFound, onTargetPosition }) {
+  const groupRef = useRef(null);
+  const lastTargetRef = useRef({ x: Number.NaN, y: Number.NaN });
+  const bounds = useMemo(() => new THREE.Box3().setFromObject(component), [component]);
+  const size = useMemo(() => bounds.getSize(new THREE.Vector3()), [bounds]);
+  const issuePoint = useMemo(() => {
+    if (!cluePosition || bounds.isEmpty()) return null;
+    return new THREE.Vector3(
+      bounds.min.x + size.x * (cluePosition.x / 240),
+      bounds.max.y - size.y * (cluePosition.y / 132),
+      bounds.max.z + Math.max(size.z * 0.015, 0.01),
+    );
+  }, [bounds, cluePosition, size]);
+  const markerRadius = Math.max(size.length() * 0.018, 0.04);
+
+  useFrame(({ camera }) => {
+    if (!groupRef.current || !issuePoint) return;
+    const screenPoint = groupRef.current.localToWorld(issuePoint.clone()).project(camera);
+    if (screenPoint.z < -1 || screenPoint.z > 1) return;
+    const next = {
+      x: Math.max(17, Math.min(216, ((screenPoint.x + 1) / 2) * 240)),
+      y: Math.max(17, Math.min(109, ((1 - screenPoint.y) / 2) * 132)),
+    };
+    if (Math.abs(next.x - lastTargetRef.current.x) > 0.5 || Math.abs(next.y - lastTargetRef.current.y) > 0.5) {
+      lastTargetRef.current = next;
+      onTargetPosition(next);
+    }
+  });
+
+  return (
+    <group ref={groupRef}>
+      <primitive object={component} />
+      {problemFound && issuePoint && (
+        <mesh position={issuePoint}>
+          <sphereGeometry args={[markerRadius, 24, 24]} />
+          <meshStandardMaterial color="#ffc96d" emissive="#ff783f" emissiveIntensity={1.6} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+function MissionBuddy() {
+  return (
+    <svg className="daily-task-buddy" viewBox="0 0 48 48" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M24 8V5m-4 0h8" />
+        <rect x="9" y="13" width="30" height="25" rx="9" />
+        <path d="M16 24h.1m15 0h.1M18 31c3 3 9 3 12 0M5 23v7m38-7v7" />
+        <circle cx="24" cy="5" r="2" />
+      </g>
+    </svg>
+  );
+}
+
+function DiscoverArtwork({ picture }) {
+  const name = picture.toLowerCase();
+  const outline = { stroke: '#b9edf1', strokeWidth: 3, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  const panelCells = <g stroke="#75c8dc" strokeWidth="1.5" opacity="0.9"><path d="m78 42-12 42m31-42-7 42m31-42-2 42m28-42 4 42m18-42 10 42M72 57h95M68 72h104" /></g>;
+
+  let object;
+  if (/battery|power unit|cooling loop/.test(name)) {
+    object = <>
+      <rect x="68" y="32" width="105" height="76" rx="13" fill="url(#discover-metal)" {...outline} />
+      <path d="M101 32V23h39v9" fill="none" stroke="#d2e7e3" strokeWidth="4" strokeLinecap="round" />
+      <rect x="84" y="48" width="73" height="28" rx="6" fill="#132f42" stroke="#67b9c8" strokeWidth="2" />
+      <path d="M92 67h12l7-12 8 15 8-10 8 7h14" fill="none" stroke="#8df0c7" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="86" cy="91" r="4" fill="#8ef0c4" /><circle cx="100" cy="91" r="4" fill="#ffd47d" />
+      <path d="M173 55h18v30h-18m9-30v-8m0 68v-8" fill="none" stroke="#91b9c6" strokeWidth="4" strokeLinecap="round" />
+      <path d="M188 65h11m-11 10h11" stroke="#66d8da" strokeWidth="3" strokeLinecap="round" />
+    </>;
+  } else if (/solar|panel|radiator|tracker/.test(name)) {
+    object = <>
+      <path d="m73 34 99 0 22 55H53Z" fill="url(#discover-panel-glass)" {...outline} />
+      {panelCells}
+      <path d="m112 90-7 20m37-20 8 20m-62 1h88" fill="none" stroke="#d0e4c1" strokeWidth="5" strokeLinecap="round" />
+      <circle cx="111" cy="108" r="5" fill="#92c9d5" stroke="#d9f3ed" strokeWidth="2" />
+      <circle cx="142" cy="108" r="5" fill="#92c9d5" stroke="#d9f3ed" strokeWidth="2" />
+      <circle cx="192" cy="31" r="13" fill="#ffc96d" opacity="0.95" />
+      <path d="M192 11v-5m0 50v-5m20-20h5m-50 0h5m34-14 4-4m-36 36 4-4m28 0 4 4m-36-36 4 4" stroke="#ffd991" strokeWidth="2.5" strokeLinecap="round" />
+    </>;
+  } else if (/plant|crop|greenhouse|harvest/.test(name)) {
+    object = <>
+      <path d="M51 105V54l69-37 69 37v51" fill="rgba(68, 157, 162, 0.17)" stroke="#a5e8e5" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M51 54h138M120 19v86" fill="none" stroke="#77c9d2" strokeWidth="2" opacity="0.75" />
+      <path d="M63 104h114v13H63z" fill="#536c54" stroke="#b4d8ba" strokeWidth="2" />
+      <path d="M81 103V77m0 15c-15 0-19-11-18-21 12 1 20 8 18 21Zm0-7c1-13 10-19 21-18-1 13-8 19-21 18Z" fill="#68bd82" stroke="#c0f1bd" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M120 103V68m0 18c-16 0-21-12-19-23 13 1 22 9 19 23Zm0-8c2-14 12-21 24-19-2 14-11 21-24 19Z" fill="#79d18b" stroke="#c0f1bd" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M158 103V80m0 14c-12 0-15-9-14-17 9 1 15 6 14 17Zm0-6c1-10 8-15 17-14-1 10-7 15-17 14Z" fill="#63b77d" stroke="#c0f1bd" strokeWidth="2" strokeLinejoin="round" />
+      <circle cx="177" cy="32" r="6" fill="#ffd47d" />
+    </>;
+  } else if (/pipe|water|filter|recycler|air filter|hose/.test(name)) {
+    object = <>
+      <path d="M45 39h38v23h75V39h38v57h-39V78H83v18H45Z" fill="none" stroke="#92dbe5" strokeWidth="12" strokeLinejoin="round" />
+      <path d="M45 39h38v23h75V39h38v57h-39V78H83v18H45Z" fill="none" stroke="#d5f3f0" strokeWidth="3" strokeLinejoin="round" />
+      <rect x="105" y="53" width="33" height="37" rx="9" fill="url(#discover-metal)" stroke="#d2eeee" strokeWidth="2.5" />
+      <path d="M111 60h21m-21 8h21m-21 8h21" stroke="#65c7d5" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="121" cy="70" r="5" fill="#ffd47d" stroke="#fff0bd" strokeWidth="2" />
+      <path d="M68 51v-9m108 45v-9" stroke="#7fd4e4" strokeWidth="3" strokeLinecap="round" />
+      <path d="M195 104c0-5 7-12 7-12s7 7 7 12a7 7 0 0 1-14 0Z" fill="#74d7ec" stroke="#d8f7fa" strokeWidth="2" />
+    </>;
+  } else if (/door|airlock|hatch|seal|shelter/.test(name)) {
+    object = <>
+      <rect x="63" y="18" width="116" height="101" rx="28" fill="url(#discover-metal)" stroke="#c4e7e9" strokeWidth="4" />
+      <rect x="76" y="29" width="90" height="82" rx="23" fill="#18344a" stroke="#67b8c6" strokeWidth="3" />
+      <circle cx="121" cy="70" r="31" fill="#24495b" stroke="#9bd8db" strokeWidth="4" />
+      <circle cx="121" cy="70" r="22" fill="#183348" stroke="#7ebdc6" strokeWidth="2" />
+      <path d="M105 70h32m-16-16v32" stroke="#c2e8df" strokeWidth="4" strokeLinecap="round" />
+      <circle cx="121" cy="70" r="5" fill="#ffd47d" />
+      <g fill="#d6edf0"><circle cx="72" cy="45" r="2"/><circle cx="170" cy="45" r="2"/><circle cx="72" cy="96" r="2"/><circle cx="170" cy="96" r="2"/></g>
+    </>;
+  } else if (/antenna|radio|mast|beacon/.test(name)) {
+    object = <>
+      <path d="M120 110V37m-28 74h56m-36-74h16" fill="none" stroke="#d3e6e6" strokeWidth="5" strokeLinecap="round" />
+      <path d="M111 37h18l-9-17Z" fill="#7acbd8" stroke="#d3f1ee" strokeWidth="2.5" strokeLinejoin="round" />
+      <circle cx="120" cy="34" r="6" fill="#ffd47d" stroke="#fff0bd" strokeWidth="2" />
+      <path d="M101 47c-15 12-15 27 0 39m38-39c15 12 15 27 0 39M108 56c-8 6-8 15 0 21m24-21c8 6 8 15 0 21" fill="none" stroke="#70d5de" strokeWidth="3" strokeLinecap="round" />
+      <rect x="84" y="81" width="20" height="20" rx="4" fill="#315d6e" stroke="#9bdce0" strokeWidth="2" />
+      <circle cx="94" cy="91" r="3" fill="#8ef0c4" />
+    </>;
+  } else if (/rover|wheel|brake/.test(name)) {
+    object = <>
+      <path d="m62 75 20-34h77l20 34-9 15H72Z" fill="url(#discover-metal)" stroke="#c8e6e6" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M89 45h20v26H75Zm28 0h35v26h-35Z" fill="#4c9ca9" stroke="#a8e3e5" strokeWidth="2" />
+      <path d="M119 49v18m10-18v18m10-18v18" stroke="#bdebf0" strokeWidth="1.5" />
+      <circle cx="88" cy="91" r="16" fill="#132837" stroke="#d7e8d9" strokeWidth="5" />
+      <circle cx="153" cy="91" r="16" fill="#132837" stroke="#d7e8d9" strokeWidth="5" />
+      <circle cx="88" cy="91" r="5" fill="#ffc96d" /><circle cx="153" cy="91" r="5" fill="#ffc96d" />
+      <path d="M94 77V66h36v10" fill="none" stroke="#d0e4c1" strokeWidth="4" strokeLinecap="round" />
+    </>;
+  } else if (/suit/.test(name)) {
+    object = <>
+      <circle cx="120" cy="35" r="25" fill="url(#discover-metal)" stroke="#d5eeee" strokeWidth="3" />
+      <path d="M101 32q19-17 38 0v11q-19 17-38 0Z" fill="#173247" stroke="#75ccd4" strokeWidth="2.5" />
+      <path d="M94 65q26-15 52 0l17 45H77Z" fill="url(#discover-metal)" stroke="#c6e8e9" strokeWidth="3" strokeLinejoin="round" />
+      <rect x="104" y="74" width="32" height="23" rx="5" fill="#23485b" stroke="#a6dfe0" strokeWidth="2" />
+      <circle cx="120" cy="85" r="6" fill="#ffd47d" />
+      <path d="m95 72-18 20m68-20 18 20m-43 18v10m17-10v10" fill="none" stroke="#d5eeee" strokeWidth="4" strokeLinecap="round" />
+    </>;
+  } else if (/medical|food|supply|container|kit|shelf/.test(name)) {
+    object = <>
+      <path d="M57 43h126v66H57Z" fill="url(#discover-metal)" stroke="#c5e8e9" strokeWidth="3" />
+      <path d="M57 63h126M57 87h126" stroke="#91cbd0" strokeWidth="3" />
+      <rect x="72" y="33" width="30" height="27" rx="5" fill="#285267" stroke="#c2e8e5" strokeWidth="2" />
+      <rect x="113" y="33" width="29" height="27" rx="5" fill="#315a68" stroke="#c2e8e5" strokeWidth="2" />
+      <rect x="152" y="33" width="20" height="27" rx="5" fill="#254659" stroke="#c2e8e5" strokeWidth="2" />
+      <path d="M81 44h12m-6-6v12" stroke="#ff9d91" strokeWidth="3" strokeLinecap="round" />
+      <path d="M68 74h23m-23 23h33m11-23h27m-27 23h42" stroke="#ffd47d" strokeWidth="3" strokeLinecap="round" />
+      <path d="M71 109v8m98-8v8" stroke="#d1e8df" strokeWidth="5" strokeLinecap="round" />
+    </>;
+  } else if (/telescope|science|sensor/.test(name)) {
+    object = <>
+      <path d="m66 40 91 13-7 31-91-13Z" fill="url(#discover-metal)" stroke="#c8e8e9" strokeWidth="3" strokeLinejoin="round" />
+      <path d="m77 42-5 24m72-11-4 22" stroke="#68c8d4" strokeWidth="2" />
+      <circle cx="158" cy="57" r="14" fill="#274c60" stroke="#b7e9e6" strokeWidth="3" />
+      <circle cx="158" cy="57" r="7" fill="#7de0e7" opacity="0.75" />
+      <path d="m112 81-22 34m48-27 19 27m-44-32 18 32m-42 0h80" fill="none" stroke="#d1e8df" strokeWidth="4" strokeLinecap="round" />
+      <circle cx="100" cy="106" r="4" fill="#ffd47d" />
+    </>;
+  } else if (/workshop|tool/.test(name)) {
+    object = <>
+      <path d="M49 84h143v15H49Zm13-17h117v17H62Z" fill="url(#discover-metal)" stroke="#c9e7e8" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M74 99v17m94-17v17" stroke="#b9d9d9" strokeWidth="5" strokeLinecap="round" />
+      <path d="M90 61 111 40l8 8-21 21Zm49-14 8-8 18 18-8 8Z" fill="#79cbd6" stroke="#d3f0ed" strokeWidth="2.5" strokeLinejoin="round" />
+      <circle cx="157" cy="55" r="8" fill="#203f54" stroke="#bde9e8" strokeWidth="2" />
+      <path d="M84 76h83" stroke="#71c6d2" strokeWidth="2" />
+    </>;
+  } else {
+    object = <>
+      <rect x="62" y="32" width="116" height="77" rx="13" fill="url(#discover-metal)" stroke="#c6e8e9" strokeWidth="3" />
+      <path d="M95 32v-9h49v9m-25 22v35m-17-17h34" stroke="#d7efeb" strokeWidth="4" strokeLinecap="round" />
+      <rect x="76" y="45" width="21" height="14" rx="3" fill="#224459" stroke="#7ccbd2" strokeWidth="2" />
+      <circle cx="164" cy="51" r="5" fill="#8ef0c4" />
+      <path d="M78 96h85" stroke="#6dbbca" strokeWidth="3" strokeLinecap="round" />
+    </>;
+  }
+
+  return (
+    <g className="daily-task-discover-artwork">
+      <defs>
+        <linearGradient id="discover-panel-glass" x1="0" x2="1" y1="0" y2="1"><stop stopColor="#42a8bc" /><stop offset="1" stopColor="#244e70" /></linearGradient>
+        <linearGradient id="discover-metal" x1="0" x2="1" y1="0" y2="1"><stop stopColor="#6ba8b2" /><stop offset="0.55" stopColor="#31576b" /><stop offset="1" stopColor="#243a52" /></linearGradient>
+        <radialGradient id="discover-back-glow"><stop stopColor="#3a91a1" stopOpacity="0.34" /><stop offset="1" stopColor="#132a3c" stopOpacity="0" /></radialGradient>
+      </defs>
+      <ellipse cx="120" cy="70" rx="112" ry="62" fill="url(#discover-back-glow)" />
+      <ellipse cx="120" cy="117" rx="78" ry="7" fill="#76c9d2" opacity="0.14" />
+      {object}
+    </g>
   );
 }
 

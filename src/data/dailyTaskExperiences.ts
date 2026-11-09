@@ -483,46 +483,33 @@ export function getDailyTaskSolutions(task: DailyChallengeDefinition, experience
     gloves: `They protect your hands while you handle the ${experience.brokenPart.toLowerCase()}.`,
     cloth: `It helps you wipe dust or dirt from the ${experience.brokenPart.toLowerCase()}.`,
   };
-  const getPlayerDescription = (name: string): string => {
+  // Use each option's own wording for the card. The old name-based summary
+  // collapsed several different plans into the same generic sentence. Keep
+  // the card focused on the action and remove tool/cost hints until later stages.
+  const getPlayerDescription = (name: string, description: string): string => {
+    const toolOrCostHint = /\b(?:use|using|with)\s+(?:the\s+)?(?:a\s+|an\s+)?(?:tester|test reader|brush|cloth|wrench|cable|clamp|patch|gloves|checklist|card|tool|filter kit|filter|scissors|list|reader)\b|\b(?:uses?|costs?)\s+(?:more|less|extra)\s+(?:power|water|food)|\b(?:save|spend)\s+(?:power|water|food)/i;
+    const readableSentences = description
+      .split(/(?<=[.!?])\s+/)
+      .filter((sentence) => !toolOrCostHint.test(sentence))
+      .join(' ')
+      .trim();
+    if (readableSentences) return readableSentences;
+
+    const subject = experience.brokenPart.toLowerCase();
     const action = name.toLowerCase();
-    if (/charge from the solar panels/.test(action)) return 'Send power from the solar panels into the battery.';
-    if (/charge it slowly/.test(action)) return 'Add power to the battery little by little.';
-    if (/check the battery/.test(action)) return 'Find which battery cells need more charge.';
-    if (/test, then patch|test the hatch|run a seal test/.test(action)) return 'Check the seal, then cover any weak spots you find.';
-    if (/compare warm and cool/.test(action)) return 'Compare the water temperature before and after the unit runs.';
-    if (/compare both radios/.test(action)) return 'Try both radios and compare how clearly each one sends a message.';
-    if (/compare it with a spare|trusted reading/.test(action)) return 'Compare the reading with one known to be correct.';
-    if (/compare before and after/.test(action)) return 'Compare the system readings before and after the check.';
-    if (/look for a leak/.test(action)) return 'Look along the cooling pipe and its joints for a leak.';
-    if (/check the cooling water temperature/.test(action)) return 'Read how warm the cooling water is while the unit runs.';
-    if (/set the sun sensor|aim panels|tracker by hand/.test(action)) return 'Point the panels so they face the sunlight.';
-    if (/check the power reading and reconnect/.test(action)) return 'Read the power level, then reconnect the loose wire.';
-    if (/clean the lens|clean the sensor lens/.test(action)) return 'Wipe dust from the lens, then check what it can see.';
-    if (/pick and record/.test(action)) return 'Pick ripe leaves and note how the crop has grown.';
-    if (/harvest/.test(action)) return 'Pick the ripe greens from the tray.';
-    if (/pick only/.test(action)) return 'Choose and pick only the leaves that are ready.';
-    if (/replace/.test(action)) return `Take out the worn ${experience.brokenPart.toLowerCase()} and fit a fresh one.`;
-    if (/patch|seal the joint/.test(action)) return `Cover the weak spot on the ${experience.brokenPart.toLowerCase()}.`;
-    if (/tighten|secure|adjust/.test(action)) return `Make the loose parts around the ${experience.brokenPart.toLowerCase()} firm and steady.`;
-    if (/clean|wipe|brush/.test(action)) return `Clear dust or dirt from the ${experience.brokenPart.toLowerCase()}.`;
-    if (/sort/.test(action)) return 'Group the items so they are easy to find.';
-    if (/move .*forward|move .*front/.test(action)) return 'Put the items to use first where they are easy to reach.';
-    if (/mix fresh/.test(action)) return 'Prepare a fresh plant-food mix for the feed tank.';
-    if (/clear the feed tube/.test(action)) return 'Clear the blockage inside the plant feed tube.';
-    if (/test the plant mix/.test(action)) return 'Check the plant mix and adjust what goes into it.';
-    if (/check seals as you sort|check packs/.test(action)) return 'Look over each pack for a damaged seal as you sort.';
-    if (/test|check|read|match|calibrat/.test(action)) return `Check the ${experience.brokenPart.toLowerCase()} and see how it is working.`;
-    if (/run|try/.test(action)) return 'Run the system in the way described and watch how it responds.';
-    if (/aim|point|line up/.test(action)) return `Point the ${experience.brokenPart.toLowerCase()} in the right direction.`;
-    if (/open the airflow|clear the cooling vent/.test(action)) return 'Clear the path so air can move through the vent.';
-    return `Work on the ${experience.brokenPart.toLowerCase()} using the approach described above.`;
+    if (/replace/.test(action)) return `Take out the worn ${subject} and fit a fresh one.`;
+    if (/clean|wipe|brush|rinse/.test(action)) return `Clear dust or dirt from the ${subject}.`;
+    if (/test|check|compare|read|match|calibrat/.test(action)) return `Check the ${subject} and see how it is working.`;
+    if (/tighten|secure|adjust|set/.test(action)) return `Make the ${subject} firm and ready to work.`;
+    if (/sort|move|pick|harvest/.test(action)) return `Sort or gather the items needed for ${subject}.`;
+    return `Work on the ${subject} using this plan.`;
   };
   return (definitions ?? [
     option('Repair the affected part', `Use the ${experience.action.toLowerCase()} method for ${experience.brokenPart.toLowerCase()}.`, experience.tools.find((item) => item.id === experience.correctTool) ?? experience.tools[0], {}, 1),
   ]).map((definition, index) => ({
     ...definition,
     id: `${task.id}-solution-${index}`,
-    playerDescription: getPlayerDescription(definition.name),
+    playerDescription: getPlayerDescription(definition.name, definition.description),
     toolExplanation: toolReasons[definition.tool.id] ?? `It helps you work on the ${experience.brokenPart.toLowerCase()}.`,
     resourceEffects: Object.fromEntries(Object.entries(definition.resourceEffects).map(([key, amount]) => [key, amount * priorityFactor])) as DailyTaskSolutionOption['resourceEffects'],
     conditionDelta: definition.conditionDelta * priorityFactor,

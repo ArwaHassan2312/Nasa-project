@@ -204,7 +204,7 @@ interface GameState {
 const MAX_RESOURCE_LEVEL = 100;
 export const MISSION_FAILURE_RESOURCE_THRESHOLD = 10;
 export const MISSION_LENGTH_DAYS = 30;
-export const LUNAR_DAY_DURATION_MS = 180_000;
+export const LUNAR_DAY_DURATION_MS = 240_000;
 const DAY_TRANSITION_DURATION_MS = 5000;
 const EVENT_RESPONSE_DURATION_MS = 60_000;
 const CRITICAL_TASK_RECOVERY_DURATION_MS = 45_000;
@@ -1504,12 +1504,9 @@ export function advanceClockState(
       && (nextState.endOfDayEvents.length === 0 || nextState.endOfDaySequenceFinished)
     ) return createDayReport(nextState);
 
-    const forceDayTwoIndependentEvent = nextState.day === 2
-      && nextState.dayElapsedMs >= EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs
-      && !nextState.independentEventHistory.some((entry) => entry.day === 2);
     if (nextState.dayPhase === 'active'
       && nextState.dayElapsedMs < independentWindowEndMs
-      && (!hasEventOccurredOnDay(nextState) || forceDayTwoIndependentEvent)
+      && !hasEventOccurredOnDay(nextState)
       && nextState.schedulerElapsedMs >= EVENT_SCHEDULER_CONFIG.checkIntervalMs) {
       nextState = { ...nextState, schedulerElapsedMs: 0 };
       const selection = selectMajorEvent({
@@ -1532,8 +1529,6 @@ export function advanceClockState(
           [entry.eventId, entry.sourceEventId].filter((id): id is string => Boolean(id))
         )),
         ignorePreventedByFlags: true,
-        forceEvent: (nextState.day === 1 || nextState.day === 2)
-          && nextState.dayElapsedMs >= EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs,
       }, EVENT_SCHEDULER_CONFIG.checkIntervalMs);
       nextState = { ...nextState, rngState: selection.rngState };
       if (selection.event) {
