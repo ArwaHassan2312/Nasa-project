@@ -77,6 +77,11 @@ function getTaskStatusLabel(status) {
   return 'Ready';
 }
 
+function getTaskButtonName(task) {
+  const title = task?.title?.trim();
+  return title?.split(/\s+[—–-]\s+/)[0]?.trim() || title || 'Open Task';
+}
+
 function formatRemainingTime(milliseconds) {
   const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
   const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
@@ -264,6 +269,17 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
   const nearbyTask = nearbyTaskMarker
     ? insideComponentTasks.find((task) => task.id === nearbyTaskMarker.taskId)
     : null;
+  const nearbyTaskJourney = nearbyTask ? taskJourneys[nearbyTask.id] : null;
+  const nearbyTaskToolReady = Boolean(
+    nearbyTaskJourney?.pickedUp
+      && equippedTool?.id === nearbyTaskJourney.solution?.tool?.id
+      && equippedTool?.name === nearbyTaskJourney.solution?.tool?.name,
+  );
+  const nearbyTaskButtonLabel = nearbyTask?.recoveryStatus === 'available'
+    ? 'Try Again'
+    : nearbyTaskJourney?.solution
+      ? nearbyTaskToolReady ? 'Continue' : 'Required tool not equipped'
+      : getTaskButtonName(nearbyTask);
   const taskMarkerSignature = insideComponentTasks
     .map((task) => `${task.id}:${task.status}:${task.recoveryStatus ?? ''}`)
     .join('|');
@@ -1008,7 +1024,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
               {nearbyTask && (
                 <button
                   type="button"
-                  className="lunar-task-start-button"
+                  className="lunar-inside-action-button lunar-task-entry-button"
+                  title={nearbyTask.title}
+                  aria-label={nearbyTask.recoveryStatus === 'available' ? 'Try Again' : nearbyTaskJourney?.solution ? nearbyTaskToolReady ? 'Continue' : 'Required tool not equipped' : getTaskButtonName(nearbyTask)}
                   disabled={nearbyTask.recoveryStatus !== 'available' && Boolean(taskJourneys[nearbyTask.id]?.solution && (!taskJourneys[nearbyTask.id]?.pickedUp || equippedTool?.id !== taskJourneys[nearbyTask.id]?.solution.tool.id || equippedTool?.name !== taskJourneys[nearbyTask.id]?.solution.tool.name))}
                   onClick={() => {
                     if (nearbyTask.recoveryStatus === 'available') {
@@ -1027,7 +1045,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                     openTaskAtLocation(nearbyTask.id);
                   }}
                 >
-                  {taskJourneys[nearbyTask.id]?.pickedUp && equippedTool?.id === taskJourneys[nearbyTask.id]?.solution?.tool.id && equippedTool?.name === taskJourneys[nearbyTask.id]?.solution?.tool.name ? 'Continue' : taskJourneys[nearbyTask.id]?.solution ? 'Required tool not equipped' : 'Start Task'}
+                  {nearbyTaskButtonLabel}
                 </button>
               )}
               <button
@@ -1036,7 +1054,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
               >
                 {insidePanel.buttonText || 'EXIT'}
               </button>
-              <button type="button" className="lunar-task-start-button" onClick={() => setToolInventoryOpen(true)}>What’s in Your Bag?</button>
+              <button type="button" className="lunar-inside-action-button lunar-tool-inventory-button" onClick={() => setToolInventoryOpen(true)}>Tool Kit</button>
               <button
                 type="button"
                 className={consoleEdit ? 'lunar-console-edit-active' : ''}
