@@ -1005,46 +1005,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
       </div>
 
       {simulation.dayPhase === 'active' && (
-        <aside className={`lunar-countdown-panel${statusOpen ? ' is-status-open' : ''}${simulation.currentEvent?.triggerSource === 'task' ? ' is-task-event' : ''}`} aria-label="Active task and event timers">
-          {simulation.dailyChallenges
-            .filter((task) => task.status === 'inProgress' && task.urgentDeadlineAtMs !== null)
-            .map((task) => (
-              <button
-                type="button"
-                className="lunar-countdown-item lunar-countdown-task"
-                key={task.id}
-                disabled={simulation.gameStatus !== 'playing'}
-                onClick={() => {
-                  setFocusedTaskId(task.id);
-                  setDailyTasksOpen(true);
-                }}
-              >
-                <span className="lunar-countdown-kind">Current job</span>
-                <span className="lunar-countdown-title">{task.title}</span>
-                <strong className="lunar-countdown-time">
-                  {formatRemainingTime(Math.max(0, task.urgentDeadlineAtMs - simulation.campaignElapsedMs))}
-                </strong>
-              </button>
-            ))}
-          {simulation.dailyChallenges
-            .filter((task) => task.recoveryStatus === 'active' && task.recoveryDeadlineAtMs !== null)
-            .map((task) => (
-              <button
-                type="button"
-                className="lunar-countdown-item lunar-countdown-task"
-                key={`recovery-${task.id}`}
-                onClick={() => {
-                  setFocusedTaskId(task.id);
-                  setDailyTasksOpen(true);
-                }}
-              >
-                <span className="lunar-countdown-kind">Try-again job</span>
-                <span className="lunar-countdown-title">{task.title}</span>
-                <strong className="lunar-countdown-time">
-                  {formatRemainingTime(Math.max(0, task.recoveryDeadlineAtMs - simulation.campaignElapsedMs))}
-                </strong>
-              </button>
-            ))}
+        <aside className={`lunar-countdown-panel${statusOpen ? ' is-status-open' : ''}`} aria-label="Active problem timers">
             {activeEventEntries
             .filter(({ deadlineAtMs }) => deadlineAtMs !== null)
             .map(({ event, deadlineAtMs }) => (
@@ -1580,12 +1541,10 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             </div>
             <button type="button" aria-label="Close daily tasks" onClick={() => setDailyTasksOpen(false)}>×</button>
           </div>
-          <p className="lunar-task-intro">Help the crew finish these jobs before the day ends.</p>
+            <p className="lunar-task-intro">Choose a job to see how you can help the crew.</p>
           <div className="lunar-task-list">
             {simulation.dailyChallenges.map((challenge) => {
               const isActive = challenge.status === 'inProgress' || challenge.status === 'overdue';
-              const isUnfinished = challenge.status !== 'completed';
-
               return (
                 <article id={`lunar-task-${challenge.id}`} className={`lunar-task-card lunar-task-${challenge.status}${focusedTaskId === challenge.id ? ' is-focused' : ''}`} key={challenge.id}>
                   <div className="lunar-task-title-row">
@@ -1597,11 +1556,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                       {challenge.priority === 'critical' ? 'Do this first' : challenge.priority === 'high' ? 'Important' : 'When you can'}
                     </span>
                   <span>Go to: {challenge.targetComponentName}</span>
-                    <span>{challenge.status === 'overdue'
-                      ? `Late since day ${challenge.scheduledDay}`
-                      : challenge.scheduledDay < simulation.day
-                        ? `From day ${challenge.scheduledDay}`
-                        : 'Due today'}</span>
+                    <span>{challenge.startedDay !== null
+                      ? `Started day ${challenge.startedDay}`
+                      : `Available since day ${challenge.scheduledDay}`}</span>
                   </div>
                   <p>{challenge.description}</p>
                   {challenge.status === 'available' && (
@@ -1644,31 +1601,6 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                       onClick={() => openTaskIdea(challenge)}
                     >Try this job again</button>
                   )}
-                  {challenge.urgentDeadlineAtMs !== null && isUnfinished && (
-                    <div className={`lunar-task-countdown ${
-                      challenge.status === 'overdue' ? 'is-overdue' : ''
-                    } ${
-                      challenge.recoveryStatus === 'active'
-                        ? challenge.recoveryDeadlineAtMs - simulation.campaignElapsedMs
-                          <= Math.round(simulation.dayDurationMs * 10 / (24 * 60))
-                        : challenge.urgentDeadlineAtMs - simulation.campaignElapsedMs <= 30_000
-                        ? 'is-imminent'
-                        : ''
-                    }`}>
-                      {challenge.recoveryStatus === 'active'
-                        ? `RECOVERY · ${formatRemainingTime(challenge.recoveryDeadlineAtMs - simulation.campaignElapsedMs)} remaining`
-                        : challenge.recoveryStatus === 'available'
-                          ? 'INITIAL PENALTY APPLIED · Recovery available'
-                          : challenge.status === 'overdue'
-                        ? 'This job is late'
-                        : `Time left · ${formatRemainingTime(
-                          challenge.urgentDeadlineAtMs - simulation.campaignElapsedMs,
-                        )} remaining`}
-                    </div>
-                  )}
-                  {challenge.urgentDeadlineAtMs !== null && isUnfinished && (
-                    <small className="lunar-task-risk">If we wait: {challenge.riskIfDelayed}</small>
-                  )}
                   <button
                     type="button"
                     className="lunar-task-locate"
@@ -1684,7 +1616,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
                   </button>
                   {isActive && (
                     <div className="lunar-task-current">
-                      {challenge.status === 'overdue' ? 'Late · You can still try again' : 'In progress'}
+                      {challenge.status === 'overdue' ? 'Ready to try again' : 'In progress'}
                       {challenge.startedDay !== null ? ` · Started on day ${challenge.startedDay}` : ''}
                     </div>
                   )}
@@ -2005,9 +1937,15 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
             key={`${experienceTask.id}-${taskExperienceStage}`}
             task={experienceTask}
             initialStage={taskExperienceStage}
+            inventory={simulation.repairInventory}
+            progress={simulation.repairProgress[experienceTask.id]}
             onClose={() => setTaskExperienceId(null)}
             onFindLocation={() => showTaskLocation(experienceTask.id)}
             onComplete={() => completeDailyChallenge(experienceTask.id, experienceTask.targetComponentId)}
+            onDiagnose={simulation.recordRepairDiagnosis}
+            onSelectStrategy={simulation.selectRepairStrategy}
+            onRepairStep={simulation.completeRepairStep}
+            onVerify={simulation.verifyRepair}
           />
         ) : null;
       })()}
@@ -2157,6 +2095,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation }) {
           eventHistory={simulation.eventHistory}
           eventOutcomeHistory={simulation.eventOutcomeHistory}
           taskMissionHistory={simulation.taskMissionHistory}
+          repairHistory={simulation.repairHistory}
           onRestart={() => {
             setMapOpen(false);
             setTaskExperienceId(null);

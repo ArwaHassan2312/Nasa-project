@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { getDailyTaskExperience } from '../../data/dailyTaskExperiences';
+import { getDailyTaskExperience, getFirstFiveTaskPlan } from '../../data/dailyTaskExperiences';
+import ThreeDEquipmentViewer from './ThreeDEquipmentViewer';
 import './DailyTaskExperience.css';
+import './ThreeDEquipmentViewer.css';
 
 const STEPS = ['Task idea', 'Inspect', 'Choose a tool', 'Do the job'];
 const TOOL_PURPOSES = {
@@ -17,9 +19,419 @@ const TOOL_PURPOSES = {
   gloves: 'protect hands while working',
   cloth: 'wipe a surface clean',
 };
+const REPAIR_PART_NAMES = {
+  waterSeal: 'water seal',
+  oxygenFilter: 'air filter',
+  solarPatch: 'panel patch',
+};
+const BACKPACK_TOOL_DETAILS = {
+  tester: { name: 'Diagnostic Scanner', picture: 'tester' },
+  wrench: { name: 'Wrench', picture: 'wrench' },
+  screwdriver: { name: 'Screwdriver', picture: 'screwdriver' },
+  flashlight: { name: 'Flashlight', picture: 'flashlight' },
+  pliers: { name: 'Pliers', picture: 'pliers' },
+  gloves: { name: 'Safety Gloves', picture: 'gloves' },
+  'repair-kit': { name: 'Repair Kit', picture: 'repair-kit' },
+  clamp: { name: 'Pipe Clamp', picture: 'clamp' },
+  patch: { name: 'Patch Applicator', picture: 'patch' },
+  brush: { name: 'Filter Brush', picture: 'brush' },
+};
+const REPAIR_PART_DETAILS = {
+  waterSeal: { name: 'Water seal', icon: '🫧' },
+  oxygenFilter: { name: 'Air filter', icon: '🌬️' },
+  solarPatch: { name: 'Solar patch', icon: '☀️' },
+};
+const REPAIR_ACTIONS = {
+  'habitat-waterline-inspection': {
+    'replace-water-seal': [
+      { kind: 'tool', id: 'wrench', zone: 'valve', label: 'Turn off the water valve' },
+      { kind: 'tool', id: 'patch', zone: 'fault', label: 'Prepare the seal applicator' },
+      { kind: 'part', id: 'waterSeal', zone: 'fault', label: 'Fit the fresh water seal' },
+      { kind: 'tool', id: 'wrench', zone: 'valve', label: 'Turn the valve back on' },
+    ],
+    'clamp-waterline': [
+      { kind: 'tool', id: 'clamp', zone: 'fault', label: 'Place the clamp on the leak' },
+      { kind: 'tool', id: 'wrench', zone: 'fault', label: 'Tighten the clamp' },
+    ],
+  },
+  'oxygen-loop-filter-service': {
+    'replace-oxygen-filter': [
+      { kind: 'tool', id: 'wrench', zone: 'cover', label: 'Open the filter compartment' },
+      { kind: 'part', id: 'oxygenFilter', zone: 'fault', label: 'Slide in the fresh air filter' },
+      { kind: 'tool', id: 'wrench', zone: 'cover', label: 'Close the compartment' },
+    ],
+    'clean-oxygen-filter': [
+      { kind: 'tool', id: 'wrench', zone: 'cover', label: 'Open the filter compartment' },
+      { kind: 'tool', id: 'brush', zone: 'fault', label: 'Brush the filter clean' },
+      { kind: 'tool', id: 'wrench', zone: 'cover', label: 'Put the filter back' },
+    ],
+  },
+  'solar-array-inspection': {
+    'patch-solar-panel': [
+      { kind: 'tool', id: 'wrench', zone: 'connector', label: 'Loosen the cable connector' },
+      { kind: 'tool', id: 'patch', zone: 'fault', label: 'Prepare the solar patch' },
+      { kind: 'part', id: 'solarPatch', zone: 'fault', label: 'Fit the solar connection patch' },
+      { kind: 'tool', id: 'wrench', zone: 'connector', label: 'Secure the connection' },
+    ],
+    'clean-solar-panel': [
+      { kind: 'tool', id: 'wrench', zone: 'connector', label: 'Tighten the loose connection' },
+    ],
+  },
+};
 
-export default function DailyTaskExperience({ task, initialStage = 'idea', onClose, onFindLocation, onComplete }) {
-  const experience = getDailyTaskExperience(task);
+// Tasks that should use SVG diagrams instead of 3D models
+const SVG_ONLY_TASKS = [
+  'medical-kit-expiry-audit', // 2D inventory sorting is clearest
+];
+
+// Tasks that use hybrid 3D + SVG overlays
+const HYBRID_TASKS = [
+  'habitat-air-seal-check',
+  'radiation-shelter-seal-check',
+];
+
+export default function DailyTaskExperience(props) {
+  const experience = getDailyTaskExperience(props.task);
+  const use3D = !SVG_ONLY_TASKS.includes(props.task.id);
+  const useHybrid = HYBRID_TASKS.includes(props.task.id);
+  
+  if (props.task.scheduledDay <= 5 && !experience.repair) {
+    return <FirstFiveDayTaskExperience 
+      {...props} 
+      experience={experience} 
+      plan={getFirstFiveTaskPlan(props.task)}
+      use3D={use3D}
+      useHybrid={useHybrid}
+    />;
+  }
+  if (experience.repair) {
+    return <RepairAdventure
+      {...props}
+      experience={experience}
+      repair={experience.repair}
+      firstFiveDays={props.task.scheduledDay <= 5}
+      use3D={use3D}
+      useHybrid={useHybrid}
+    />;
+  }
+  return <BasicDailyTaskExperience {...props} experience={experience} use3D={use3D} />;
+}
+
+// Shared pointer drag engine: a drop only registers after real pointer movement
+// (8px), so a stray click never counts as a drop. Works for mouse and touch.
+function useRepairDrag(onDrop) {
+  const [dragging, setDragging] = useState(null);
+  const [selectedItem, setSelectedItem] = useState(null);
+  const didDragRef = useRef(false);
+  const dropRef = useRef(onDrop);
+  dropRef.current = onDrop;
+
+  useEffect(() => {
+    if (!dragging) return undefined;
+    const handlePointerMove = (event) => {
+      if (Math.hypot(event.clientX - dragging.startX, event.clientY - dragging.startY) > 8) {
+        didDragRef.current = true;
+      }
+      setDragging((current) => current ? { ...current, x: event.clientX, y: event.clientY } : current);
+    };
+    const handlePointerUp = (event) => {
+      if (didDragRef.current) {
+        const target = document.elementFromPoint(event.clientX, event.clientY)
+          ?.closest('[data-repair-zone]');
+        if (target) dropRef.current?.(dragging.item, target.dataset.repairZone);
+      }
+      setDragging(null);
+    };
+    const handlePointerCancel = () => {
+      didDragRef.current = false;
+      setDragging(null);
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+    };
+  }, [dragging]);
+
+  const startDrag = (item, event) => {
+    didDragRef.current = false;
+    setSelectedItem(null);
+    setDragging({
+      item,
+      x: event.clientX,
+      y: event.clientY,
+      startX: event.clientX,
+      startY: event.clientY,
+    });
+  };
+  const chooseItem = (item) => {
+    if (didDragRef.current) {
+      didDragRef.current = false;
+      return;
+    }
+    setSelectedItem(item);
+  };
+  const useSelectedItem = (zone) => {
+    if (!selectedItem) return;
+    dropRef.current?.(selectedItem, zone);
+    setSelectedItem(null);
+  };
+  return { dragging, didDragRef, selectedItem, startDrag, chooseItem, useSelectedItem };
+}
+
+function FirstFiveDayTaskExperience({
+  task,
+  onClose,
+  onFindLocation,
+  inventory,
+  experience,
+  plan,
+  onComplete,
+  use3D = false,  // NEW: whether to use 3D equipment viewer
+}) {
+  const [stage, setStage] = useState(task.status === 'completed' ? 'success' : 'diagnose');
+  const [hintLevel, setHintLevel] = useState(0);
+  const [hint, setHint] = useState('');
+  const [backpackOpen, setBackpackOpen] = useState(false);
+  const [testArmed, setTestArmed] = useState(false);
+  const completionRef = useRef(false);
+  const availableTools = inventory?.tools ?? [];
+  const visibleStage = task.status === 'completed' ? 'success' : stage;
+  const steps = ['Diagnose', 'Repair', 'Test'];
+  const stageIndex = { diagnose: 0, repair: 1, test: 2, success: 2 }[visibleStage];
+  const toolName = (toolId) => BACKPACK_TOOL_DETAILS[toolId]?.name ?? toolId;
+  const itemName = (item) => toolName(item?.id);
+  const repairTool = plan.toolId;
+  const requiredTool = visibleStage === 'repair' ? repairTool : 'tester';
+
+  const handleDrop = (item, zone) => {
+    if (item?.kind !== 'tool') {
+      setHint('This job uses a reusable tool, not a spare part. Open the Engineer Backpack.');
+      return;
+    }
+    if (visibleStage === 'diagnose') {
+      if (item.id !== 'tester') {
+        setHint('Try the Diagnostic Scanner. It can find the hidden fault!');
+        return;
+      }
+      if (zone !== 'fault') {
+        setHint(`Scanner ping! ${experience.hint}`);
+        return;
+      }
+      setHint('Great detective work! The fault is glowing. Now choose the right tool to fix it.');
+      setHintLevel(0);
+      setStage('repair');
+      return;
+    }
+    if (visibleStage === 'repair') {
+      if (item.id !== repairTool) {
+        setHint(`The ${toolName(item.id)} helps with another job. Use the ${toolName(repairTool)} to ${plan.action.toLowerCase()}.`);
+        return;
+      }
+      if (zone !== 'fault') {
+        setHint(`Drop the ${toolName(repairTool)} on the glowing ${experience.brokenPart}.`);
+        return;
+      }
+      setHint('Nice work! The repair is done. Let’s test it.');
+      setHintLevel(0);
+      setTestArmed(false);
+      setStage('test');
+      return;
+    }
+    if (visibleStage === 'test') {
+      if (item.id !== 'tester' || zone !== 'test') {
+        setHint('Drag the Diagnostic Scanner to the test port to check your repair.');
+        return;
+      }
+      setTestArmed(true);
+      setHint('System test complete. Select the reading that confirms the repair.');
+    }
+  };
+
+  const { dragging, didDragRef, selectedItem, startDrag, chooseItem, useSelectedItem } = useRepairDrag(handleDrop);
+
+  const finishTask = (reading) => {
+    if (reading !== plan.passingReading) {
+      setHint('That reading means the job is not finished yet. Look again and choose the result that shows it works.');
+      return;
+    }
+    if (completionRef.current) return;
+    completionRef.current = true;
+    setStage('success');
+    onComplete();
+  };
+  const advanceHint = () => {
+    setHintLevel((current) => Math.min(3, current + 1));
+    setHint('');
+  };
+  const hintText = hintLevel === 0 ? ''
+    : hintLevel === 1 ? experience.hint
+      : hintLevel === 2
+        ? visibleStage === 'repair'
+          ? `Use the ${toolName(repairTool)} on the ${experience.brokenPart}.`
+          : 'Use the Diagnostic Scanner on the glowing target.'
+        : `Demonstration: drag the ${visibleStage === 'repair' ? toolName(repairTool) : 'Diagnostic Scanner'} from the Backpack onto the highlighted ${visibleStage === 'test' ? 'test port' : experience.brokenPart}.`;
+  const instruction = visibleStage === 'diagnose'
+    ? 'Drag the Diagnostic Scanner onto the fault to find the problem.'
+    : visibleStage === 'repair'
+      ? `Drag the ${toolName(repairTool)} onto the ${experience.brokenPart} to ${plan.action.toLowerCase()}.`
+      : visibleStage === 'test'
+        ? testArmed ? 'Select the reading that confirms the repair.' : 'Drag the Diagnostic Scanner to the test port.'
+        : '';
+  const rewardText = Object.entries(task.completionResourceEffects ?? {})
+    .filter(([, amount]) => amount !== 0)
+    .map(([resource, amount]) => `${amount > 0 ? '+' : ''}${amount} ${resource}`)
+    .join(' · ');
+  const zones = [
+    { id: 'fault', label: experience.brokenPart, className: 'is-fault' },
+    { id: 'test', label: 'System test', className: 'is-test' },
+  ];
+
+  return (
+    <div className="daily-task-experience-backdrop" role="presentation">
+      <section className="daily-task-experience repair-adventure first-five-repair-adventure" role="dialog" aria-modal="true" aria-labelledby="daily-task-experience-title">
+        <button className="daily-task-experience-close" type="button" aria-label="Close task activity" onClick={onClose}>×</button>
+        <header className="daily-task-experience-header repair-adventure-header">
+          <span className="daily-task-experience-kicker">Lunar Engineering · Day {task.scheduledDay}</span>
+          <h2 id="daily-task-experience-title">{task.title}</h2>
+          {visibleStage !== 'success' && (
+            <div className="repair-adventure-progress" aria-label={`Stage ${stageIndex + 1} of ${steps.length}`}>
+              {steps.map((label, index) => (
+                <span className={index < stageIndex ? 'is-done' : index === stageIndex ? 'is-active' : ''} key={label}>
+                  <b>{index < stageIndex ? '✓' : index + 1}</b>{label}
+                </span>
+              ))}
+            </div>
+          )}
+        </header>
+
+        {visibleStage === 'success' ? (
+          <div className="repair-adventure-success is-first-five">
+            <span className="daily-task-success-check" aria-label="Task complete">✓</span>
+            <h3>System test passed</h3>
+            <p>{task.completionFeedback}</p>
+            {rewardText && <p className="first-five-reward">Campaign reward · {rewardText}</p>}
+            <article className="daily-task-fact-card"><strong>Engineering note</strong><p>{experience.fact}</p></article>
+            <button className="daily-task-primary" type="button" onClick={onClose}>Return to mission control</button>
+          </div>
+        ) : (
+          <>
+            <div className={`repair-mission-hud is-first-five${hintLevel === 3 ? ' is-demonstrating' : ''}`}>
+              <p>{hint || instruction}</p>
+              <dl className="first-five-hud-details">
+                <div><dt>Action</dt><dd>{instruction}</dd></div>
+                <div><dt>Tool</dt><dd>{toolName(requiredTool)}</dd></div>
+                <div><dt>Target</dt><dd>{task.targetComponentName} · {visibleStage === 'test' ? 'System test port' : experience.brokenPart}</dd></div>
+                <div><dt>Gesture</dt><dd>{visibleStage === 'test' && testArmed ? 'Select the reading that confirms the repair.' : 'Drag the tool from the Backpack onto the highlighted work zone.'}</dd></div>
+              </dl>
+              <button className="daily-task-hint-button" type="button" onClick={advanceHint}>Hint {hintLevel}/3</button>
+            </div>
+            {/* Conditional 3D or SVG equipment viewer */}
+            {use3D ? (
+              <div className="repair-threed-container">
+                <ThreeDEquipmentViewer
+                  taskId={task.id}
+                  onPartClick={(partId) => {
+                    if (selectedItem) {
+                      handleDrop(selectedItem, 'fault');
+                    }
+                  }}
+                  highlightPart={visibleStage === 'repair' || visibleStage === 'test' ? experience.brokenPart.toLowerCase().replace(/\s+/g, '-') : null}
+                  showLabels={visibleStage === 'diagnose'}
+                  interactionMode={visibleStage === 'test' ? 'test' : 'repair'}
+                />
+              </div>
+            ) : (
+              <RepairWorkbench
+                taskId={task.id}
+                picture={experience.picture}
+                brokenPart={experience.brokenPart}
+                parts={experience.parts}
+                stage={visibleStage}
+                zones={zones}
+                nextAction={visibleStage === 'repair' ? { zone: 'fault', label: plan.action } : null}
+                demonstrating={hintLevel === 3}
+                onZoneClick={useSelectedItem}
+              />
+            )}
+            <button className="daily-task-secondary" type="button" onClick={onFindLocation}>Locate target in the environment</button>
+            {visibleStage === 'test' && testArmed && (
+              <div className="first-five-test-results">
+                <p>{plan.testPrompt}</p>
+                {[plan.passingReading, plan.failingReading].map((reading) => (
+                  <button type="button" key={reading} onClick={() => finishTask(reading)}>{reading}</button>
+                ))}
+              </div>
+            )}
+            {hintText && (
+              <p className={`daily-task-hint${hintLevel === 3 ? ' is-demo' : ''}`} role="status" aria-live="polite">
+                {hintLevel === 3 && <span className="first-five-demo-beacon" aria-hidden="true" />}
+                {hintText}
+              </p>
+            )}
+          </>
+        )}
+
+        {visibleStage !== 'success' && (
+          <>
+            <div className="repair-footer">
+              <button
+                type="button"
+                className={`repair-backpack-toggle${backpackOpen ? ' is-open' : ''}`}
+                aria-expanded={backpackOpen}
+                onClick={() => setBackpackOpen((open) => !open)}
+              >
+                Engineer Backpack <small>Reusable equipment</small>
+              </button>
+              <span className="repair-drag-tip">{selectedItem ? `Ready: ${itemName(selectedItem)}` : 'Drag a tool onto the glowing part'}</span>
+            </div>
+            {backpackOpen && (
+              <aside className="repair-backpack-panel" aria-label="Engineer backpack inventory">
+                <div className="repair-backpack-heading">
+                  <div><strong>Engineer Backpack</strong></div>
+                  <button type="button" aria-label="Close backpack" onClick={() => setBackpackOpen(false)}>×</button>
+                </div>
+                <strong className="repair-inventory-label">REUSABLE TOOLS · NOT CONSUMED</strong>
+                <div className="repair-tool-inventory">
+                  {availableTools.map((toolId) => {
+                    const item = { kind: 'tool', id: toolId };
+                    const highlighted = toolId === requiredTool;
+                    return (
+                      <button
+                        type="button"
+                        key={toolId}
+                        className={`repair-inventory-item${highlighted ? ' is-required-tool' : ''}${selectedItem?.id === toolId ? ' is-selected' : ''}`}
+                        onPointerDown={(event) => { setBackpackOpen(false); startDrag(item, event); }}
+                        onClick={() => chooseItem(item)}
+                        aria-label={`Pick up reusable ${toolName(toolId)}`}
+                      >
+                        <ToolPicture kind={BACKPACK_TOOL_DETAILS[toolId]?.picture ?? 'tester'} />
+                        <strong>{toolName(toolId)}</strong>
+                        <small>{highlighted ? 'Required for this step' : 'Reusable'}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="repair-inventory-footnote">Tools are reusable and are never used up. Drop a tool on the glowing target to use it.</p>
+              </aside>
+            )}
+            {dragging && didDragRef.current && (
+              <div className="repair-drag-ghost" style={{ left: dragging.x, top: dragging.y }} aria-hidden="true">
+                <ToolPicture kind={BACKPACK_TOOL_DETAILS[dragging.item.id]?.picture ?? 'tester'} />
+                <strong>{itemName(dragging.item)}</strong>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function BasicDailyTaskExperience({ task, initialStage = 'idea', onClose, onFindLocation, onComplete, experience }) {
   const [stage, setStage] = useState(initialStage);
   const [hint, setHint] = useState('');
   const [selectedTool, setSelectedTool] = useState(null);
@@ -174,6 +586,858 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', onClo
   );
 }
 
+function RepairTaskExperience({
+  task,
+  initialStage = 'idea',
+  onClose,
+  onFindLocation,
+  inventory,
+  progress,
+  onDiagnose,
+  onSelectStrategy,
+  onRepairStep,
+  onVerify,
+  experience,
+  repair,
+}) {
+  const [stage, setStage] = useState(() => (
+    task.status === 'completed'
+      ? 'success'
+      : initialStage === 'idea'
+        ? 'idea'
+        : progress?.repairStepCompleted
+          ? 'verify'
+          : progress?.selectedStrategyId
+            ? 'repair'
+            : progress?.diagnosedPart
+              ? 'strategy'
+              : 'diagnose'
+  ));
+  const [diagnosisTool, setDiagnosisTool] = useState(null);
+  const [strategyStep, setStrategyStep] = useState(0);
+  const [hint, setHint] = useState('');
+  const selectedStrategy = repair.strategies.find(
+    (strategy) => strategy.id === progress?.selectedStrategyId,
+  );
+  const availableTools = experience.tools.filter((choice) => inventory.tools.includes(choice.id));
+  const visibleStage = task.status === 'completed' ? 'success' : stage;
+  const activeStep = ['diagnose', 'inspect'].includes(visibleStage) ? 0
+    : visibleStage === 'strategy' ? 1
+      : visibleStage === 'repair' ? 2 : 3;
+
+  const chooseDiagnosisTool = (choice) => {
+    if (choice.id !== repair.diagnosisToolId) {
+      setHint('This tool helps with a different job. Try the tester to find the problem.');
+      return;
+    }
+    setDiagnosisTool(choice);
+    setHint('');
+  };
+
+  const choosePart = (part) => {
+    if (part !== experience.brokenPart) {
+      setHint(`That part looks okay. ${experience.hint}`);
+      return;
+    }
+    onDiagnose(task.id, diagnosisTool?.id, part);
+    setHint('');
+    setStage('strategy');
+  };
+
+  const chooseStrategy = (strategy) => {
+    const hasParts = Object.entries(strategy.partsCost ?? {}).every(([part, amount]) => (
+      (inventory.spareParts[part] ?? 0) >= amount
+    ));
+    if (!inventory.tools.includes(strategy.toolId) || !hasParts) {
+      setHint('That plan needs a tool or spare part that is not in the bag. Try the no-parts plan.');
+      return;
+    }
+    onSelectStrategy(task.id, strategy.id);
+    setStrategyStep(0);
+    setHint('');
+    setStage('repair');
+  };
+
+  const doRepairStep = () => {
+    if (!selectedStrategy) return;
+    const nextStep = strategyStep + 1;
+    setStrategyStep(nextStep);
+    if (nextStep >= selectedStrategy.steps.length) {
+      onRepairStep(task.id);
+      setStage('verify');
+    }
+  };
+
+  const verify = (optionId) => {
+    const correct = optionId === selectedStrategy?.correctVerificationId;
+    setHint(correct
+      ? 'Great check! Saving your repair and updating the outpost…'
+      : 'Not quite. Look at the system reading and try the check again.');
+    onVerify(task.id, task.targetComponentId, optionId);
+  };
+
+  const steps = ['Find the fault', 'Choose a plan', 'Fix it', 'Check the repair'];
+  return (
+    <div className="daily-task-experience-backdrop" role="presentation">
+      <section className="daily-task-experience" role="dialog" aria-modal="true" aria-labelledby="daily-task-experience-title">
+        <button className="daily-task-experience-close" type="button" aria-label="Close task activity" onClick={onClose}>×</button>
+        <header className="daily-task-experience-header">
+          <span className="daily-task-experience-kicker">Crew helper activity · Day {task.scheduledDay}</span>
+          <h2 id="daily-task-experience-title">{task.title}</h2>
+          {visibleStage !== 'success' && (
+            <div className="daily-task-step-list" aria-label="Repair steps">
+              {steps.map((label, index) => (
+                <span className={index <= activeStep ? 'is-current' : ''} key={label}>
+                  <b>{index + 1}</b>{label}
+                </span>
+              ))}
+            </div>
+          )}
+        </header>
+
+        {visibleStage === 'idea' && (
+          <div className="daily-task-stage">
+            <ObjectPicture picture={experience.picture} />
+            <span className="daily-task-stage-label">Let’s fix it!</span>
+            <p>{experience.scenario}</p>
+            <p className="daily-task-location-note">Go to <strong>{task.targetComponentName}</strong> to start the repair.</p>
+            <button className="daily-task-primary" type="button" onClick={onFindLocation}>Find the repair</button>
+          </div>
+        )}
+
+        {visibleStage === 'diagnose' && (
+          <div className="daily-task-stage">
+            <span className="daily-task-stage-label">1 · Find the fault</span>
+            <p>{repair.diagnosisPrompt}</p>
+            <div className="daily-task-tool-grid">
+              {availableTools.map((choice) => (
+                <button key={choice.id} type="button" onClick={() => chooseDiagnosisTool(choice)}>
+                  <ToolPicture kind={choice.picture} />
+                  <strong>{choice.name}</strong>
+                  <small>Reusable tool</small>
+                </button>
+              ))}
+            </div>
+            {diagnosisTool && (
+              <>
+                <ObjectPicture picture={experience.picture} brokenPart={experience.brokenPart} />
+                <p>With the tester, tap the part that needs help.</p>
+                <div className="daily-task-part-grid">
+                  {experience.parts.map((part) => (
+                    <button key={part} type="button" onClick={() => choosePart(part)}>
+                      <span className="daily-task-part-dot" aria-hidden="true" />{part}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {visibleStage === 'strategy' && (
+          <div className="daily-task-stage">
+            <span className="daily-task-stage-label">2 · Choose a repair plan</span>
+            <p>Tools in your bag can be reused. Spare parts are limited.</p>
+            <div className="daily-task-repair-inventory">
+              <strong>Smart Tool Bag</strong>
+              <span>{availableTools.map((toolChoice) => toolChoice.name).join(' · ')}</span>
+              <strong>Spare parts</strong>
+              <span>Water seals {inventory.spareParts.waterSeal} · Air filters {inventory.spareParts.oxygenFilter} · Panel patches {inventory.spareParts.solarPatch}</span>
+            </div>
+            <div className="daily-task-repair-strategies">
+              {repair.strategies.map((strategy) => {
+                const hasParts = Object.entries(strategy.partsCost ?? {}).every(([part, amount]) => (
+                  (inventory.spareParts[part] ?? 0) >= amount
+                ));
+                return (
+                  <button
+                    type="button"
+                    key={strategy.id}
+                    disabled={!hasParts || !inventory.tools.includes(strategy.toolId)}
+                    onClick={() => chooseStrategy(strategy)}
+                  >
+                    <strong>{strategy.name}</strong>
+                    <span>{strategy.description}</span>
+                    <small>Tool: {experience.tools.find((entry) => entry.id === strategy.toolId)?.name ?? strategy.toolId} · {Object.keys(strategy.partsCost ?? {}).length
+                      ? `Uses ${Object.entries(strategy.partsCost).map(([part, count]) => `${count} ${REPAIR_PART_NAMES[part] ?? part}`).join(', ')}`
+                      : 'No spare parts used'}</small>
+                  </button>
+                );
+              })}
+            </div>
+            {hint && <p className="daily-task-hint" role="status">{hint}</p>}
+          </div>
+        )}
+
+        {visibleStage === 'repair' && selectedStrategy && (
+          <div className="daily-task-stage">
+            <span className="daily-task-stage-label">3 · Fix it together</span>
+            <p>Use the <strong>{experience.tools.find((entry) => entry.id === selectedStrategy.toolId)?.name ?? selectedStrategy.toolId}</strong> for: {selectedStrategy.name}.</p>
+            <div className="daily-task-repair-steps">
+              {selectedStrategy.steps.map((step, index) => (
+                <span className={index < strategyStep ? 'is-done' : ''} key={step}>
+                  <b>{index < strategyStep ? '✓' : index + 1}</b>{step}
+                </span>
+              ))}
+            </div>
+            <button className="daily-task-primary" type="button" onClick={doRepairStep}>
+              {selectedStrategy.steps[strategyStep] ?? 'Repair step'}
+            </button>
+            <button className="daily-task-secondary" type="button" onClick={() => setStage('strategy')}>
+              Choose a different plan
+            </button>
+            <p className="daily-task-location-note">No supplies are used until the repair passes its final check.</p>
+          </div>
+        )}
+
+        {visibleStage === 'verify' && selectedStrategy && (
+          <div className="daily-task-stage">
+            <span className="daily-task-stage-label">4 · Check the repair</span>
+            <p>{selectedStrategy.verificationQuestion}</p>
+            <div className="daily-task-part-grid">
+              {selectedStrategy.verificationOptions.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => verify(option.id)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <button className="daily-task-secondary" type="button" onClick={() => setStage('strategy')}>
+              Choose a different plan
+            </button>
+            {hint && <p className="daily-task-hint" role="status">{hint}</p>}
+          </div>
+        )}
+
+        {visibleStage === 'success' && (
+          <div className="daily-task-stage daily-task-success-stage">
+            <span className="daily-task-success-check" aria-label="Repair verified">✓</span>
+            <span className="daily-task-stage-label">Repair checked and working!</span>
+            <p>{task.completionFeedback}</p>
+            <article className="daily-task-fact-card">
+              <strong>Space fact</strong>
+              <p>{experience.fact}</p>
+            </article>
+            <button className="daily-task-primary" type="button" onClick={onClose}>Done</button>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function RepairAdventure({
+  task,
+  initialStage = 'idea',
+  onClose,
+  onFindLocation,
+  inventory,
+  progress,
+  onDiagnose,
+  onSelectStrategy,
+  onRepairStep,
+  onVerify,
+  experience,
+  repair,
+  firstFiveDays = false,
+}) {
+  const [stage, setStage] = useState(() => (
+    task.status === 'completed' ? 'success'
+      : progress?.repairStepCompleted ? 'verify'
+        : progress?.selectedStrategyId ? 'repair'
+          : progress?.diagnosedPart ? 'strategy'
+            : initialStage === 'idea' ? 'idea' : 'diagnose'
+  ));
+  const [strategyStep, setStrategyStep] = useState(0);
+  const [hint, setHint] = useState('');
+  const [hintLevel, setHintLevel] = useState(0);
+  const [backpackOpen, setBackpackOpen] = useState(false);
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [testArmed, setTestArmed] = useState(false);
+  const [dragging, setDragging] = useState(null);
+  const didDragRef = useRef(false);
+  const dropHandlerRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const selectedStrategy = repair.strategies.find(
+    (strategy) => strategy.id === progress?.selectedStrategyId,
+  );
+  const visibleStage = task.status === 'completed' ? 'success' : stage;
+  const sequence = selectedStrategy
+    ? REPAIR_ACTIONS[task.id]?.[selectedStrategy.id] ?? []
+    : [];
+  const nextAction = sequence[strategyStep];
+  const toolIds = inventory.tools;
+  const availableParts = Object.entries(REPAIR_PART_DETAILS)
+    .filter(([part]) => Number.isInteger(inventory.spareParts[part])
+      && inventory.spareParts[part] > 0);
+  const activeStep = firstFiveDays
+    ? visibleStage === 'idea' ? 0
+      : visibleStage === 'diagnose' ? 1
+        : visibleStage === 'strategy' ? 2
+          : visibleStage === 'repair' ? 3 : 4
+    : ['idea', 'diagnose'].includes(visibleStage) ? 0
+      : visibleStage === 'strategy' ? 1
+        : visibleStage === 'repair' ? 2 : 3;
+  const itemName = (item) => item?.kind === 'part'
+    ? REPAIR_PART_DETAILS[item.id]?.name ?? item.id
+    : BACKPACK_TOOL_DETAILS[item?.id]?.name ?? item?.id;
+  const playChime = (notes) => {
+    const AudioContextConstructor = window.AudioContext;
+    if (!AudioContextConstructor) return;
+    const audioContext = audioContextRef.current
+      ?? (audioContextRef.current = new AudioContextConstructor());
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().catch((error) => {
+        console.warn('Repair sound effects are unavailable.', error);
+      });
+    }
+    notes.forEach((frequency, index) => {
+      const startAt = audioContext.currentTime + index * 0.1;
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(frequency, startAt);
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.exponentialRampToValueAtTime(0.045, startAt + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.16);
+      oscillator.connect(gain);
+      gain.connect(audioContext.destination);
+      oscillator.start(startAt);
+      oscillator.stop(startAt + 0.17);
+    });
+  };
+
+  useEffect(() => () => {
+    const audioContext = audioContextRef.current;
+    if (audioContext && audioContext.state !== 'closed') {
+      audioContext.close().catch((error) => {
+        console.warn('Repair sound effects could not be stopped cleanly.', error);
+      });
+    }
+  }, []);
+
+  const startStrategy = (strategy) => {
+    const hasParts = Object.entries(strategy.partsCost ?? {}).every(([part, amount]) => (
+      Number.isInteger(amount) && amount >= 0 && (inventory.spareParts[part] ?? 0) >= amount
+    ));
+    if (!inventory.tools.includes(strategy.toolId) || !hasParts) {
+      setHint('That part is not in the bag. Try the repair path without spare parts.');
+      return;
+    }
+    onSelectStrategy(task.id, strategy.id);
+    setStrategyStep(0);
+    setSelectedItem(null);
+    setBackpackOpen(false);
+    setHint('Plan ready! Follow the glowing work steps.');
+    setHintLevel(0);
+    setStage('repair');
+  };
+
+  const handleDrop = (item, zone) => {
+    setSelectedItem(null);
+    if (visibleStage === 'diagnose') {
+      if (item.kind !== 'tool' || item.id !== repair.diagnosisToolId) {
+        setHint('Try the Diagnostic Scanner. It can find the hidden fault!');
+        return;
+      }
+      if (zone !== 'fault') {
+        setHint(`Scanner ping! ${experience.hint}`);
+        return;
+      }
+      onDiagnose(task.id, item.id, experience.brokenPart);
+      playChime([620, 880]);
+      setHint('Beep-beep! The fault is glowing. Great detective work!');
+      setHintLevel(0);
+      setStage('strategy');
+      return;
+    }
+
+    if (visibleStage === 'strategy') {
+      if (item.kind === 'part') {
+        const strategy = repair.strategies.find(
+          (entry) => (entry.partsCost?.[item.id] ?? 0) > 0,
+        );
+        if (!strategy) {
+          setHint('That spare does not fit this repair. Try another part or a tool.');
+          return;
+        }
+        startStrategy(strategy);
+        return;
+      }
+      const noPartsStrategy = repair.strategies.find(
+        (entry) => Object.keys(entry.partsCost ?? {}).length === 0 && entry.toolId === item.id,
+      );
+      if (noPartsStrategy) {
+        startStrategy(noPartsStrategy);
+        return;
+      }
+      setHint('Try a spare part for a full repair, or drag the no-parts tool onto the fault.');
+      return;
+    }
+
+    if (visibleStage === 'repair' && nextAction) {
+      if (item.kind !== nextAction.kind || item.id !== nextAction.id || zone !== nextAction.zone) {
+        setHint('Almost! Watch the glowing part and the helper’s tip, then try again.');
+        return;
+      }
+      const nextStep = strategyStep + 1;
+      setStrategyStep(nextStep);
+      playChime([520, 690]);
+      setHint(nextStep < sequence.length ? 'Nice work! One more careful move.' : 'Repair steps complete! Let’s test it.');
+      if (nextStep >= sequence.length) {
+        onRepairStep(task.id);
+        setStage('verify');
+      }
+      return;
+    }
+
+    if (visibleStage === 'verify') {
+      if (item.kind !== 'tool' || item.id !== repair.diagnosisToolId || zone !== 'test') {
+        setHint('Drag the Diagnostic Scanner to the test port to check your repair.');
+        return;
+      }
+      if (!selectedStrategy) return;
+      playChime([660, 830, 1040]);
+      if (!firstFiveDays) {
+        setHint('System test running…');
+        onVerify(task.id, task.targetComponentId, selectedStrategy.correctVerificationId);
+        return;
+      }
+      setTestArmed(true);
+      setHint('System test complete. Select the reading that confirms the repair.');
+    }
+  };
+  const verifyReading = (verificationId) => {
+    if (!selectedStrategy) return;
+    const passed = verificationId === selectedStrategy.correctVerificationId;
+    setHint(passed
+      ? 'Test passed. Updating the outpost systems…'
+      : 'Test did not pass. Review the system reading and try another result.');
+    onVerify(task.id, task.targetComponentId, verificationId);
+  };
+
+  dropHandlerRef.current = handleDrop;
+  useEffect(() => {
+    if (!dragging) return undefined;
+    const handlePointerMove = (event) => {
+      if (Math.hypot(event.clientX - dragging.startX, event.clientY - dragging.startY) > 8) {
+        didDragRef.current = true;
+      }
+      setDragging((current) => current
+        ? { ...current, x: event.clientX, y: event.clientY }
+        : current);
+    };
+    const handlePointerUp = (event) => {
+      if (didDragRef.current) {
+        const target = document.elementFromPoint(event.clientX, event.clientY)
+          ?.closest('[data-repair-zone]');
+        if (target) dropHandlerRef.current?.(dragging.item, target.dataset.repairZone);
+      }
+      setDragging(null);
+    };
+    const handlePointerCancel = () => {
+      didDragRef.current = false;
+      setDragging(null);
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+    };
+  }, [dragging]);
+
+  const chooseItem = (item) => {
+    if (didDragRef.current) {
+      didDragRef.current = false;
+      return;
+    }
+    setSelectedItem(item);
+    setBackpackOpen(false);
+    setHint(`Picked up ${itemName(item)}. Tap a glowing part to use it.`);
+  };
+  const useSelectedItem = (zone) => {
+    if (selectedItem) handleDrop(selectedItem, zone);
+  };
+
+  const instruction = visibleStage === 'diagnose'
+    ? firstFiveDays
+      ? 'Select the Diagnostic Scanner from the Backpack and apply it to the fault.'
+      : 'Drag your scanner over the equipment.'
+    : visibleStage === 'strategy'
+      ? firstFiveDays
+        ? 'Open the Backpack and apply a compatible tool or spare part to the fault.'
+        : 'Choose a spare part, or try a repair with your tools.'
+      : visibleStage === 'repair'
+        ? nextAction?.label ?? 'Finish the repair.'
+        : visibleStage === 'verify'
+          ? firstFiveDays && testArmed ? 'Select the result that confirms the repair.' : 'Drag your scanner to the test port.'
+          : 'Let’s get this outpost system working again!';
+  const hintCopy = hintLevel === 0 ? ''
+    : hintLevel === 1 ? experience.hint
+      : hintLevel === 2
+        ? visibleStage === 'idea'
+          ? `Tool: visual inspection · Target: ${task.targetComponentName} — ${experience.brokenPart} · Gesture: locate the marked equipment and inspect the affected component.`
+          : visibleStage === 'diagnose'
+          ? `Tool: Diagnostic Scanner · Target: ${experience.brokenPart} · Gesture: drag the scanner onto the fault.`
+          : visibleStage === 'strategy'
+            ? `Open the Backpack and apply one compatible option to ${experience.brokenPart}: ${repair.strategies.map((strategy) => `${BACKPACK_TOOL_DETAILS[strategy.toolId]?.name ?? strategy.toolId}${strategy.partsCost ? ` or ${Object.keys(strategy.partsCost).map((part) => REPAIR_PART_DETAILS[part]?.name ?? part).join(', ')}` : ''}`).join('; ')}.`
+            : visibleStage === 'repair'
+              ? `Tool: ${nextAction ? itemName(nextAction) : 'the selected repair tool'} · Target: ${task.targetComponentName} — ${nextAction?.zone === 'fault' ? experience.brokenPart : nextAction?.zone === 'valve' ? 'water valve' : nextAction?.zone === 'cover' ? 'filter cover' : nextAction?.zone === 'connector' ? 'cable connector' : nextAction?.zone ?? experience.brokenPart} · Gesture: drag and drop onto the highlighted work zone.`
+              : `Tool: Diagnostic Scanner · Target: ${task.targetComponentName} — pressure test port · Gesture: drag the scanner onto the test port.`
+        : `Demonstration: ${visibleStage === 'repair' ? nextAction?.label ?? 'Follow the highlighted repair zone.' : `the highlighted ${experience.brokenPart} is the target; follow the cyan target marker.`}`;
+  const advanceHint = () => {
+    setHintLevel((current) => Math.min(3, current + 1));
+    setHint('');
+  };
+  const toolRequiredForStrategy = (toolId) => (
+    visibleStage === 'diagnose'
+      ? toolId === repair.diagnosisToolId
+      : visibleStage === 'strategy' && repair.strategies.some((strategy) => (
+        strategy.toolId === toolId && Object.entries(strategy.partsCost ?? {}).every(([part, amount]) => (
+          (inventory.spareParts[part] ?? 0) >= amount
+        ))
+      ))
+  );
+  const partRequiredForStrategy = (partId) => (
+    visibleStage === 'strategy' && repair.strategies.some((strategy) => (
+      (strategy.partsCost?.[partId] ?? 0) > 0
+      && (inventory.spareParts[partId] ?? 0) >= (strategy.partsCost?.[partId] ?? 0)
+    ))
+  );
+
+  return (
+    <div className="daily-task-experience-backdrop repair-adventure-backdrop" role="presentation">
+      <section className={`daily-task-experience repair-adventure${firstFiveDays ? ' first-five-repair-adventure' : ''}`} role="dialog" aria-modal="true" aria-labelledby="daily-task-experience-title">
+        <button className="daily-task-experience-close" type="button" aria-label="Close repair mission" onClick={onClose}>×</button>
+        <header className="daily-task-experience-header repair-adventure-header">
+          <span className="daily-task-experience-kicker">Lunar Engineering · Day {task.scheduledDay}</span>
+          <h2 id="daily-task-experience-title">{task.title}</h2>
+          <div className="repair-adventure-progress" aria-label={`Mission step ${activeStep + 1} of ${firstFiveDays ? 5 : 4}`}>
+            {(firstFiveDays
+              ? ['Discover', 'Diagnose', 'Choose tools', 'Repair', 'Test & celebrate']
+              : ['Find it', 'Choose a fix', 'Repair', 'Test']
+            ).map((label, index) => (
+              <span className={index < activeStep ? 'is-done' : index === activeStep ? 'is-active' : ''} key={label}>
+                <b>{index < activeStep ? '✓' : index + 1}</b>{label}
+              </span>
+            ))}
+          </div>
+        </header>
+
+        {visibleStage === 'idea' ? (
+          <div className={`repair-adventure-intro${firstFiveDays ? ' is-first-five' : ''}${firstFiveDays && hintLevel === 3 ? ' is-demonstrating' : ''}`}>
+            <ObjectPicture picture={experience.picture} />
+            {!firstFiveDays && <span className="repair-helper-avatar" aria-hidden="true">🧑‍🚀</span>}
+            <div><strong>{firstFiveDays ? 'Discover the fault' : 'Ready to help, astronaut?'}</strong><p>{experience.scenario}</p></div>
+            {firstFiveDays && <p className="first-five-location">Target: <strong>{task.targetComponentName} · {experience.brokenPart}</strong></p>}
+            {firstFiveDays && (
+              <dl className="first-five-hud-details">
+                <div><dt>Action</dt><dd>Inspect the equipment and identify the visible fault.</dd></div>
+                <div><dt>Tool</dt><dd>Visual inspection</dd></div>
+                <div><dt>Target</dt><dd>{task.targetComponentName} · {experience.brokenPart}</dd></div>
+                <div><dt>Gesture</dt><dd>Locate the equipment in the environment, then inspect the affected component.</dd></div>
+              </dl>
+            )}
+            <button className="daily-task-primary" type="button" onClick={onFindLocation}>{firstFiveDays ? 'Locate and inspect target' : 'Head to the equipment'}</button>
+            {firstFiveDays && (
+              <button className="daily-task-hint-button" type="button" onClick={advanceHint}>Hint {hintLevel}/3</button>
+            )}
+            {firstFiveDays && hintCopy && <p className={`daily-task-hint${hintLevel === 3 ? ' is-demo' : ''}`} role="status">{hintCopy}</p>}
+          </div>
+        ) : visibleStage === 'success' ? (
+          <div className={`repair-adventure-success${firstFiveDays ? ' is-first-five' : ''}`}>
+            {!firstFiveDays && <div className="repair-celebration-stars" aria-hidden="true">⭐ ✨ 🌟</div>}
+            <span className="daily-task-success-check" aria-label="Repair complete">✓</span>
+            <h3>{firstFiveDays ? 'System test passed' : 'Outpost system restored!'}</h3>
+            {!firstFiveDays && <div className={`repair-success-signal is-${task.id}`} aria-hidden="true">
+              {task.id === 'habitat-waterline-inspection' ? '💧' : task.id === 'oxygen-loop-filter-service' ? '🌬️' : '⚡'}
+            </div>}
+            <p>{task.completionFeedback}</p>
+            {firstFiveDays && <p className="first-five-reward">Campaign reward applied to the outpost.</p>}
+            {!firstFiveDays && <div className="repair-reward-stars">+1 Engineer Star</div>}
+            <button className="daily-task-primary" type="button" onClick={onClose}>{firstFiveDays ? 'Return to mission control' : 'Back to the outpost'}</button>
+          </div>
+        ) : (
+          <>
+            <div className={`repair-mission-hud${firstFiveDays ? ' is-first-five' : ''}${hintLevel === 3 ? ' is-demonstrating' : ''}`}>
+              {!firstFiveDays && <span className="repair-helper-avatar" aria-hidden="true">🧑‍🚀</span>}
+              <p>{hint || instruction}</p>
+              {firstFiveDays && (
+                <dl className="first-five-hud-details">
+                  <div><dt>Action</dt><dd>{instruction}</dd></div>
+                  <div><dt>Tool</dt><dd>{visibleStage === 'diagnose' || visibleStage === 'verify'
+                    ? 'Diagnostic Scanner'
+                    : visibleStage === 'repair' && nextAction
+                      ? itemName(nextAction)
+                      : visibleStage === 'strategy'
+                        ? repair.strategies.map((strategy) => `${BACKPACK_TOOL_DETAILS[strategy.toolId]?.name ?? strategy.toolId}${strategy.partsCost ? ` or ${Object.keys(strategy.partsCost).map((part) => REPAIR_PART_DETAILS[part]?.name ?? part).join(', ')}` : ''}`).join(' · ')
+                        : 'Selected reusable tool'}</dd></div>
+                  <div><dt>Target</dt><dd>{visibleStage === 'verify' ? `${task.targetComponentName} · Pressure test port` : `${task.targetComponentName} · ${visibleStage === 'repair' ? nextAction?.zone ?? experience.brokenPart : experience.brokenPart}`}</dd></div>
+                  <div><dt>Gesture</dt><dd>{visibleStage === 'verify' && testArmed
+                    ? 'Select the observed result from the test readings.'
+                    : visibleStage === 'strategy' || visibleStage === 'diagnose' || visibleStage === 'verify'
+                      ? 'Drag the selected item from the Backpack to the highlighted work zone.'
+                      : instruction}</dd></div>
+                </dl>
+              )}
+              {!firstFiveDays && <span className="repair-heartbeat" aria-label="System needs repair">●</span>}
+            </div>
+            {firstFiveDays && (
+              <button className="daily-task-hint-button" type="button" onClick={advanceHint}>
+                Hint {hintLevel}/3
+              </button>
+            )}
+            <RepairWorkbench
+              taskId={task.id}
+              picture={experience.picture}
+              brokenPart={experience.brokenPart}
+              parts={experience.parts}
+              stage={visibleStage}
+              nextAction={nextAction}
+              demonstrating={firstFiveDays && hintLevel === 3}
+              onZoneClick={useSelectedItem}
+            />
+            {visibleStage === 'repair' && (
+              <div className="repair-action-progress" aria-label={`Repair action ${strategyStep + 1} of ${sequence.length}`}>
+                <span style={{ width: `${Math.min(100, (strategyStep / Math.max(1, sequence.length)) * 100)}%` }} />
+                <small>{strategyStep} of {sequence.length} repair moves</small>
+              </div>
+            )}
+            {visibleStage === 'verify' && testArmed && selectedStrategy && (
+              <div className="first-five-test-results">
+                <p>{selectedStrategy.verificationQuestion}</p>
+                {selectedStrategy.verificationOptions.map((option) => (
+                  <button type="button" key={option.id} onClick={() => verifyReading(option.id)}>
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+        {visibleStage !== 'success' && (
+          <>
+            <div className="repair-footer">
+              <button
+                type="button"
+                className={`repair-backpack-toggle${backpackOpen ? ' is-open' : ''}`}
+                aria-expanded={backpackOpen}
+                onClick={() => setBackpackOpen((open) => !open)}
+              >
+                {!firstFiveDays && <span aria-hidden="true">🎒</span>} Engineer Backpack
+                <small>{availableParts.length} spare types</small>
+              </button>
+              <span className="repair-drag-tip">{selectedItem ? `Ready: ${itemName(selectedItem)}` : 'Drag a tool onto the glowing part'}</span>
+            </div>
+            {backpackOpen && (
+              <aside className="repair-backpack-panel" aria-label="Engineer backpack inventory">
+                <div className="repair-backpack-heading">
+                  <div>{!firstFiveDays && <span aria-hidden="true">🎒</span>}<strong>Engineer Backpack</strong></div>
+                  <button type="button" aria-label="Close backpack" onClick={() => setBackpackOpen(false)}>×</button>
+                </div>
+                <strong className="repair-inventory-label">REUSABLE TOOLS</strong>
+                <div className="repair-tool-inventory">
+                  {toolIds.map((toolId) => {
+                    const tool = BACKPACK_TOOL_DETAILS[toolId] ?? { name: toolId, picture: 'tester' };
+                    const item = { kind: 'tool', id: toolId };
+                    return (
+                      <button
+                        type="button"
+                        key={toolId}
+                        className={`repair-inventory-item${selectedItem?.id === toolId && selectedItem.kind === 'tool' ? ' is-selected' : ''}${firstFiveDays && toolRequiredForStrategy(toolId) ? ' is-required-tool' : ''}`}
+                        onPointerDown={(event) => {
+                          didDragRef.current = false;
+                          setBackpackOpen(false);
+                          setDragging({
+                            item,
+                            x: event.clientX,
+                            y: event.clientY,
+                            startX: event.clientX,
+                            startY: event.clientY,
+                          });
+                        }}
+                        onClick={() => chooseItem(item)}
+                        aria-label={`Pick up reusable ${tool.name}`}
+                      >
+                        <ToolPicture kind={tool.picture} />
+                        <strong>{tool.name}</strong>
+                        <small>Reusable</small>
+                      </button>
+                    );
+                  })}
+                </div>
+                <strong className="repair-inventory-label">SPARE PARTS</strong>
+                <div className="repair-parts-inventory">
+                  {Object.entries(REPAIR_PART_DETAILS).map(([partId, part]) => {
+                    const amount = inventory.spareParts[partId] ?? 0;
+                    const item = { kind: 'part', id: partId };
+                    return (
+                      <button
+                        type="button"
+                        key={partId}
+                        disabled={amount < 1}
+                        className={`repair-part-inventory-item${selectedItem?.id === partId && selectedItem.kind === 'part' ? ' is-selected' : ''}${firstFiveDays && partRequiredForStrategy(partId) ? ' is-required-part' : ''}`}
+                        onPointerDown={(event) => {
+                          if (amount < 1) return;
+                          didDragRef.current = false;
+                          setBackpackOpen(false);
+                          setDragging({
+                            item,
+                            x: event.clientX,
+                            y: event.clientY,
+                            startX: event.clientX,
+                            startY: event.clientY,
+                          });
+                        }}
+                        onClick={() => amount > 0 && chooseItem(item)}
+                      >
+                        <span className="repair-part-icon" aria-hidden="true">{firstFiveDays ? 'PART' : part.icon}</span>
+                        <span><strong>{part.name}</strong><small>{amount > 0 ? 'Ready to use' : 'Out of stock'}</small></span>
+                        <b>×{amount}</b>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="repair-inventory-footnote">Tools are reusable. A spare is used only when your repair passes its final test.</p>
+              </aside>
+            )}
+            {dragging && didDragRef.current && (
+              <div className="repair-drag-ghost" style={{ left: dragging.x, top: dragging.y }} aria-hidden="true">
+                {dragging.item.kind === 'tool'
+                  ? <ToolPicture kind={BACKPACK_TOOL_DETAILS[dragging.item.id]?.picture ?? 'tester'} />
+                  : firstFiveDays ? 'PART' : REPAIR_PART_DETAILS[dragging.item.id]?.icon}
+                <strong>{itemName(dragging.item)}</strong>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function RepairWorkbench({
+  taskId,
+  picture,
+  brokenPart,
+  parts,
+  stage,
+  nextAction,
+  demonstrating = false,
+  onZoneClick,
+  zones: zoneOverride,
+}) {
+  const bespoke = taskId === 'habitat-waterline-inspection'
+    || taskId === 'oxygen-loop-filter-service'
+    || taskId === 'solar-array-inspection';
+  const zones = zoneOverride ?? (taskId === 'habitat-waterline-inspection'
+    ? [
+      { id: 'valve', label: 'Water valve', className: 'is-valve' },
+      { id: 'fault', label: brokenPart, className: 'is-fault' },
+      { id: 'test', label: 'Pressure test', className: 'is-test' },
+    ]
+    : taskId === 'oxygen-loop-filter-service'
+      ? [
+        { id: 'cover', label: 'Filter cover', className: 'is-cover' },
+        { id: 'fault', label: brokenPart, className: 'is-fault' },
+        { id: 'test', label: 'Airflow test', className: 'is-test' },
+      ]
+      : [
+        { id: 'connector', label: 'Cable connector', className: 'is-connector' },
+        { id: 'fault', label: brokenPart, className: 'is-fault' },
+        { id: 'test', label: 'Power test', className: 'is-test' },
+      ]);
+  const glowingZone = stage === 'diagnose' || stage === 'strategy'
+    ? 'fault'
+    : stage === 'repair' ? nextAction?.zone
+      : stage === 'verify' || stage === 'test' ? 'test' : null;
+  const sceneClass = taskId === 'habitat-waterline-inspection'
+    ? 'is-water'
+    : taskId === 'oxygen-loop-filter-service'
+      ? 'is-oxygen'
+      : taskId === 'solar-array-inspection' ? 'is-solar' : 'is-generic';
+
+  return (
+    <div className={`repair-workbench ${sceneClass}`}>
+      <div className="repair-workbench-sky" aria-hidden="true"><i /><i /><i /><i /><i /></div>
+      <div className="repair-workbench-title">
+        <span>MISSION BAY</span><strong>{picture}</strong>
+      </div>
+      <svg className="repair-equipment-art" viewBox="0 0 640 300" role="img" aria-label={`${picture} repair workbench`}>
+        <defs>
+          <linearGradient id="repair-metal-fill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0" stopColor="#b9dbe6" />
+            <stop offset="1" stopColor="#527b91" />
+          </linearGradient>
+        </defs>
+        <path className="repair-art-floor" d="M37 252h566l-44 34H81z" />
+        <path className="repair-art-horizon" d="M54 227h532" />
+        {taskId === 'habitat-waterline-inspection' && (
+          <g className="repair-art-water">
+            <path d="M86 100h130v56h207v-58h132v82h-135v36H216v-35H86z" />
+            <path className="repair-art-joint" d="M198 105v47m-18-20h36m188-4v45m-19-23h39" />
+            <path className="repair-art-valve" d="M352 118v-37m-24 0h48m-24-19v37m-18-18h37" />
+            <circle className="repair-art-leak" cx="215" cy="170" r="7" />
+            <path className="repair-art-water-drop" d="M215 179c-11 13-9 23 0 23s11-10 0-23" />
+          </g>
+        )}
+        {taskId === 'oxygen-loop-filter-service' && (
+          <g className="repair-art-oxygen">
+            <rect x="216" y="58" width="207" height="166" rx="26" />
+            <rect className="repair-art-filter-cover" x="243" y="82" width="153" height="116" rx="15" />
+            <path className="repair-art-filter-lines" d="M267 111h105m-105 24h105m-105 24h105" />
+            <circle className="repair-art-air-light" cx="373" cy="72" r="9" />
+            <path className="repair-art-air-flow" d="M151 127h54m-13-15 15 15-15 15m291-15h49m-15-15 15 15-15 15" />
+          </g>
+        )}
+        {taskId === 'solar-array-inspection' && (
+          <g className="repair-art-solar">
+            <path d="m140 88 350 0 48 119H101z" />
+            <path className="repair-art-solar-grid" d="m194 88-38 119m116-119-18 119m99-119 3 119m97-119 26 119M120 146h394m-404 37h423" />
+            <path className="repair-art-solar-cable" d="M325 208v23h96v-33" />
+            <circle className="repair-art-spark" cx="421" cy="193" r="12" />
+            <path className="repair-art-spark-lines" d="m420 185-5 8h6l-2 8 8-11h-6l3-5" />
+          </g>
+        )}
+        {!bespoke && (
+          <g className="repair-art-generic">
+            <rect x="196" y="66" width="248" height="150" rx="22" />
+            <rect className="repair-art-generic-panel" x="222" y="92" width="196" height="72" rx="12" />
+            <path className="repair-art-generic-lines" d="M244 116h152m-152 24h152" />
+            <circle className="repair-art-generic-light" cx="410" cy="80" r="8" />
+            <path className="repair-art-generic-port" d="M300 190h40v18h-40z" />
+          </g>
+        )}
+        <path className="repair-art-console" d="M254 231h132l-14 21h-104z" />
+        <rect className="repair-art-console-screen" x="290" y="235" width="62" height="9" rx="4" />
+        <circle className="repair-art-console-light" cx="365" cy="240" r="4" />
+      </svg>
+      {zones.map((zone) => (
+        <button
+          type="button"
+          key={zone.id}
+          data-repair-zone={zone.id}
+          className={`repair-zone ${zone.className}${glowingZone === zone.id ? ' is-glowing' : ''}${demonstrating && glowingZone === zone.id ? ' is-demonstrating' : ''}`}
+          onClick={() => onZoneClick(zone.id)}
+          aria-label={`Repair target: ${zone.label}`}
+        >
+          <span className="repair-zone-pulse" aria-hidden="true" />
+          <strong>{zone.label}</strong>
+        </button>
+      ))}
+      <span className="repair-scene-caption" aria-live="polite">
+        {stage === 'diagnose' ? `Scan near: ${parts.join(' · ')}` : stage === 'verify' || stage === 'test' ? 'Ready for system test' : 'Touch or drop a tool on the workbench'}
+      </span>
+    </div>
+  );
+}
+
 function ObjectPicture({ picture, brokenPart }) {
   const cluePosition = getFaultCluePosition(picture, brokenPart);
   return (
@@ -259,7 +1523,11 @@ function ToolPicture({ kind, large = false }) {
 function ToolDrawing({ kind }) {
   const common = { fill: 'none', stroke: 'currentColor', strokeWidth: 4, strokeLinecap: 'round', strokeLinejoin: 'round' };
   if (kind === 'gloves') return <g {...common}><path d="M18 36V18a4 4 0 0 1 8 0v12-16a4 4 0 0 1 8 0v16-13a4 4 0 0 1 8 0v15-9a4 4 0 0 1 8 0v20q0 13-13 13H31q-9 0-13-10l-5-11a5 5 0 0 1 5-6Z"/><path d="M28 44h17"/></g>;
-  if (kind === 'wrench' || kind === 'clamp' || kind === 'screwdriver') return <g {...common}><path d="M39 13a17 17 0 0 0-21 21L9 43a8 8 0 0 0 12 12l10-10a17 17 0 0 0 21-21L42 34l-10-2-2-10Z"/></g>;
+  if (kind === 'flashlight') return <g {...common}><path d="m19 18 27 9-13 29-20-7 6-31Zm-4-7 33 11m-34 34 8 3m-12-37 16 6"/><path d="m44 18 12-5m-8 12 13-1"/></g>;
+  if (kind === 'pliers') return <g {...common}><path d="m20 14 15 18m9-18L29 32m-8 0-8 18 8 5 13-19m8-4 8 18-8 5-13-19"/><circle cx="32" cy="33" r="5"/></g>;
+  if (kind === 'repair-kit') return <g {...common}><rect x="12" y="23" width="40" height="31" rx="6"/><path d="M23 23v-8h18v8m-9 8v17m-8-9h16"/></g>;
+  if (kind === 'screwdriver') return <g {...common}><path d="m23 44 24-24 8 8-24 24m-8-8 8 8M43 18l7-7 9 9-7 7"/></g>;
+  if (kind === 'wrench' || kind === 'clamp') return <g {...common}><path d="M39 13a17 17 0 0 0-21 21L9 43a8 8 0 0 0 12 12l10-10a17 17 0 0 0 21-21L42 34l-10-2-2-10Z"/></g>;
   if (kind === 'brush' || kind === 'cloth') return <g {...common}><path d="M18 40 41 17l8 8-23 23m-12 2q12-2 11 7H9q-2-7 5-14Zm23-31 8-8 14 14-8 8"/></g>;
   if (kind === 'cable') return <g {...common}><path d="M17 12v11m30-11v11M17 23c0 26 30 9 30 29"/><rect x="11" y="8" width="12" height="8" rx="2"/><rect x="41" y="8" width="12" height="8" rx="2"/><circle cx="47" cy="52" r="5"/></g>;
   if (kind === 'patch') return <g {...common}><path d="m18 46 28-28 10 10-28 28H18Z"/><path d="M31 23 41 33M24 30l10 10m-9 16h27"/></g>;

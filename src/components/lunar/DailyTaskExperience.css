@@ -99,6 +99,7 @@
 .daily-task-part-grid button:focus-visible,
 .daily-task-tool-grid button:focus-visible,
 .daily-task-primary:focus-visible,
+.daily-task-secondary:focus-visible,
 .daily-task-hold-button:focus-visible,
 .daily-task-experience-close:focus-visible { outline: 3px solid #a8f1e7; outline-offset: 2px; }
 .daily-task-part-dot { width: 13px; height: 13px; border: 3px solid #8bdbe2; border-radius: 50%; background: rgba(123, 228, 229, 0.2); }
@@ -111,9 +112,47 @@
 .daily-task-tool-picture.is-large { width: 86px; height: 86px; margin: 0 auto; border-radius: 24px; }
 .daily-task-tool-picture.is-large svg { width: 70px; height: 70px; }
 
+.daily-task-repair-inventory {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid rgba(135, 219, 239, 0.3);
+  border-radius: 12px;
+  background: rgba(70, 139, 163, 0.13);
+  color: #dceef4;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.daily-task-repair-inventory strong { color: #a8eff4; }
+.daily-task-repair-strategies,
+.daily-task-repair-steps { display: grid; gap: 9px; }
+.daily-task-repair-strategies button {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid rgba(151, 194, 215, 0.32);
+  border-radius: 12px;
+  color: #edf8ff;
+  background: rgba(77, 122, 150, 0.14);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.daily-task-repair-strategies button:disabled { opacity: 0.5; cursor: not-allowed; }
+.daily-task-repair-strategies button:not(:disabled):hover { border-color: #a2e8e7; background: rgba(83, 155, 164, 0.2); }
+.daily-task-repair-strategies button strong { color: #baf5e4; }
+.daily-task-repair-strategies button span { color: #e0edf5; font-size: 0.88rem; line-height: 1.4; }
+.daily-task-repair-strategies button small { color: #a9c5d2; font-size: 0.78rem; }
+.daily-task-repair-steps span { display: flex; align-items: center; gap: 10px; color: #e0edf5; }
+.daily-task-repair-steps b { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 1px solid rgba(185, 212, 228, 0.32); border-radius: 50%; }
+.daily-task-repair-steps .is-done { color: #a8f2d9; }
+.daily-task-repair-steps .is-done b { border-color: #83e4c6; background: rgba(131, 228, 198, 0.16); }
+
 .daily-task-hint { margin: 0; padding: 11px 13px; border: 1px solid rgba(255, 209, 137, 0.32); border-radius: 12px; color: #ffe5b6 !important; background: rgba(154, 107, 51, 0.16); font-size: 0.9rem !important; line-height: 1.45 !important; }
 .daily-task-primary { justify-self: end; min-height: 46px; padding: 10px 20px; border: 0; border-radius: 14px; color: #0b292b; background: linear-gradient(135deg, #a8f2d9, #75d8e5); font-size: 0.96rem; font-weight: 700; cursor: pointer; }
 .daily-task-primary:hover { filter: brightness(1.07); }
+.daily-task-secondary { justify-self: start; min-height: 40px; padding: 8px 14px; border: 1px solid rgba(151, 194, 215, 0.38); border-radius: 12px; color: #e8f6fb; background: rgba(77, 122, 150, 0.14); font: inherit; font-size: 0.86rem; cursor: pointer; }
+.daily-task-secondary:hover { border-color: #a2e8e7; background: rgba(83, 155, 164, 0.2); }
 
 .daily-task-hold-button { position: relative; display: grid; min-height: 58px; place-items: center; overflow: hidden; border: 1px solid rgba(149, 236, 218, 0.65); border-radius: 16px; color: #f4fffc; background: rgba(46, 105, 91, 0.35); font-size: 1rem; font-weight: 700; touch-action: none; user-select: none; cursor: pointer; }
 .daily-task-progress-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(79, 209, 156, 0.76), rgba(105, 224, 211, 0.7)); transition: width 60ms linear; }
@@ -143,4 +182,357 @@
   .daily-task-part-grid button,
   .daily-task-tool-grid button,
   .daily-task-progress-fill { transition: none; }
+}
+
+.repair-adventure-backdrop {
+  padding: clamp(8px, 2vw, 22px);
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(35, 115, 145, 0.18), transparent 55%),
+    rgba(2, 8, 19, 0.84);
+}
+
+.repair-adventure {
+  width: min(1050px, 100%);
+  min-height: min(690px, calc(100dvh - 40px));
+  padding: clamp(17px, 3vw, 30px);
+  overflow: hidden auto;
+  border-color: rgba(99, 222, 241, 0.54);
+  background:
+    radial-gradient(ellipse at 50% 25%, rgba(38, 89, 124, 0.35), transparent 60%),
+    linear-gradient(155deg, #173044 0%, #0c1a2e 75%);
+}
+
+.repair-adventure-header { gap: 7px; }
+.repair-adventure-header h2 { font-size: clamp(1.25rem, 3vw, 1.7rem); }
+.repair-adventure-progress { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin: 7px 30px 1px 0; }
+.repair-adventure-progress > span { display: flex; align-items: center; gap: 7px; color: #7692a7; font-size: 0.78rem; font-weight: 650; }
+.repair-adventure-progress b { display: grid; width: 27px; height: 27px; flex: 0 0 27px; place-items: center; border: 1px solid rgba(169, 205, 222, 0.28); border-radius: 50%; color: #a7bfd0; background: rgba(9, 24, 38, 0.66); }
+.repair-adventure-progress .is-active { color: #e7fbff; }
+.repair-adventure-progress .is-active b { border-color: #80e6ef; color: #092334; background: #80e6ef; box-shadow: 0 0 18px rgba(89, 223, 239, 0.43); }
+.repair-adventure-progress .is-done { color: #a7f0d7; }
+.repair-adventure-progress .is-done b { border-color: #81e3bc; color: #07392e; background: #81e3bc; }
+
+.repair-mission-hud { display: flex; align-items: center; gap: 12px; min-height: 51px; margin: 13px 0 10px; padding: 8px 14px; border: 1px solid rgba(131, 215, 231, 0.3); border-radius: 16px; background: linear-gradient(90deg, rgba(28, 83, 106, 0.58), rgba(29, 57, 84, 0.57)); box-shadow: inset 0 1px rgba(255, 255, 255, 0.05); }
+.repair-mission-hud p { flex: 1; margin: 0; color: #ecf9ff; font-size: 0.95rem; line-height: 1.35; }
+.repair-helper-avatar { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border: 1px solid rgba(255, 255, 255, 0.23); border-radius: 50%; background: linear-gradient(145deg, #80d5e6, #5389b5); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); font-size: 1.45rem; }
+.repair-heartbeat { color: #ffb96f; text-shadow: 0 0 12px #ff9a54; animation: repair-pulse 1.1s ease-in-out infinite alternate; }
+
+.repair-workbench { position: relative; isolation: isolate; min-height: clamp(300px, 41vh, 390px); overflow: hidden; border: 1px solid rgba(141, 211, 233, 0.37); border-radius: 23px; background: linear-gradient(180deg, #142b42 0%, #263c4b 61%, #455761 62%, #263845 100%); box-shadow: inset 0 1px rgba(255, 255, 255, 0.13), 0 14px 35px rgba(0, 0, 0, 0.2); }
+.repair-workbench-sky { position: absolute; inset: 0 0 38% 0; opacity: 0.85; background: radial-gradient(ellipse at 72% 21%, rgba(79, 183, 217, 0.18), transparent 36%), linear-gradient(180deg, rgba(7, 18, 35, 0.08), transparent); }
+.repair-workbench-sky i { position: absolute; width: 3px; height: 3px; border-radius: 50%; background: #d7f4ff; box-shadow: 0 0 8px #9dddf4; }
+.repair-workbench-sky i:nth-child(1) { left: 15%; top: 20%; }.repair-workbench-sky i:nth-child(2) { left: 33%; top: 12%; }.repair-workbench-sky i:nth-child(3) { left: 79%; top: 29%; }.repair-workbench-sky i:nth-child(4) { left: 89%; top: 13%; }.repair-workbench-sky i:nth-child(5) { left: 63%; top: 8%; }
+.repair-workbench-title { position: absolute; z-index: 1; top: 15px; left: 19px; display: grid; gap: 2px; color: #9dc3d5; font-size: 0.64rem; letter-spacing: 0.13em; text-transform: uppercase; }
+.repair-workbench-title strong { color: #effaff; font-size: 0.88rem; letter-spacing: 0; text-transform: none; }
+.repair-equipment-art { position: absolute; inset: 7% 3% 3%; width: 94%; height: 89%; overflow: visible; }
+.repair-art-floor { fill: rgba(12, 27, 38, 0.56); stroke: rgba(176, 204, 211, 0.25); stroke-width: 2; }
+.repair-art-horizon { fill: none; stroke: rgba(176, 208, 221, 0.25); stroke-width: 2; stroke-dasharray: 9 10; }
+.repair-art-console { fill: url(#repair-metal-fill); stroke: #d4eff5; stroke-width: 2; }
+.repair-art-console-screen { fill: #72dfc7; filter: drop-shadow(0 0 6px rgba(93, 248, 198, 0.8)); }
+.repair-art-console-light { fill: #ffd37b; }
+.repair-art-water > path:first-child { fill: none; stroke: #9dcbd8; stroke-width: 25; stroke-linejoin: round; }
+.repair-art-joint,.repair-art-valve { fill: none; stroke: #d6edf0; stroke-width: 10; stroke-linecap: round; stroke-linejoin: round; }
+.repair-art-leak { fill: #72dcff; filter: drop-shadow(0 0 8px #30c6ff); animation: repair-pulse 0.7s ease-in-out infinite alternate; }
+.repair-art-water-drop { fill: #4fd1f3; stroke: #c6f9ff; stroke-width: 2; animation: repair-drop 1.1s ease-in infinite; }
+.repair-art-oxygen > rect:first-child { fill: url(#repair-metal-fill); stroke: #d1eef3; stroke-width: 4; }
+.repair-art-filter-cover { fill: #36576c; stroke: #a1d1dc; stroke-width: 4; }
+.repair-art-filter-lines { fill: none; stroke: #a9d8e1; stroke-width: 7; stroke-linecap: round; }
+.repair-art-air-light { fill: #ff977e; filter: drop-shadow(0 0 9px #ff775f); }
+.repair-art-air-flow { fill: none; stroke: #86cfea; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 11 8; animation: repair-flow 1s linear infinite; }
+.repair-art-solar > path:first-child { fill: #3974a0; stroke: #c1e9f4; stroke-width: 5; stroke-linejoin: round; }
+.repair-art-solar-grid { fill: none; stroke: #91d8e8; stroke-width: 3; }
+.repair-art-solar-cable { fill: none; stroke: #e3c772; stroke-width: 9; stroke-linecap: round; stroke-linejoin: round; }
+.repair-art-spark { fill: rgba(255, 167, 95, 0.18); stroke: #ffb275; stroke-width: 2; animation: repair-pulse 0.55s ease-in-out infinite alternate; }
+.repair-art-spark-lines { fill: none; stroke: #fff0a9; stroke-width: 3; stroke-linejoin: round; }
+
+.repair-zone { position: absolute; z-index: 2; display: grid; justify-items: center; gap: 4px; min-width: 80px; max-width: 155px; padding: 5px 8px; border: 1px solid rgba(198, 233, 242, 0.43); border-radius: 12px; color: #dff8ff; background: rgba(11, 34, 50, 0.8); font: inherit; font-size: 0.7rem; line-height: 1.15; cursor: pointer; touch-action: manipulation; transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease; }
+.repair-zone:hover,.repair-zone:focus-visible { transform: translateY(-2px); outline: 2px solid #e8fbff; outline-offset: 2px; }
+.repair-zone strong { font-weight: 700; text-align: center; }
+.repair-zone.is-glowing { border-color: #ffe18d; color: #fff8df; background: rgba(125, 92, 33, 0.78); box-shadow: 0 0 0 3px rgba(255, 206, 106, 0.2), 0 0 23px rgba(255, 193, 91, 0.56); animation: repair-target-pulse 1.2s ease-in-out infinite alternate; }
+.repair-zone.is-valve { left: 48%; top: 30%; }.repair-zone.is-fault { left: 27%; top: 52%; }.repair-zone.is-test { left: 48%; bottom: 17%; }
+.is-oxygen .repair-zone.is-cover { left: 31%; top: 26%; }.is-oxygen .repair-zone.is-fault { left: 46%; top: 49%; }.is-oxygen .repair-zone.is-test { left: 70%; bottom: 18%; }
+.is-solar .repair-zone.is-connector { left: 61%; top: 51%; }.is-solar .repair-zone.is-fault { left: 42%; top: 48%; }.is-solar .repair-zone.is-test { left: 69%; bottom: 17%; }
+.repair-zone-pulse { width: 9px; height: 9px; border: 2px solid #9deafa; border-radius: 50%; background: #38cde6; box-shadow: 0 0 10px #50d7ed; }
+.repair-zone.is-glowing .repair-zone-pulse { border-color: #fff1b7; background: #ffd06f; box-shadow: 0 0 12px #ffce6d; }
+.repair-scene-caption { position: absolute; right: 12px; bottom: 9px; left: 12px; color: rgba(226, 242, 247, 0.75); font-size: 0.69rem; text-align: center; pointer-events: none; }
+
+.repair-action-progress { position: relative; height: 25px; margin: 8px 5px 0; overflow: hidden; border: 1px solid rgba(127, 210, 221, 0.32); border-radius: 9px; background: rgba(2, 17, 29, 0.58); }
+.repair-action-progress > span { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(76, 222, 174, 0.62), rgba(83, 202, 241, 0.68)); transition: width 320ms ease; }
+.repair-action-progress small { position: absolute; inset: 0; display: grid; place-items: center; color: #f0fbff; font-size: 0.68rem; text-shadow: 0 1px 4px #071622; }
+.repair-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 11px; }
+.repair-backpack-toggle { display: flex; align-items: center; gap: 9px; min-height: 48px; padding: 7px 15px; border: 1px solid rgba(159, 228, 235, 0.48); border-radius: 15px; color: #f3fcff; background: linear-gradient(135deg, #28536d, #203b5a); box-shadow: 0 5px 16px rgba(0, 0, 0, 0.2); font: inherit; font-size: 0.86rem; font-weight: 750; cursor: pointer; }
+.repair-backpack-toggle > span { font-size: 1.35rem; }.repair-backpack-toggle small { margin-left: 3px; color: #a9dbe5; font-size: 0.68rem; font-weight: 600; }.repair-backpack-toggle.is-open { border-color: #ffe08d; background: linear-gradient(135deg, #765c2c, #3f4250); }
+.repair-drag-tip { color: #9ab8c9; font-size: 0.75rem; text-align: right; }
+.repair-backpack-panel { position: absolute; z-index: 5; top: 137px; right: 18px; bottom: 17px; width: min(410px, calc(100% - 36px)); box-sizing: border-box; overflow-y: auto; padding: 16px; border: 1px solid rgba(143, 226, 235, 0.62); border-radius: 20px; background: linear-gradient(155deg, rgba(24, 52, 72, 0.98), rgba(11, 25, 43, 0.98)); box-shadow: 0 18px 55px rgba(0, 0, 0, 0.55), inset 0 1px rgba(255, 255, 255, 0.08); }
+.repair-backpack-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.repair-backpack-heading > div { display: flex; align-items: center; gap: 9px; color: #f2fdff; font-size: 1.05rem; }.repair-backpack-heading > div span { font-size: 1.6rem; }
+.repair-backpack-heading button { width: 34px; height: 34px; border: 1px solid rgba(181, 222, 235, 0.28); border-radius: 50%; color: white; background: rgba(255, 255, 255, 0.08); font-size: 1.25rem; cursor: pointer; }
+.repair-inventory-label { display: block; margin: 9px 0 7px; color: #91d9e8; font-size: 0.66rem; letter-spacing: 0.12em; }
+.repair-tool-inventory { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.repair-inventory-item { display: grid; justify-items: center; gap: 4px; min-height: 98px; padding: 8px 4px; border: 1px solid rgba(153, 202, 219, 0.24); border-radius: 12px; color: #effaff; background: linear-gradient(150deg, rgba(82, 131, 158, 0.26), rgba(31, 63, 87, 0.3)); cursor: grab; touch-action: none; }
+.repair-inventory-item:active { cursor: grabbing; }.repair-inventory-item:hover,.repair-inventory-item.is-selected { border-color: #ffe08d; background: rgba(87, 132, 150, 0.42); }
+.repair-inventory-item .daily-task-tool-picture { width: 43px; height: 43px; border-radius: 13px; }.repair-inventory-item .daily-task-tool-picture svg { width: 36px; height: 36px; }.repair-inventory-item strong { font-size: 0.69rem; line-height: 1.1; text-align: center; }.repair-inventory-item small { color: #9cddc7; font-size: 0.58rem; }
+.repair-parts-inventory { display: grid; gap: 6px; }
+.repair-part-inventory-item { display: grid; grid-template-columns: 39px 1fr auto; align-items: center; gap: 9px; min-height: 54px; padding: 5px 9px; border: 1px solid rgba(172, 208, 222, 0.24); border-radius: 12px; color: #effaff; background: rgba(86, 124, 147, 0.18); text-align: left; cursor: grab; touch-action: none; }
+.repair-part-inventory-item:disabled { opacity: 0.52; cursor: not-allowed; }.repair-part-inventory-item:not(:disabled):hover,.repair-part-inventory-item.is-selected { border-color: #ffe08d; background: rgba(120, 106, 65, 0.27); }
+.repair-part-icon { display: grid; width: 35px; height: 35px; place-items: center; border-radius: 11px; background: rgba(133, 198, 213, 0.15); font-size: 1.3rem; }
+.repair-part-inventory-item > span:nth-child(2) { display: grid; gap: 2px; }.repair-part-inventory-item strong { font-size: 0.76rem; }.repair-part-inventory-item small { color: #9bb6c5; font-size: 0.65rem; }.repair-part-inventory-item > b { color: #ffe195; font-size: 0.95rem; }
+.repair-inventory-footnote { margin: 10px 0 0; color: #a9c2ce; font-size: 0.7rem; line-height: 1.4; }
+.repair-drag-ghost { position: fixed; z-index: 2500; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid #ffe08d; border-radius: 14px; color: white; background: rgba(15, 39, 57, 0.95); box-shadow: 0 5px 20px rgba(0, 0, 0, 0.45); pointer-events: none; transform: translate(-45%, -55%); }.repair-drag-ghost .daily-task-tool-picture { width: 36px; height: 36px; }.repair-drag-ghost .daily-task-tool-picture svg { width: 30px; height: 30px; }.repair-drag-ghost strong { white-space: nowrap; font-size: 0.76rem; }
+
+.repair-adventure-intro,.repair-adventure-success { display: grid; justify-items: center; gap: 12px; max-width: 670px; margin: 28px auto 0; text-align: center; }.repair-adventure-intro > div { display: grid; gap: 5px; }.repair-adventure-intro > div strong { color: #e6fbff; font-size: 1.15rem; }.repair-adventure-intro > div p,.repair-adventure-success p { margin: 0; color: #c9e2ec; line-height: 1.45; }.repair-adventure-intro .daily-task-object-picture { max-width: 265px; }
+.repair-adventure-success { position: relative; padding: 35px 10px 8px; }.repair-adventure-success h3 { margin: 0; color: #e8fff3; font-size: 1.6rem; }.repair-adventure-success .daily-task-primary { justify-self: center; }.repair-celebration-stars { position: absolute; top: 1px; color: #ffe391; font-size: 1.6rem; letter-spacing: 0.6em; animation: repair-celebrate 1.6s ease-in-out infinite alternate; }.repair-reward-stars { padding: 8px 15px; border: 1px solid rgba(255, 221, 138, 0.5); border-radius: 999px; color: #ffe598; background: rgba(135, 101, 34, 0.25); font-weight: 800; }
+.repair-success-signal { display: grid; width: 76px; height: 76px; place-items: center; border: 1px solid rgba(151, 243, 203, 0.66); border-radius: 50%; color: #c1ffe1; background: radial-gradient(circle, rgba(97, 238, 181, 0.33), rgba(31, 123, 108, 0.2)); box-shadow: 0 0 27px rgba(98, 240, 189, 0.5); font-size: 2.5rem; animation: repair-signal-restore 850ms ease-out both; }
+
+@keyframes repair-pulse { from { opacity: 0.55; transform: scale(0.94); } to { opacity: 1; transform: scale(1.08); } }
+@keyframes repair-target-pulse { from { box-shadow: 0 0 0 2px rgba(255, 206, 106, 0.14), 0 0 14px rgba(255, 193, 91, 0.35); } to { box-shadow: 0 0 0 4px rgba(255, 206, 106, 0.27), 0 0 25px rgba(255, 193, 91, 0.68); } }
+@keyframes repair-drop { 0% { opacity: 0; transform: translateY(-4px); } 25% { opacity: 1; } 100% { opacity: 0; transform: translateY(12px); } }
+@keyframes repair-flow { to { stroke-dashoffset: -38; } }
+@keyframes repair-celebrate { from { transform: translateY(4px) scale(0.96); } to { transform: translateY(-7px) scale(1.06); } }
+@keyframes repair-signal-restore { from { opacity: 0.35; transform: scale(0.66); filter: grayscale(1); } to { opacity: 1; transform: scale(1); filter: grayscale(0); } }
+
+@media (max-width: 650px) {
+  .repair-adventure { min-height: calc(100dvh - 20px); padding: 17px 13px; border-radius: 18px; }
+  .repair-adventure-progress { margin-right: 22px; gap: 3px; }
+  .repair-adventure-progress > span { flex-direction: column; align-items: flex-start; gap: 2px; font-size: 0.64rem; }
+  .repair-workbench { min-height: clamp(280px, 39vh, 350px); }
+  .repair-workbench-title { top: 10px; left: 11px; font-size: 0.56rem; }
+  .repair-zone { min-width: 66px; max-width: 115px; padding: 5px 6px; font-size: 0.62rem; }
+  .repair-zone.is-valve { left: 45%; }.repair-zone.is-fault { left: 22%; }.repair-zone.is-test { left: 42%; }
+  .is-oxygen .repair-zone.is-cover { left: 23%; }.is-oxygen .repair-zone.is-fault { left: 42%; }.is-oxygen .repair-zone.is-test { left: 65%; }
+  .is-solar .repair-zone.is-connector { left: 56%; }.is-solar .repair-zone.is-fault { left: 36%; }.is-solar .repair-zone.is-test { left: 64%; }
+  .repair-backpack-panel { top: 137px; right: 9px; bottom: 9px; width: min(370px, calc(100% - 18px)); padding: 12px; }
+  .repair-tool-inventory { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+  .repair-inventory-item { min-height: 89px; }.repair-inventory-item strong { font-size: 0.62rem; }
+}
+
+.first-five-task-experience {
+  border-color: rgba(82, 190, 219, 0.52);
+  border-radius: 18px;
+  background: linear-gradient(155deg, rgba(22, 38, 57, 0.99), rgba(8, 17, 30, 0.99));
+}
+.first-five-progress {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 5px;
+}
+.first-five-progress > span {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  color: #96aabe;
+  font-size: 0.7rem;
+  line-height: 1.2;
+}
+.first-five-progress b {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 1px solid rgba(147, 177, 200, 0.4);
+  border-radius: 50%;
+  color: #c5d6e5;
+  font-size: 0.72rem;
+}
+.first-five-progress .is-active { color: #d7f4fb; font-weight: 700; }
+.first-five-progress .is-active b { border-color: #5bc4df; color: #061827; background: #64cce5; box-shadow: 0 0 15px rgba(71, 201, 231, 0.35); }
+.first-five-progress .is-complete { color: #a9dec9; }
+.first-five-progress .is-complete b { border-color: #65bd9b; color: #07251c; background: #73c9a7; }
+.first-five-scene { display: grid; gap: 12px; margin-top: 21px; }
+.first-five-scene-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.first-five-scene-heading strong { color: #dceaf4; font-size: 0.86rem; text-align: right; }
+.first-five-scene > .daily-task-object-picture { width: min(320px, 100%); }
+.first-five-instructions,
+.first-five-hud-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid rgba(106, 177, 205, 0.22);
+  border-radius: 13px;
+  background: rgba(5, 16, 29, 0.52);
+}
+.first-five-instructions > div,
+.first-five-hud-details > div { display: grid; gap: 3px; }
+.first-five-instructions dt,
+.first-five-hud-details dt { color: #70bed2; font-size: 0.65rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+.first-five-instructions dd,
+.first-five-hud-details dd { margin: 0; color: #e2edf5; font-size: 0.78rem; line-height: 1.4; }
+.first-five-task-experience .daily-task-part-grid button.is-required-target,
+.first-five-target-list button.is-required-target {
+  border-color: rgba(75, 196, 224, 0.75);
+  background: rgba(38, 139, 173, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(72, 196, 230, 0.18);
+}
+.first-five-target-list,
+.first-five-test-results { display: grid; gap: 8px; }
+.first-five-target-list button,
+.first-five-test-results button,
+.first-five-sort-rail > button {
+  display: grid;
+  gap: 4px;
+  min-height: 48px;
+  padding: 10px 13px;
+  border: 1px solid rgba(130, 174, 197, 0.32);
+  border-radius: 11px;
+  color: #e5f1f8;
+  background: rgba(33, 65, 87, 0.32);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+.first-five-target-list button:hover,
+.first-five-test-results button:hover,
+.first-five-sort-rail > button:hover { border-color: #62c6df; background: rgba(39, 114, 139, 0.28); }
+.first-five-target-list small { color: #8faec1; font-size: 0.72rem; }
+.first-five-task-experience .repair-backpack-toggle {
+  min-height: 42px;
+  border-color: rgba(73, 176, 207, 0.44);
+  border-radius: 11px;
+  background: linear-gradient(135deg, #173b56, #132943);
+  box-shadow: none;
+}
+.first-five-task-experience .repair-backpack-toggle.is-open { border-color: #61c5e1; background: #17425b; }
+.first-five-task-experience .repair-inventory-item.is-required-tool,
+.first-five-task-experience .repair-part-inventory-item.is-required-part {
+  border-color: #49bddd;
+  background: rgba(31, 139, 171, 0.27);
+  box-shadow: 0 0 0 2px rgba(65, 192, 223, 0.15), 0 0 16px rgba(43, 175, 208, 0.22);
+}
+.first-five-backpack {
+  position: absolute;
+  z-index: 5;
+  top: 145px;
+  right: 18px;
+  bottom: 17px;
+  width: min(410px, calc(100% - 36px));
+  overflow-y: auto;
+  padding: 16px;
+  border: 1px solid rgba(65, 179, 211, 0.65);
+  border-radius: 16px;
+  background: linear-gradient(155deg, rgba(19, 40, 60, 0.99), rgba(8, 17, 30, 0.99));
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.55);
+}
+.first-five-backpack > .repair-backpack-heading > strong { color: #e8f4fb; font-size: 1.02rem; }
+.first-five-backpack .repair-inventory-label { color: #69c5df; }
+.first-five-backpack .repair-inventory-item.is-required-tool { border-color: #50c2df; background: rgba(28, 132, 163, 0.3); box-shadow: 0 0 16px rgba(43, 175, 208, 0.2); }
+.first-five-repair-control { display: grid; gap: 10px; padding: 13px; border: 1px solid rgba(102, 181, 207, 0.25); border-radius: 12px; background: rgba(4, 17, 30, 0.48); }
+.first-five-sort-rail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.first-five-repair-control.is-drag .daily-task-primary { grid-column: 1 / -1; }
+.first-five-hold-control {
+  min-height: 58px;
+  border: 1px solid rgba(93, 196, 220, 0.7);
+  border-radius: 12px;
+  color: #edfaff;
+  background: linear-gradient(120deg, rgba(25, 82, 109, 0.82), rgba(16, 53, 78, 0.84));
+  font: inherit;
+  font-weight: 700;
+  touch-action: none;
+  user-select: none;
+  cursor: pointer;
+}
+.first-five-adjust-control { display: grid; gap: 8px; color: #d9e8f1; font-size: 0.84rem; }
+.first-five-adjust-control input { width: 100%; accent-color: #4fc4df; }
+.first-five-adjust-control > span { color: #94aec0; font-size: 0.76rem; }
+.first-five-rotate-control,
+.first-five-scrub-control { display: grid; justify-items: center; gap: 9px; color: #d9e8f1; font-size: 0.8rem; }
+.first-five-rotate-control > .daily-task-tool-picture,
+.first-five-scrub-control > .daily-task-tool-picture { width: 46px; height: 46px; }
+.first-five-rotation-indicator { color: #55c5df; font-size: 2rem; transition: transform 180ms ease; }
+.first-five-rotate-control > button:not(.daily-task-primary) {
+  min-height: 40px;
+  padding: 8px 13px;
+  border: 1px solid rgba(89, 180, 203, 0.4);
+  border-radius: 9px;
+  color: #e3f2f7;
+  background: rgba(26, 77, 99, 0.44);
+  font: inherit;
+  cursor: pointer;
+}
+.first-five-rotate-control > button:disabled,
+.first-five-scrub-control > button:disabled { opacity: 0.5; cursor: not-allowed; }
+.first-five-scrub-control label { text-align: center; }
+.first-five-scrub-control input { width: 100%; accent-color: #4fc4df; }
+.first-five-scrub-control > span { color: #94aec0; font-size: 0.76rem; }
+.first-five-test-results { padding: 12px; border: 1px solid rgba(77, 181, 204, 0.26); border-radius: 12px; background: rgba(4, 17, 30, 0.52); }
+.first-five-test-results p { margin: 0 0 4px; color: #d9ebf2; font-size: 0.88rem; line-height: 1.45; }
+.first-five-test-port { display: grid; gap: 5px; padding: 10px 12px; border: 1px solid rgba(64, 190, 218, 0.62); border-radius: 10px; background: rgba(20, 91, 116, 0.2); box-shadow: inset 0 0 0 1px rgba(67, 191, 220, 0.12); }
+.first-five-test-port span { color: #67c8df; font-size: 0.62rem; font-weight: 750; letter-spacing: 0.12em; }
+.first-five-test-port strong { color: #e2f2f7; font-size: 0.82rem; }
+.first-five-connect-control { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.first-five-connect-control button { min-height: 45px; padding: 9px 11px; border: 1px solid rgba(102, 170, 192, 0.36); border-radius: 10px; color: #e2eff5; background: rgba(32, 70, 91, 0.42); font: inherit; font-size: 0.8rem; cursor: grab; }
+.first-five-connect-control button.is-required-target { border-color: #4bc3df; color: #e9faff; background: rgba(31, 126, 153, 0.3); }
+.first-five-connect-control button:disabled { opacity: 0.56; cursor: not-allowed; }
+.first-five-repair-control.is-connect button:focus-visible,
+.first-five-repair-control.is-connect button.is-required-target { outline: 2px solid rgba(84, 204, 229, 0.8); outline-offset: 2px; }
+.first-five-success { display: grid; justify-items: center; gap: 12px; margin-top: 30px; text-align: center; }
+.first-five-success h3 { margin: 0; color: #e9f8f1; font-size: 1.35rem; }
+.first-five-success > p { margin: 0; color: #ccdde6; line-height: 1.5; }
+.first-five-reward { padding: 9px 13px; border: 1px solid rgba(86, 185, 143, 0.32); border-radius: 10px; color: #a5e0c1 !important; background: rgba(43, 119, 87, 0.14); font-size: 0.83rem; }
+.first-five-location { color: #b8cbd8; }
+.first-five-location strong { color: #e6f3f8; }
+.daily-task-hint-button {
+  justify-self: start;
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid rgba(76, 182, 210, 0.42);
+  border-radius: 10px;
+  color: #c7eaf3;
+  background: rgba(25, 72, 96, 0.35);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+.daily-task-hint-button:hover { border-color: #67cbe2; background: rgba(34, 111, 139, 0.3); }
+.daily-task-hint-button:focus-visible { outline: 2px solid #78d5e8; outline-offset: 2px; }
+.daily-task-hint.is-demo { border-color: rgba(58, 181, 213, 0.55); color: #d7f3fa !important; background: rgba(21, 94, 122, 0.25); }
+.first-five-demo-beacon { display: inline-block; width: 9px; height: 9px; margin-right: 9px; border-radius: 50%; background: #58cbe3; box-shadow: 0 0 0 4px rgba(78, 203, 229, 0.16); animation: first-five-demo-pulse 750ms ease-in-out infinite alternate; }
+.repair-zone.is-glowing.is-demonstrating,
+.first-five-scene.is-demonstrating .daily-task-object-picture { animation: first-five-demo-pulse 750ms ease-in-out infinite alternate; }
+.repair-adventure-intro.is-demonstrating .daily-task-object-picture { animation: first-five-demo-pulse 750ms ease-in-out infinite alternate; }
+.repair-mission-hud.is-first-five { display: grid; grid-template-columns: 1fr; gap: 9px; }
+.first-five-hud-details { width: 100%; box-sizing: border-box; }
+.repair-adventure-intro.is-first-five,
+.repair-adventure-success.is-first-five { color: #e3eef4; }
+.repair-adventure-success.is-first-five { padding-top: 10px; }
+.first-five-task-experience .daily-task-primary {
+  color: #e9f8fc;
+  background: linear-gradient(135deg, #17617b, #174666);
+}
+.first-five-task-experience .daily-task-primary:hover { filter: brightness(1.13); }
+.first-five-repair-adventure .repair-zone.is-glowing {
+  border-color: #4ec7e2;
+  color: #e5faff;
+  background: rgba(19, 84, 111, 0.9);
+  box-shadow: 0 0 0 3px rgba(62, 187, 219, 0.2), 0 0 22px rgba(54, 183, 216, 0.5);
+}
+.first-five-repair-adventure .repair-part-icon { color: #7fd0e2; background: rgba(46, 130, 157, 0.2); font-size: 0.58rem; font-weight: 750; letter-spacing: 0.06em; }
+.first-five-repair-adventure .repair-inventory-item.is-required-tool,
+.first-five-repair-adventure .repair-part-inventory-item.is-required-part {
+  border-color: #4ec7e2;
+  background: rgba(25, 120, 151, 0.3);
+  box-shadow: 0 0 0 2px rgba(62, 187, 219, 0.16), 0 0 16px rgba(54, 183, 216, 0.25);
+}
+.first-five-repair-adventure .daily-task-experience-kicker { color: #6bcce1; }
+.first-five-repair-adventure .repair-mission-hud.is-demonstrating { animation: first-five-demo-pulse 750ms ease-in-out infinite alternate; }
+
+@keyframes first-five-demo-pulse {
+  from { box-shadow: 0 0 0 2px rgba(73, 196, 223, 0.15), 0 0 12px rgba(57, 185, 214, 0.2); }
+  to { box-shadow: 0 0 0 5px rgba(73, 196, 223, 0.25), 0 0 24px rgba(57, 185, 214, 0.54); }
+}
+
+@media (max-width: 650px) {
+  .first-five-progress { gap: 4px; }
+  .first-five-progress > span { font-size: 0.61rem; }
+  .first-five-instructions,
+  .first-five-hud-details { grid-template-columns: 1fr; }
+  .first-five-backpack { top: 122px; right: 9px; bottom: 9px; width: calc(100% - 18px); padding: 12px; }
+  .first-five-scene-heading { align-items: flex-start; flex-direction: column; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .repair-heartbeat,.repair-art-leak,.repair-art-water-drop,.repair-art-air-flow,.repair-art-spark,.repair-zone.is-glowing,.repair-celebration-stars,.repair-success-signal { animation: none; }
 }

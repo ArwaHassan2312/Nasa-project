@@ -5,6 +5,50 @@ export const BASELINE_DAILY_CONSUMPTION = Object.freeze({
   food: -1,
 });
 
+export const REUSABLE_REPAIR_TOOLS = Object.freeze([
+  'tester',
+  'clamp',
+  'patch',
+  'brush',
+  'wrench',
+  'screwdriver',
+  'flashlight',
+  'pliers',
+  'gloves',
+  'repair-kit',
+]);
+
+export const INITIAL_REPAIR_INVENTORY = Object.freeze({
+  tools: REUSABLE_REPAIR_TOOLS,
+  spareParts: Object.freeze({
+    waterSeal: 1,
+    oxygenFilter: 1,
+    solarPatch: 1,
+  }),
+});
+
+export function getRepairPartAvailability(inventory, partsCost = {}) {
+  return Object.entries(partsCost).every(([part, amount]) => (
+    Number.isInteger(amount)
+    && amount >= 0
+    && (inventory.spareParts[part] ?? 0) >= amount
+  ));
+}
+
+export function consumeVerifiedRepairParts(inventory, partsCost = {}, verificationPassed = false) {
+  if (!verificationPassed || !getRepairPartAvailability(inventory, partsCost)) return null;
+  return {
+    ...inventory,
+    tools: [...inventory.tools],
+    spareParts: Object.fromEntries(
+      Object.entries(inventory.spareParts).map(([part, amount]) => [
+        part,
+        amount - (partsCost[part] ?? 0),
+      ]),
+    ),
+  };
+}
+
 export function hasEventOccurredOnDay(state, day = state.day) {
   return state.eventHistory.some((event) => event.day === day)
     || (Boolean(state.currentEvent) && (state.currentEvent.day ?? day) === day)
@@ -95,102 +139,6 @@ export function excludeTaskEventSources(events, taskEvents, tasks) {
     )))
     .map((event) => event.sourceEventId ?? event.id));
   return events.filter((event) => !conflictingSources.has(event.id));
-}
-
-export function selectDailyTaskDefinitions(definitions, day, count) {
-  if (definitions.length === 0 || count <= 0) return [];
-  const startIndex = (definitions.length - 1 + (day - 1) * count) % definitions.length;
-  const rotated = Array.from(
-    { length: definitions.length },
-    (_, index) => definitions[(startIndex + index) % definitions.length],
-  );
-  if (day <= 1) return rotated.slice(0, count);
-
-  const previousUrgentIds = new Set(selectDailyTaskDefinitions(definitions, day - 1, count)
-    .filter((task) => task.priority === 'high' || task.priority === 'critical')
-    .map((task) => task.id));
-  return rotated.filter((definition) => !previousUrgentIds.has(definition.id)).slice(0, count);
-}
-
-export function selectRandomDailyTaskDefinitions(
-  definitions,
-  day,
-  seed,
-  previousTaskIds = [],
-) {
-  if (definitions.length === 0) return [];
-  let randomState = (Number(seed) ^ Math.imul(day, 0x9e3779b9)) >>> 0;
-  if (randomState === 0) randomState = 0x6d2b79f5;
-  const random = () => {
-    randomState = (Math.imul(1664525, randomState) + 1013904223) >>> 0;
-    return randomState / 0x1_0000_0000;
-  };
-
-  const count = random() < 0.5 ? 3 : 4;
-  const usedIds = new Set(previousTaskIds);
-  const candidates = definitions.filter((definition) => !usedIds.has(definition.id));
-  if (candidates.length <= count) return candidates;
-
-  const compositions = count === 3
-    ? [
-      { critical: 1, high: 1, normal: 1, weight: 3 },
-      { critical: 1, high: 0, normal: 2, weight: 2 },
-      { critical: 0, high: 2, normal: 1, weight: 2 },
-      { critical: 0, high: 1, normal: 2, weight: 4 },
-      { critical: 0, high: 0, normal: 3, weight: 1 },
-    ]
-    : [
-      { critical: 1, high: 2, normal: 1, weight: 3 },
-      { critical: 1, high: 1, normal: 2, weight: 4 },
-      { critical: 1, high: 0, normal: 3, weight: 2 },
-      { critical: 0, high: 3, normal: 1, weight: 1 },
-      { critical: 0, high: 2, normal: 2, weight: 4 },
-      { critical: 0, high: 1, normal: 3, weight: 3 },
-      { critical: 0, high: 0, normal: 4, weight: 1 },
-    ];
-  const availableByPriority = {
-    critical: candidates.filter(({ priority }) => priority === 'critical'),
-    high: candidates.filter(({ priority }) => priority === 'high'),
-    normal: candidates.filter(({ priority }) => priority === 'normal'),
-  };
-  const validCompositions = compositions.filter((composition) => (
-    Object.entries(availableByPriority).every(([priority, tasks]) => (
-      composition[priority] <= tasks.length
-    ))
-  ));
-  if (validCompositions.length === 0) {
-    const shuffled = [...candidates];
-    for (let index = shuffled.length - 1; index > 0; index -= 1) {
-      const swapIndex = Math.floor(random() * (index + 1));
-      [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
-    }
-    return shuffled.slice(0, count);
-  }
-
-  const totalWeight = validCompositions.reduce((total, composition) => total + composition.weight, 0);
-  let compositionRoll = random() * totalWeight;
-  let composition = validCompositions[0];
-  for (const option of validCompositions) {
-    compositionRoll -= option.weight;
-    if (compositionRoll < 0) {
-      composition = option;
-      break;
-    }
-  }
-
-  const selected = [];
-  for (const priority of ['critical', 'high', 'normal']) {
-    const pool = [...availableByPriority[priority]];
-    for (let index = 0; index < composition[priority]; index += 1) {
-      const selectedIndex = Math.floor(random() * pool.length);
-      selected.push(pool.splice(selectedIndex, 1)[0]);
-    }
-  }
-  for (let index = selected.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    [selected[index], selected[swapIndex]] = [selected[swapIndex], selected[index]];
-  }
-  return selected;
 }
 
 export function startTaskOccurrence(task, day, campaignElapsedMs) {

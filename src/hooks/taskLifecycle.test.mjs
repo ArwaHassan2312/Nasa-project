@@ -5,6 +5,7 @@ import { transformWithOxc } from 'vite';
 import {
   applyResourceEffects,
   BASELINE_DAILY_CONSUMPTION,
+  consumeVerifiedRepairParts,
   canTriggerLinkedTaskEvent,
   excludeTaskEventSources,
   getTaskCompletionResourceEffects,
@@ -12,6 +13,8 @@ import {
   getElapsedResourceEffects,
   findFailedEssentialResource,
   getTaskMissResourceEffects,
+  getRepairPartAvailability,
+  INITIAL_REPAIR_INVENTORY,
   getSuccessfulEventResourceEffects,
   getResolvedLinkedTasks,
   getUnresolvedEventOccurrenceIdsAtDayEnd,
@@ -19,8 +22,7 @@ import {
   hasEventOccurredInSession,
   hasTaskEventOccurredOnDay,
   removeEventOccurrence,
-  selectRandomDailyTaskDefinitions,
-  selectDailyTaskDefinitions,
+  REUSABLE_REPAIR_TOOLS,
   selectUntriggeredCriticalTaskEvents,
   settlePendingResourceEffects,
   startTaskOccurrence,
@@ -29,6 +31,7 @@ import {
 let scheduler;
 let events;
 let challengeDefinitions;
+let taskExperiences;
 let buildMissionFailureNarrative;
 
 before(async () => {
@@ -42,6 +45,9 @@ before(async () => {
   const challengeSource = await readFile(new URL('../data/dailyChallenges.ts', import.meta.url), 'utf8');
   const transformedChallenges = await transformWithOxc(challengeSource, 'dailyChallenges.ts');
   challengeDefinitions = await import(`data:text/javascript;base64,${Buffer.from(transformedChallenges.code).toString('base64')}`);
+  const experienceSource = await readFile(new URL('../data/dailyTaskExperiences.ts', import.meta.url), 'utf8');
+  const transformedExperiences = await transformWithOxc(experienceSource, 'dailyTaskExperiences.ts');
+  taskExperiences = await import(`data:text/javascript;base64,${Buffer.from(transformedExperiences.code).toString('base64')}`);
   const narrativeSource = await readFile(new URL('../components/missionFailureNarrative.ts', import.meta.url), 'utf8');
   const transformedNarrative = await transformWithOxc(narrativeSource, 'missionFailureNarrative.ts');
   const narrativeCode = transformedNarrative.code.replaceAll('"../data/moonEvents"', `"${eventModuleUrl}"`);
@@ -69,6 +75,63 @@ function task(overrides = {}) {
 }
 
 describe('task lifecycle', () => {
+  test('only the three requested task definitions use the interactive repair flow', () => {
+    const repairIds = [
+      'habitat-waterline-inspection',
+      'oxygen-loop-filter-service',
+      'solar-array-inspection',
+    ];
+    for (const id of repairIds) {
+      const task = challengeDefinitions.DAILY_CHALLENGES.find((entry) => entry.id === id);
+      assert.ok(task, `expected task definition ${id}`);
+      const repair = taskExperiences.getDailyTaskExperience(task).repair;
+      assert.ok(repair);
+      assert.ok(repair.strategies.some((strategy) => Object.keys(strategy.partsCost ?? {}).length === 0));
+      assert.ok(repair.strategies.every((strategy) => strategy.steps.length > 0));
+      assert.ok(repair.strategies.every((strategy) => strategy.correctVerificationId));
+    }
+
+    const variant = challengeDefinitions.DAILY_CHALLENGES.find(
+      (entry) => entry.id === 'oxygen-loop-filter-service-sensor-calibration',
+    );
+    assert.ok(variant);
+    assert.equal(taskExperiences.getDailyTaskExperience(variant).repair, undefined);
+  });
+
+  test('repair previews and wrong choices never consume tools or spare parts', () => {
+    const inventory = {
+      tools: [...INITIAL_REPAIR_INVENTORY.tools],
+      spareParts: { ...INITIAL_REPAIR_INVENTORY.spareParts },
+    };
+    const previewCost = { waterSeal: 1 };
+    assert.equal(getRepairPartAvailability(inventory, previewCost), true);
+    assert.deepEqual(inventory.spareParts, { waterSeal: 1, oxygenFilter: 1, solarPatch: 1 });
+    assert.deepEqual(inventory.tools, [...REUSABLE_REPAIR_TOOLS]);
+  });
+
+  test('only a verified repair can consume available parts; reusable tools remain in the bag', () => {
+    const inventory = {
+      tools: [...INITIAL_REPAIR_INVENTORY.tools],
+      spareParts: { ...INITIAL_REPAIR_INVENTORY.spareParts },
+    };
+    assert.equal(consumeVerifiedRepairParts(inventory, { waterSeal: 1 }), null);
+    const updated = consumeVerifiedRepairParts(inventory, { waterSeal: 1 }, true);
+    assert.deepEqual(updated.spareParts, { waterSeal: 0, oxygenFilter: 1, solarPatch: 1 });
+    assert.deepEqual(updated.tools, inventory.tools);
+    assert.deepEqual(inventory.spareParts, { waterSeal: 1, oxygenFilter: 1, solarPatch: 1 });
+  });
+
+  test('a no-parts repair always remains available when the matching spare is empty', () => {
+    const inventory = {
+      tools: [...INITIAL_REPAIR_INVENTORY.tools],
+      spareParts: { waterSeal: 0, oxygenFilter: 0, solarPatch: 0 },
+    };
+    assert.equal(getRepairPartAvailability(inventory, {}), true);
+    assert.equal(consumeVerifiedRepairParts(inventory, {}, true).spareParts.waterSeal, 0);
+    assert.equal(getRepairPartAvailability(inventory, { waterSeal: 1 }), false);
+    assert.equal(consumeVerifiedRepairParts(inventory, { waterSeal: 1 }, true), null);
+  });
+
   test('starts a Critical response timer only when selected; incomplete tasks fail at day end', () => {
     const taskA = task({ id: 'a' });
     const taskB = task({ id: 'b' });
@@ -538,75 +601,6 @@ test('task consequences use unique event definitions and task-specific options',
   }
 });
 
-test('new day task generation replaces prior High and Critical tasks', () => {
-  const definitions = [
-    { id: 'high-a', priority: 'high' },
-    { id: 'normal-a', priority: 'normal' },
-    { id: 'normal-b', priority: 'normal' },
-    { id: 'normal-c', priority: 'normal' },
-    { id: 'critical-a', priority: 'critical' },
-  ];
-  const dayOne = selectDailyTaskDefinitions(definitions, 1, 3);
-  assert.deepEqual(dayOne.map(({ id }) => id), ['critical-a', 'high-a', 'normal-a']);
-  const dayTwo = selectDailyTaskDefinitions(definitions, 2, 3);
-  assert.equal(dayTwo.length, 3);
-  assert.equal(dayTwo.some(({ id }) => id === 'critical-a' || id === 'high-a'), false);
-  assert.deepEqual(dayTwo.map(({ id }) => id), ['normal-b', 'normal-c', 'normal-a']);
-  let previousDay = dayTwo;
-  for (let day = 3; day <= 30; day += 1) {
-    const currentDay = selectDailyTaskDefinitions(definitions, day, 3);
-    const previousUrgentIds = new Set(previousDay
-      .filter(({ priority }) => priority === 'high' || priority === 'critical')
-      .map(({ id }) => id));
-    assert.equal(currentDay.length, 3);
-    assert.equal(currentDay.some(({ id }) => previousUrgentIds.has(id)), false);
-    previousDay = currentDay;
-  }
-});
-
-test('random daily challenge selection varies between three and four tasks without session repeats', () => {
-  const definitions = [
-    ...Array.from({ length: 3 }, (_, index) => ({ id: `critical-${index}`, priority: 'critical' })),
-    ...Array.from({ length: 7 }, (_, index) => ({ id: `high-${index}`, priority: 'high' })),
-    ...Array.from({ length: 8 }, (_, index) => ({ id: `normal-${index}`, priority: 'normal' })),
-  ];
-  const generated = [];
-  const taskCounts = [];
-  let previousTaskIds = [];
-  for (let day = 1; day <= 30; day += 1) {
-    const tasks = selectRandomDailyTaskDefinitions(definitions, day, 0x1248abcd, previousTaskIds);
-    assert.ok(tasks.length <= 4);
-    if (definitions.length - previousTaskIds.length >= 3) {
-      assert.ok(tasks.length >= 3);
-    }
-    assert.equal(new Set(tasks.map(({ id }) => id)).size, tasks.length);
-    assert.equal(tasks.some(({ id }) => previousTaskIds.includes(id)), false);
-    assert.ok(tasks.filter(({ priority }) => priority === 'critical').length <= 1);
-    if (tasks.length > 0) {
-      assert.ok(tasks.some(({ priority }) => priority === 'normal' || priority === 'high'));
-    }
-    generated.push(tasks.map(({ id }) => id).sort().join('|'));
-    taskCounts.push(tasks.length);
-    previousTaskIds = [...previousTaskIds, ...tasks.map(({ id }) => id)];
-  }
-  assert.ok(new Set(generated.filter(Boolean)).size > 2);
-  assert.ok(taskCounts.includes(3));
-  assert.ok(taskCounts.includes(4));
-  assert.equal(taskCounts.at(-1), 0);
-});
-
-test('the mission task pool supplies three or four fresh task IDs on every mission day', () => {
-  const definitions = challengeDefinitions.DAILY_CHALLENGES;
-  const usedTaskIds = [];
-  for (let day = 1; day <= 30; day += 1) {
-    const tasks = selectRandomDailyTaskDefinitions(definitions, day, 0x6a09e667, usedTaskIds);
-    assert.ok(tasks.length >= 3 && tasks.length <= 4, `day ${day} should receive 3–4 tasks`);
-    assert.equal(tasks.some(({ id }) => usedTaskIds.includes(id)), false);
-    usedTaskIds.push(...tasks.map(({ id }) => id));
-  }
-  assert.equal(new Set(usedTaskIds).size, usedTaskIds.length);
-});
-
 test('every Critical daily challenge has a timer and a matching task consequence event', () => {
   const tasks = challengeDefinitions.DAILY_CHALLENGES;
   const criticalTasks = tasks.filter(
@@ -709,9 +703,9 @@ test('mission failure analysis summarizes recorded behavior without listing task
   });
 
   assert.match(narrative.explanation[0], /Day 3/);
-  assert.match(narrative.explanation[0], /Power ended at 8%/);
-  assert.match(narrative.explanation[0], /1 missed Critical\/High task/);
-  assert.match(narrative.explanation[0], /1 unresolved event/);
+  assert.match(narrative.explanation[0], /power fell to 8%/);
+  assert.match(narrative.explanation[0], /1 important job still needed doing/);
+  assert.match(narrative.explanation[0], /1 outpost problem/);
   assert.equal(narrative.explanation[0].includes('Inspect Solar Array'), false);
   assert.equal(narrative.explanation[0].includes(taskEvent.name), false);
   assert.equal(narrative.stats.completedTasks, 0);
@@ -719,5 +713,5 @@ test('mission failure analysis summarizes recorded behavior without listing task
   assert.equal(narrative.stats.taskCompletionRate, 0);
   assert.equal(narrative.stats.resolvedEvents, 0);
   assert.equal(narrative.stats.unresolvedEvents, 1);
-  assert.equal(narrative.behavior[1].detail, '1 missed · 100%');
+  assert.equal(narrative.behavior[1].detail, '1 still to do · 100%');
 });

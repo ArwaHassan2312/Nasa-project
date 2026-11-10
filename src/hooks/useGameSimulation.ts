@@ -9,6 +9,10 @@ import type {
 } from '../data/moonEvents';
 import { DAILY_CHALLENGES } from '../data/dailyChallenges';
 import type { DailyChallengeDefinition } from '../data/dailyChallenges';
+import { getDailyTaskExperience } from '../data/dailyTaskExperiences';
+import type { RepairPartKey } from '../data/dailyTaskExperiences';
+import { clearMissionState, loadMissionState, saveMissionState } from './missionPersistence.js';
+import { createCampaignSchedule } from './campaignSchedule';
 import {
   createRandomSeed,
   EVENT_SCHEDULER_CONFIG,
@@ -18,6 +22,7 @@ import {
 import type { EventOccurrence } from './eventScheduler';
 import {
   BASELINE_DAILY_CONSUMPTION,
+  consumeVerifiedRepairParts,
   excludeTaskEventSources,
   getUnresolvedEventOccurrenceIdsAtDayEnd,
   hasEventOccurredOnDay,
@@ -28,9 +33,10 @@ import {
   getTaskMissResourceEffects,
   getElapsedResourceEffects,
   findFailedEssentialResource,
+  getRepairPartAvailability,
+  INITIAL_REPAIR_INVENTORY,
   getResolvedLinkedTasks,
   selectUntriggeredCriticalTaskEvents,
-  selectRandomDailyTaskDefinitions,
   settlePendingResourceEffects,
   startTaskOccurrence,
 } from './taskLifecycle';
@@ -124,6 +130,29 @@ export interface TaskMissionRecord {
   deadlineDay: number;
 }
 
+export interface RepairInventory {
+  tools: string[];
+  spareParts: Record<RepairPartKey, number>;
+}
+
+export interface RepairTaskProgress {
+  diagnosisToolId: string | null;
+  diagnosedPart: string | null;
+  selectedStrategyId: string | null;
+  repairStepCompleted: boolean;
+}
+
+export interface RepairHistoryRecord {
+  taskId: string;
+  title: string;
+  day: number;
+  strategyId: string;
+  strategyName: string;
+  toolId: string;
+  partsUsed: Partial<Record<RepairPartKey, number>>;
+  verified: boolean;
+}
+
 export type SystemConditions = Record<SystemKey, number>;
 
 export interface SystemFaultRecord {
@@ -155,6 +184,7 @@ export interface EventOutcomeRecord {
 interface GameState {
   day: number;
   maxDays: number;
+  campaignSchedule: string[][];
   dayPhase: DayPhase;
   dayReport: DayReport | null;
   dayElapsedMs: number;
@@ -192,6 +222,9 @@ interface GameState {
   faultHistory: SystemFaultRecord[];
   postponementHistory: PostponementRecord[];
   dailyChallenges: DailyChallenge[];
+  repairInventory: RepairInventory;
+  repairProgress: Record<string, RepairTaskProgress>;
+  repairHistory: RepairHistoryRecord[];
   usedDailyChallengeIds: string[];
   activeChallengeId: string | null;
   challengeHistory: DailyChallengeCompletion[];
@@ -203,11 +236,11 @@ interface GameState {
 
 const MAX_RESOURCE_LEVEL = 100;
 export const MISSION_FAILURE_RESOURCE_THRESHOLD = 10;
-export const MISSION_LENGTH_DAYS = 30;
-export const LUNAR_DAY_DURATION_MS = 180_000;
+export const MISSION_LENGTH_DAYS = 5;
+export const LUNAR_DAY_DURATION_MS = 600_000;
 const DAY_TRANSITION_DURATION_MS = 5000;
-const EVENT_RESPONSE_DURATION_MS = 60_000;
-const CRITICAL_TASK_RECOVERY_DURATION_MS = 45_000;
+const EVENT_RESPONSE_DURATION_MS = 90_000;
+const CRITICAL_TASK_RECOVERY_DURATION_MS = 90_000;
 const CLOCK_UPDATE_INTERVAL_MS = 1000;
 const RESOURCE_DISPLAY_NAMES: Record<ResourceKey, string> = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
@@ -263,16 +296,12 @@ const INITIAL_RESOURCES: ResourceLevels = {
 };
 
 function createDailyChallenges(
-  day = 1,
-  selectionSeed = day,
-  usedTaskIds: string[] = [],
+  day: number,
+  campaignSchedule: string[][],
 ): DailyChallenge[] {
-  const selectedChallenges = selectRandomDailyTaskDefinitions(
-    DAILY_CHALLENGES,
-    day,
-    selectionSeed,
-    usedTaskIds,
-  );
+  const selectedChallenges = (campaignSchedule[day - 1] ?? [])
+    .map((taskId) => DAILY_CHALLENGES.find((challenge) => challenge.id === taskId))
+    .filter((challenge): challenge is (typeof DAILY_CHALLENGES)[number] => Boolean(challenge));
   return selectedChallenges.map((challenge) => {
     return {
       ...challenge,
@@ -304,10 +333,12 @@ function createDailyChallenges(
 }
 
 export function createInitialState(seed: number): GameState {
-  const initialChallenges = createDailyChallenges(1, seed);
+  const campaignSchedule = createCampaignSchedule(seed, DAILY_CHALLENGES);
+  const initialChallenges = createDailyChallenges(1, campaignSchedule);
   const initialState: GameState = {
     day: 1,
     maxDays: MISSION_LENGTH_DAYS,
+    campaignSchedule,
     dayPhase: 'active',
     dayReport: null,
     dayElapsedMs: 0,
@@ -350,6 +381,12 @@ export function createInitialState(seed: number): GameState {
     faultHistory: [],
     postponementHistory: [],
     dailyChallenges: initialChallenges,
+    repairInventory: {
+      tools: [...INITIAL_REPAIR_INVENTORY.tools],
+      spareParts: { ...INITIAL_REPAIR_INVENTORY.spareParts },
+    },
+    repairProgress: {},
+    repairHistory: [],
     usedDailyChallengeIds: initialChallenges.map(({ id }) => id),
     activeChallengeId: null,
     challengeHistory: [],
@@ -1025,7 +1062,7 @@ function triggerEndOfDayCriticalConsequences(state: GameState): GameState {
       eventId: event.id,
       eventName: event.name,
       status: 'failed',
-      feedback: `The crew couldn’t finish “${event.missedTaskTitle}” today, so ${event.name} happened. Next time, you can help them sooner. ${event.failureFeedback}`,
+      feedback: `“${event.missedTaskTitle}” was not completed before day end, so ${event.name} happened. Finishing the job on time was the opportunity to prevent this problem. ${event.failureFeedback}`,
       resourceChanges: eventResourceChanges.get(event.occurrenceId ?? `${event.id}-${state.day}`),
     });
   }
@@ -1299,14 +1336,6 @@ function beginDayClosing(state: GameState, dayDurationMs: number): GameState {
     || closingState.endOfDayEvents.length > 0
     ? closingState
     : createDayReport(closingState);
-}
-
-function createNextDayChallenges(
-  day: number,
-  selectionSeed: number,
-  usedTaskIds: string[],
-): DailyChallenge[] {
-  return createDailyChallenges(day, selectionSeed, usedTaskIds);
 }
 
 export function advanceClockState(
@@ -1602,14 +1631,153 @@ export function advanceClockState(
   return nextState;
 }
 
+function completeChallengeState(
+  currentState: GameState,
+  challenge: DailyChallenge,
+  {
+    resourceEffects = {},
+    conditionRecovery = 0,
+    successFeedback,
+  }: {
+    resourceEffects?: Partial<Record<ResourceKey, number>>;
+    conditionRecovery?: number;
+    successFeedback?: string;
+  } = {},
+): GameState {
+  const startedDay = challenge.startedDay ?? currentState.day;
+  const completedAfterDeadline = challenge.deadlineMissed
+    || (challenge.urgentDeadlineAtMs !== null
+      && currentState.campaignElapsedMs >= challenge.urgentDeadlineAtMs);
+  const responseTimeMs = challenge.urgentStartedAtMs !== null
+    ? currentState.campaignElapsedMs - challenge.urgentStartedAtMs
+    : null;
+  const emergencyPrevented = challenge.emergency
+    && !completedAfterDeadline
+    && !challenge.urgentConsequenceApplied
+    && !challenge.escalationApplied;
+  const combinedEffects = Object.fromEntries(
+    (Object.keys({
+      ...getTaskCompletionResourceEffects(challenge),
+      ...resourceEffects,
+    }) as ResourceKey[]).map((resource) => [
+      resource,
+      (getTaskCompletionResourceEffects(challenge)[resource] ?? 0)
+        + (resourceEffects[resource] ?? 0),
+    ]),
+  ) as Partial<Record<ResourceKey, number>>;
+  let resources = applyEffects(
+    currentState.resources,
+    challenge.recoveryStatus === 'active'
+      ? roundResourceEffects(combinedEffects)
+      : combinedEffects,
+  );
+  const recoveryRestoration = challenge.recoveryStatus === 'active'
+    ? getHalfResourceRestoration(challenge.recoveryResourceLosses)
+    : {};
+  if (Object.keys(recoveryRestoration).length > 0) {
+    resources = applyEffects(resources, recoveryRestoration);
+  }
+  const systemConditions = changeSystemCondition(
+    currentState.systemConditions,
+    challenge.affectedSystem,
+    challenge.conditionRecovery + conditionRecovery,
+  );
+  const taskResourceChanges = (Object.entries(getVisibleResourceChanges(
+    getVisibleResourceLevels(resources),
+    getVisibleResourceLevels(currentState.resources),
+  )) as [DisplayResourceKey, number][])
+    .map(([resource, change]) => ({ resource, change }));
+  const taskResourceSummary = taskResourceChanges.length > 0
+    ? ` Supply changes: ${taskResourceChanges.map(({ resource, change }) => `${RESOURCE_DISPLAY_NAMES[resource]} ${change > 0 ? '+' : ''}${Number(change.toFixed(1))}%`).join(', ')}.`
+    : ' Your supply bars stayed the same.';
+  const taskConditionChange = systemConditions[challenge.affectedSystem]
+    - currentState.systemConditions[challenge.affectedSystem];
+  const taskConditionSummary = taskConditionChange > 0
+    ? ` ${SYSTEM_DISPLAY_NAMES[challenge.affectedSystem]} is working ${taskConditionChange}% better.`
+    : taskConditionChange < 0
+      ? ` ${SYSTEM_DISPLAY_NAMES[challenge.affectedSystem]} is working ${Math.abs(taskConditionChange)}% less well.`
+      : '';
+  const taskSuccessFeedback = `You did it! ${challenge.title} is done. ${challenge.completionFeedback}${taskResourceSummary}${taskConditionSummary}`;
+  let nextState: GameState = {
+    ...currentState,
+    resources,
+    systemConditions,
+    dailyChallenges: currentState.dailyChallenges.map((task) => (
+      task.id === challenge.id
+        ? {
+          ...task,
+          status: 'completed',
+          startedDay,
+          completedDay: currentState.day,
+          deadlineMissed: task.deadlineMissed || completedAfterDeadline,
+          completedAfterDeadline,
+          responseTimeMs,
+          emergencyPrevented,
+          recoveryStatus: challenge.recoveryStatus === 'active' ? 'completed' : challenge.recoveryStatus,
+          recoveryDeadlineAtMs: null,
+        }
+        : task
+    )),
+    activeChallengeId: currentState.activeChallengeId === challenge.id
+      ? currentState.dailyChallenges.find((task) => task.id !== challenge.id
+        && (task.status === 'inProgress' || task.status === 'overdue'))?.id ?? null
+      : currentState.activeChallengeId,
+    flags: currentState.flags.includes(challenge.readinessFlag)
+      ? currentState.flags
+      : [...currentState.flags, challenge.readinessFlag],
+    challengeHistory: [
+      ...currentState.challengeHistory,
+      {
+        id: challenge.id,
+        title: challenge.title,
+        day: currentState.day,
+        deadlineMissed: completedAfterDeadline,
+        responseTimeMs,
+        emergency: challenge.emergency,
+        preventedEscalation: emergencyPrevented,
+      },
+    ],
+    challengeFeedback: challenge.recoveryStatus === 'active'
+      ? `Great recovery! You won back half the supplies from this job. ${challenge.completionFeedback}`
+      : emergencyPrevented
+        ? `Nice work! You finished ${challenge.title} in time and stopped a bigger problem. ${challenge.completionFeedback}`
+        : completedAfterDeadline
+          ? `Job saved! You finished ${challenge.title} late. ${challenge.completionFeedback}`
+          : successFeedback ?? (challenge.priority === 'normal' || challenge.priority === 'high'
+            ? taskSuccessFeedback
+            : challenge.completionFeedback),
+  };
+  const failedVital = findFailedVital(resources);
+  if (failedVital) {
+    nextState = { ...nextState, gameStatus: 'failed', failureReason: failedVital };
+  }
+  return nextState;
+}
+
 export function useGameSimulation({
   enabled = true,
   dayDurationMs = LUNAR_DAY_DURATION_MS,
   seed,
 }: GameSimulationOptions = {}) {
-  const [state, setState] = useState<GameState>(
-    () => createInitialState(seed ?? createRandomSeed()),
-  );
+  const [state, setState] = useState<GameState>(() => {
+    // A refresh resumes the same campaign schedule; only an explicit restart
+    // deals a new one.
+    const saved = loadMissionState();
+    if (saved) return saved as GameState;
+    return createInitialState(seed ?? createRandomSeed());
+  });
+
+  useEffect(() => {
+    if (state.gameStatus === 'playing') {
+      saveMissionState(state);
+    } else {
+      try {
+        clearMissionState();
+      } catch {
+        // Best-effort: a finished mission simply is not resumable.
+      }
+    }
+  }, [state]);
 
   const setSceneReady = useCallback((ready: boolean) => {
     setState((current) => current.sceneReady === ready ? current : { ...current, sceneReady: ready });
@@ -2012,10 +2180,9 @@ export function useGameSimulation({
         };
       }
 
-      const nextDailyChallenges = createNextDayChallenges(
+      const nextDailyChallenges = createDailyChallenges(
         currentState.day + 1,
-        currentState.rngState,
-        currentState.usedDailyChallengeIds,
+        currentState.campaignSchedule,
       );
       let nextState: GameState = {
         ...currentState,
@@ -2162,6 +2329,185 @@ export function useGameSimulation({
     });
   }, []);
 
+  const recordRepairDiagnosis = useCallback((
+    challengeId: string,
+    toolId: string,
+    diagnosedPart: string,
+  ) => {
+    setState((currentState) => {
+      const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
+      if (!challenge || challenge.status === 'completed'
+        || (challenge.status !== 'inProgress' && challenge.status !== 'overdue')) return currentState;
+      const experience = getDailyTaskExperience(challenge);
+      const repair = experience.repair;
+      if (!repair) return currentState;
+      if (!currentState.repairInventory.tools.includes(toolId)
+        || toolId !== repair.diagnosisToolId
+        || diagnosedPart !== experience.brokenPart) {
+        return {
+          ...currentState,
+          challengeFeedback: toolId !== repair.diagnosisToolId
+            ? 'That tool is useful for another job. Try the tester to find the problem.'
+            : `That part looks okay. ${experience.hint}`,
+        };
+      }
+      return {
+        ...currentState,
+        repairProgress: {
+          ...currentState.repairProgress,
+          [challengeId]: {
+            diagnosisToolId: toolId,
+            diagnosedPart,
+            selectedStrategyId: null,
+            repairStepCompleted: false,
+          },
+        },
+        challengeFeedback: 'Good detective work! You found the part that needs fixing.',
+      };
+    });
+  }, []);
+
+  const selectRepairStrategy = useCallback((challengeId: string, strategyId: string) => {
+    setState((currentState) => {
+      const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
+      if (!challenge || (challenge.status !== 'inProgress' && challenge.status !== 'overdue')) {
+        return currentState;
+      }
+      const experience = getDailyTaskExperience(challenge);
+      const repair = experience.repair;
+      const progress = currentState.repairProgress[challengeId];
+      const strategy = repair?.strategies.find((entry) => entry.id === strategyId);
+      if (!repair
+        || !progress
+        || progress.diagnosisToolId !== repair.diagnosisToolId
+        || progress.diagnosedPart !== experience.brokenPart
+        || !strategy) return currentState;
+      if (!currentState.repairInventory.tools.includes(strategy.toolId)) {
+        return { ...currentState, challengeFeedback: 'That tool is not in the Smart Tool Bag. Try another repair plan.' };
+      }
+      if (!getRepairPartAvailability(currentState.repairInventory, strategy.partsCost)) {
+        return {
+          ...currentState,
+          challengeFeedback: 'There are not enough spare parts for that plan. Choose the no-parts repair instead.',
+        };
+      }
+      return {
+        ...currentState,
+        repairProgress: {
+          ...currentState.repairProgress,
+          [challengeId]: {
+            ...progress,
+            selectedStrategyId: strategyId,
+            repairStepCompleted: false,
+          },
+        },
+      };
+    });
+  }, []);
+
+  const completeRepairStep = useCallback((challengeId: string) => {
+    setState((currentState) => {
+      const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
+      if (!challenge) return currentState;
+      const progress = currentState.repairProgress[challengeId];
+      const experience = getDailyTaskExperience(challenge);
+      const strategy = experience.repair
+        ?.strategies.find((entry) => entry.id === progress?.selectedStrategyId);
+      if ((challenge.status !== 'inProgress' && challenge.status !== 'overdue')
+        || !progress
+        || progress.diagnosisToolId !== experience.repair?.diagnosisToolId
+        || progress.diagnosedPart !== experience.brokenPart
+        || !strategy
+        || !currentState.repairInventory.tools.includes(strategy.toolId)
+        || !getRepairPartAvailability(currentState.repairInventory, strategy.partsCost)) {
+        return currentState;
+      }
+      return {
+        ...currentState,
+        repairProgress: {
+          ...currentState.repairProgress,
+          [challengeId]: { ...progress, repairStepCompleted: true },
+        },
+      };
+    });
+  }, []);
+
+  const verifyRepair = useCallback((
+    challengeId: string,
+    componentId: string,
+    verificationId: string,
+  ) => {
+    setState((currentState) => {
+      const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
+      if (!challenge || challenge.targetComponentId !== componentId
+        || (challenge.status !== 'inProgress' && challenge.status !== 'overdue')
+        || challenge.recoveryStatus === 'available'
+        || (challenge.priority === 'critical'
+          && TASK_CONSEQUENCE_EVENTS.some((event) => event.riskTaskIds?.includes(challenge.id))
+          && challenge.urgentConsequenceApplied
+          && challenge.recoveryStatus !== 'active')
+        || currentState.gameStatus !== 'playing'
+        || currentState.dayPhase !== 'active'
+        || currentState.warningTaskId) return currentState;
+      const experience = getDailyTaskExperience(challenge);
+      const progress = currentState.repairProgress[challengeId];
+      const strategy = experience.repair?.strategies.find(
+        (entry) => entry.id === progress?.selectedStrategyId,
+      );
+      if (!experience.repair
+        || !progress
+        || progress.diagnosisToolId !== experience.repair.diagnosisToolId
+        || progress.diagnosedPart !== experience.brokenPart
+        || !progress.repairStepCompleted
+        || !strategy) {
+        return { ...currentState, challengeFeedback: 'Finish the repair steps before checking your work.' };
+      }
+      if (verificationId !== strategy.correctVerificationId) {
+        return {
+          ...currentState,
+          challengeFeedback: 'Not quite. Look at the system reading and try the check again.',
+        };
+      }
+      const repairInventory = consumeVerifiedRepairParts(
+        currentState.repairInventory,
+        strategy.partsCost,
+        true,
+      );
+      if (!repairInventory) {
+        return {
+          ...currentState,
+          challengeFeedback: 'That spare part is gone. Choose the no-parts repair plan to keep going.',
+        };
+      }
+      const repairHistory = [
+        ...currentState.repairHistory,
+        {
+          taskId: challenge.id,
+          title: challenge.title,
+          day: currentState.day,
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          toolId: strategy.toolId,
+          partsUsed: { ...(strategy.partsCost ?? {}) },
+          verified: true,
+        },
+      ];
+      return completeChallengeState({
+        ...currentState,
+        repairInventory,
+        repairHistory,
+        repairProgress: {
+          ...currentState.repairProgress,
+          [challengeId]: { ...progress, repairStepCompleted: true },
+        },
+      }, challenge, {
+        resourceEffects: strategy.resourceEffects,
+        conditionRecovery: strategy.conditionRecovery,
+        successFeedback: `Repair checked and working! You used the ${strategy.name.toLowerCase()}. ${challenge.completionFeedback}`,
+      });
+    });
+  }, []);
+
   const completeDailyChallenge = useCallback((challengeId: string, componentId: string) => {
     setState((currentState) => {
       if (
@@ -2176,6 +2522,7 @@ export function useGameSimulation({
       if (
         !challenge ||
         (challenge.status !== 'inProgress' && challenge.status !== 'overdue') ||
+        getDailyTaskExperience(challenge).repair ||
         (challenge.recoveryStatus === 'available') ||
         (challenge.priority === 'critical'
           && TASK_CONSEQUENCE_EVENTS.some((event) => event.riskTaskIds?.includes(challenge.id))
@@ -2185,108 +2532,7 @@ export function useGameSimulation({
       ) {
         return currentState;
       }
-
-      const startedDay = challenge.startedDay ?? currentState.day;
-      const completedAfterDeadline = challenge.deadlineMissed
-        || (challenge.urgentDeadlineAtMs !== null
-          && currentState.campaignElapsedMs >= challenge.urgentDeadlineAtMs);
-      const responseTimeMs = challenge.urgentStartedAtMs !== null
-        ? currentState.campaignElapsedMs - challenge.urgentStartedAtMs
-        : null;
-      const emergencyPrevented = challenge.emergency
-        && !completedAfterDeadline
-        && !challenge.urgentConsequenceApplied
-        && !challenge.escalationApplied;
-      let resources = applyEffects(
-        currentState.resources,
-        challenge.recoveryStatus === 'active'
-          ? roundResourceEffects(getTaskCompletionResourceEffects(challenge))
-          : getTaskCompletionResourceEffects(challenge),
-      );
-      const recoveryRestoration = challenge.recoveryStatus === 'active'
-        ? getHalfResourceRestoration(challenge.recoveryResourceLosses)
-        : {};
-      if (Object.keys(recoveryRestoration).length > 0) {
-        resources = applyEffects(resources, recoveryRestoration);
-      }
-      const systemConditions = changeSystemCondition(
-        currentState.systemConditions,
-        challenge.affectedSystem,
-        challenge.conditionRecovery,
-      );
-      const taskResourceChanges = (Object.entries(getVisibleResourceChanges(
-        getVisibleResourceLevels(resources),
-        getVisibleResourceLevels(currentState.resources),
-      )) as [DisplayResourceKey, number][])
-        .map(([resource, change]) => ({ resource, change }));
-      const taskResourceSummary = taskResourceChanges.length > 0
-        ? ` Supply changes: ${taskResourceChanges.map(({ resource, change }) => `${RESOURCE_DISPLAY_NAMES[resource]} ${change > 0 ? '+' : ''}${Number(change.toFixed(1))}%`).join(', ')}.`
-        : ' Your supply bars stayed the same.';
-      const taskConditionChange = systemConditions[challenge.affectedSystem]
-        - currentState.systemConditions[challenge.affectedSystem];
-      const taskConditionSummary = taskConditionChange > 0
-        ? ` ${SYSTEM_DISPLAY_NAMES[challenge.affectedSystem]} is working ${taskConditionChange}% better.`
-        : taskConditionChange < 0
-          ? ` ${SYSTEM_DISPLAY_NAMES[challenge.affectedSystem]} is working ${Math.abs(taskConditionChange)}% less well.`
-          : '';
-      const taskSuccessFeedback = `You did it! ${challenge.title} is done. ${challenge.completionFeedback}${taskResourceSummary}${taskConditionSummary}`;
-
-      let nextState: GameState = {
-        ...currentState,
-        resources,
-        systemConditions,
-        dailyChallenges: currentState.dailyChallenges.map((task) =>
-          task.id === challenge.id
-            ? {
-              ...task,
-              status: 'completed',
-              startedDay,
-              completedDay: currentState.day,
-              deadlineMissed: task.deadlineMissed || completedAfterDeadline,
-              completedAfterDeadline,
-              responseTimeMs,
-              emergencyPrevented,
-              recoveryStatus: challenge.recoveryStatus === 'active' ? 'completed' : challenge.recoveryStatus,
-              recoveryDeadlineAtMs: null,
-            }
-            : task,
-        ),
-        activeChallengeId: currentState.activeChallengeId === challenge.id
-          ? currentState.dailyChallenges.find(
-            (task) => task.id !== challenge.id
-              && (task.status === 'inProgress' || task.status === 'overdue'),
-          )?.id ?? null
-          : currentState.activeChallengeId,
-        flags: currentState.flags.includes(challenge.readinessFlag)
-          ? currentState.flags
-          : [...currentState.flags, challenge.readinessFlag],
-        challengeHistory: [
-          ...currentState.challengeHistory,
-          {
-            id: challenge.id,
-            title: challenge.title,
-            day: currentState.day,
-            deadlineMissed: completedAfterDeadline,
-            responseTimeMs,
-            emergency: challenge.emergency,
-            preventedEscalation: emergencyPrevented,
-          },
-        ],
-        challengeFeedback: challenge.recoveryStatus === 'active'
-          ? `Great recovery! You won back half the supplies from this job. ${challenge.completionFeedback}`
-          : emergencyPrevented
-          ? `Nice work! You finished ${challenge.title} in time and stopped a bigger problem. ${challenge.completionFeedback}`
-          : completedAfterDeadline
-            ? `Job saved! You finished ${challenge.title} late. ${challenge.completionFeedback}`
-            : challenge.priority === 'normal' || challenge.priority === 'high'
-              ? taskSuccessFeedback
-              : challenge.completionFeedback,
-      };
-      const failedVital = findFailedVital(resources);
-      if (failedVital) {
-        nextState = { ...nextState, gameStatus: 'failed', failureReason: failedVital };
-      }
-      return nextState;
+      return completeChallengeState(currentState, challenge);
     });
   }, []);
 
@@ -2485,6 +2731,10 @@ export function useGameSimulation({
     presentEndOfDayTaskNotice,
     startDailyChallenge,
     startCriticalTaskRecovery,
+    recordRepairDiagnosis,
+    selectRepairStrategy,
+    completeRepairStep,
+    verifyRepair,
     completeDailyChallenge,
     dismissChallengeFeedback,
     abandonEvent,

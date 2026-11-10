@@ -167,8 +167,8 @@ test('an unresolved recovery at day end triggers the end-of-day consequence and 
   assert.equal(atDayEnd.eventHistory.filter((event) => event.eventId === definition.id).length, 1);
 });
 
-test('lunar day duration is three minutes', () => {
-  assert.equal(simulation.LUNAR_DAY_DURATION_MS, 180_000);
+test('lunar day duration is ten minutes', () => {
+  assert.equal(simulation.LUNAR_DAY_DURATION_MS, 600_000);
 });
 
 test('event timeout applies its authored resource penalty once and removes the active event', () => {

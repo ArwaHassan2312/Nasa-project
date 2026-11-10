@@ -87,10 +87,11 @@ const LunarOutpost = lazy(() => import('../components/lunar/LunarOutpost'));
 // phases: 'intro' -> 'select' -> 'lunar'
 export default function LaunchPage({
   simulation,
+  resumeMission = false,
   onMissionStart,
   onMissionPause,
 }) {
-  const [phase, setPhase] = useState('intro');
+  const [phase, setPhase] = useState(() => (resumeMission ? 'lunar' : 'intro'));
   const [selected, setSelected] = useState(null);
   const [introFinished, setIntroFinished] = useState(false);
 

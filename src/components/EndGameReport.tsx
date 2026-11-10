@@ -3,6 +3,7 @@ import type {
   DecisionRecord,
   EventOutcomeRecord,
   GameStatus,
+  RepairHistoryRecord,
   ResourceLevels,
   TaskMissionRecord,
 } from '../hooks/useGameSimulation';
@@ -22,6 +23,7 @@ interface EndGameReportProps {
   eventHistory: EventOccurrence[];
   eventOutcomeHistory: EventOutcomeRecord[];
   taskMissionHistory: TaskMissionRecord[];
+  repairHistory: RepairHistoryRecord[];
   onRestart: () => void;
 }
 
@@ -61,6 +63,7 @@ export default function EndGameReport({
   eventHistory,
   eventOutcomeHistory,
   taskMissionHistory,
+  repairHistory,
   onRestart,
 }: EndGameReportProps) {
   const isSuccess = status === 'success';
@@ -199,8 +202,21 @@ export default function EndGameReport({
               <strong>{analysis.stats.resolvedEvents} / {eventHistory.length}</strong>
               <small>{analysis.stats.unresolvedEvents} still need help · {analysis.stats.eventResolutionRate}% fixed</small>
             </article>
+            <article className="report-stat-card">
+              <span>Repairs checked</span>
+              <strong>{repairHistory.length}</strong>
+              <small>Each repair passed its final check</small>
+            </article>
           </div>
-
+          {repairHistory.length > 0 && (
+            <ul className="report-recommendations">
+              {repairHistory.map((repair, index) => (
+                <li key={`${repair.taskId}-${repair.day}-${index}`}>
+                  Day {repair.day}: {repair.title} · {repair.strategyName} · checked and working
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section className="report-section">
