@@ -10,7 +10,7 @@ before(async () => {
   scheduler = await import(`data:text/javascript;base64,${Buffer.from(transformed.code).toString('base64')}`);
 });
 
-function chooseIndependentEvent({ day, elapsedMs, dayDurationMs = 120_000 }) {
+function chooseIndependentEvent({ day, elapsedMs, dayDurationMs = 300_000 }) {
   return scheduler.selectMajorEvent({
     events: [{
       id: `independent-day-${day}`,
@@ -32,19 +32,18 @@ function chooseIndependentEvent({ day, elapsedMs, dayDurationMs = 120_000 }) {
     systemConditions: { power: 100 },
     resources: { power: 100 },
     eventHistory: [],
-    forceEvent: true,
+    forceEvent: false,
   }, 10_000);
 }
 
-test('independent events are selectable early on consecutive days and never in the second half', () => {
+test('independent events are selectable from minute two until the final minute', () => {
   for (let day = 1; day <= 10; day += 1) {
-    const elapsedMs = 20_000 + (day % 4) * 10_000;
-    assert.ok(chooseIndependentEvent({ day, elapsedMs }).event, `day ${day} should allow an early event`);
-    assert.equal(chooseIndependentEvent({ day, elapsedMs: 60_000 }).event, null,
-      `day ${day} must close independent scheduling at the first-half boundary`);
+    const elapsedMs = 120_000 + (day % 4) * 10_000;
+    assert.ok(chooseIndependentEvent({ day, elapsedMs }).event, `day ${day} should allow an event in the window`);
+    assert.equal(chooseIndependentEvent({ day, elapsedMs: 240_000 }).event, null,
+      `day ${day} must close independent scheduling one minute before day end`);
   }
-  assert.ok(chooseIndependentEvent({ day: 11, elapsedMs: 40_000, dayDurationMs: 90_000 }).event);
-  assert.equal(chooseIndependentEvent({ day: 11, elapsedMs: 45_000, dayDurationMs: 90_000 }).event, null);
+  assert.equal(chooseIndependentEvent({ day: 11, elapsedMs: 40_000, dayDurationMs: 90_000 }).event, null);
 });
 
 test('task-triggered event selection is not restricted by the independent-event window', () => {

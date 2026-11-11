@@ -10,6 +10,7 @@ import { MISSION_FAILURE_RESOURCE_THRESHOLD } from '../hooks/useGameSimulation';
 import type { ResourceKey } from '../data/moonEvents';
 import type { EventOccurrence } from '../hooks/eventScheduler';
 import { buildMissionFailureNarrative } from './missionFailureNarrative';
+import { SCIENCE_DISCOVERIES } from '../data/missionStory';
 
 interface EndGameReportProps {
   status: Exclude<GameStatus, 'playing'>;
@@ -23,6 +24,9 @@ interface EndGameReportProps {
   eventOutcomeHistory: EventOutcomeRecord[];
   taskMissionHistory: TaskMissionRecord[];
   onRestart: () => void;
+  commanderName?: string;
+  baseName?: string;
+  scienceNotebookIds?: string[];
 }
 
 const RESOURCE_LABELS: Record<ResourceKey, string> = {
@@ -31,10 +35,10 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   oxygen: 'Oxygen',
   water: 'Water',
   food: 'Food',
-  habitat: 'Crew health',
+  habitat: 'Commander safety',
   equipment: 'Outpost tools',
-  health: 'Crew health',
-  radProtection: 'Crew health',
+  health: 'Commander safety',
+  radProtection: 'Commander safety',
   comms: 'Power',
   science: 'Science',
   emergencyReserve: 'Water',
@@ -47,7 +51,7 @@ const VITAL_RESOURCES: ResourceKey[] = [
 
 const REPORT_RESOURCE_LABELS: Partial<Record<ResourceKey, string>> = {
   oxygen: 'Oxygen', water: 'Water', power: 'Power',
-  battery: 'Battery', food: 'Food', health: 'Crew health',
+  battery: 'Battery', food: 'Food', health: 'Commander safety',
 };
 
 export default function EndGameReport({
@@ -62,8 +66,19 @@ export default function EndGameReport({
   eventOutcomeHistory,
   taskMissionHistory,
   onRestart,
+  commanderName = 'Commander',
+  baseName = 'Moonbase Alpha',
+  scienceNotebookIds = [],
 }: EndGameReportProps) {
   const isSuccess = status === 'success';
+  const discoveryCount = scienceNotebookIds.length;
+  const vitalResources = ['oxygen', 'water', 'power', 'battery', 'food', 'health'] as const;
+  const maintainedOutpost = vitalResources.every((resource) => resources[resource] >= 50);
+  const ending = !isSuccess
+    ? { title: 'Brave Learner', summary: 'This mission ended before Day 15, but every result is useful. Real explorers learn from each challenge and try again.' }
+    : resources.science >= 70 && discoveryCount >= 8 && maintainedOutpost
+      ? { title: 'Pioneer', summary: 'Your report shows that a long-term human presence on the Moon may be possible. Earth is ready for the next step!' }
+      : { title: 'Careful Explorer', summary: 'The Moon may be possible, and there is more to learn. Your mission was an important first step!' };
   const missionTasks = [
     ...taskMissionHistory,
     ...dailyChallenges.map((task) => ({
@@ -107,23 +122,28 @@ export default function EndGameReport({
       >
         <header className="report-header">
           <div className="simulation-eyebrow">Mission wrap-up · Day {day} of {maxDays}</div>
-          <h2 id="report-title" className={isSuccess ? 'report-success' : 'report-failed'}>
-            {isSuccess ? 'We did it!' : 'Let’s learn from this mission'}
-          </h2>
+          <h2 id="report-title" className={isSuccess ? 'report-success' : 'report-failed'}>{ending.title}</h2>
           <p className="report-intro">
             {isSuccess
-              ? `The outpost made it to Day ${day} of ${maxDays}. See how the crew’s choices, jobs, and resources helped.`
+              ? `${baseName} made it to Day ${day} of ${maxDays}. Review what Commander ${commanderName} discovered and how the outpost changed.`
               : analysis.explanation[0]}
           </p>
         </header>
 
+        <section className="report-section report-final-message">
+          <h3>Final message from Dr. Noor</h3>
+          <p>{ending.summary}</p>
+          <div className="report-final-discovery"><span>COMMANDER’S SCIENCE NOTEBOOK</span><strong>{discoveryCount} / {SCIENCE_DISCOVERIES.length} discoveries saved</strong><small>Final Science reading: {Math.round(resources.science)}%</small></div>
+          <ol className="report-final-steps"><li>Mission summary</li><li>Scientific discoveries</li><li>Best decisions</li><li>What to try next</li></ol>
+        </section>
+
         <section className="report-section">
           <h3>Mission summary</h3>
-          <p>{isSuccess
-            ? `Mission completed on Day ${day} of ${maxDays}. See how your choices, jobs, problems, and resources shaped the mission.`
+            <p>{isSuccess
+            ? `Commander ${commanderName} completed the 15-day mission at ${baseName}. See how your choices, jobs, problems, discoveries, and resources shaped the result.`
             : analysis.explanation[0]}</p>
           <div className="report-stat-grid report-summary-grid">
-            <article className="report-stat-card"><span>How it went</span><strong>{isSuccess ? 'Mission complete' : 'Mission paused early'}</strong><small>{isSuccess ? 'The outpost made it through the mission' : `A supply got too low: ${failureReason ? REPORT_RESOURCE_LABELS[failureReason] ?? failureReason : 'check the bars'}`}</small></article>
+            <article className="report-stat-card"><span>How it went</span><strong>{isSuccess ? 'Mission complete' : 'Mission paused early'}</strong><small>{isSuccess ? 'The outpost made it through the mission' : `A resource got too low: ${failureReason ? REPORT_RESOURCE_LABELS[failureReason] ?? failureReason : 'check the bars'}`}</small></article>
             <article className="report-stat-card"><span>Problems</span><strong>{analysis.stats.resolvedEvents} fixed</strong><small>{analysis.stats.unresolvedEvents} still needed help</small></article>
             <article className="report-stat-card"><span>Important jobs</span><strong>{priorityTaskCount(missionTasks) - analysis.stats.missedPriorityTasks} / {priorityTaskCount(missionTasks)}</strong><small>Jobs finished in time</small></article>
           </div>

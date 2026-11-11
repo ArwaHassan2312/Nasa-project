@@ -80,11 +80,12 @@ import SpaceBackground from '../components/space/SpaceBackground';
 import IntroBackdrop from '../components/space/IntroBackdrop';
 import IntroOverlay from '../components/space/Introoverlay';
 import MissionSelect from '../components/space/Missionselect';
+import MissionStoryIntro from '../components/MissionStoryIntro';
 import '../components/space/Ui.css';
 
 const LunarOutpost = lazy(() => import('../components/lunar/LunarOutpost'));
 
-// phases: 'intro' -> 'select' -> 'lunar'
+// phases: 'intro' -> 'select' -> 'briefing' -> 'lunar'
 export default function LaunchPage({
   simulation,
   onMissionStart,
@@ -93,18 +94,24 @@ export default function LaunchPage({
   const [phase, setPhase] = useState('intro');
   const [selected, setSelected] = useState(null);
   const [introFinished, setIntroFinished] = useState(false);
+  const [commanderProfile, setCommanderProfile] = useState({ commanderName: 'Commander', baseName: 'Moonbase Alpha' });
 
   const handleStart = useCallback(() => setPhase('select'), []);
   const finishIntro = useCallback(() => setIntroFinished(true), []);
 
   const handleLaunchMission = useCallback((id) => {
     if (id === 'moon') {
-      onMissionStart?.();
-      setPhase('lunar');
+      setPhase('briefing');
     }
+  }, []);
+
+  const beginMission = useCallback((profile) => {
+    setCommanderProfile(profile);
+    onMissionStart?.(profile);
+    setPhase('lunar');
   }, [onMissionStart]);
 
-  // Skip the whole intro flow: jump straight into the lunar outpost.
+  // Skipping the cinematic still takes the player through the mission briefing.
   const handleSkip = useCallback(() => {
     handleLaunchMission('moon');
   }, [handleLaunchMission]);
@@ -121,6 +128,7 @@ export default function LaunchPage({
           <LunarOutpost
             onExitToOrbit={handleExitToOrbit}
             simulation={simulation}
+            commanderProfile={commanderProfile}
           />
         </Suspense>
       ) : (
@@ -145,6 +153,9 @@ export default function LaunchPage({
               onSelect={setSelected}
               onLaunchMission={handleLaunchMission}
             />
+          )}
+          {phase === 'briefing' && (
+            <MissionStoryIntro onBegin={beginMission} />
           )}
         </>
       )}

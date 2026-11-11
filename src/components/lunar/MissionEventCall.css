@@ -1,0 +1,30 @@
+.mission-event-call-backdrop { position: fixed; z-index: 6500; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(2, 8, 16, .82); backdrop-filter: blur(9px); animation: mission-event-call-in .24s ease-out both; }
+.mission-event-incoming-card,.mission-event-call-screen { position: relative; width: min(780px, 100%); overflow: hidden; border: 1px solid rgba(106, 229, 218, .55); border-radius: 20px; color: #edfaff; background: linear-gradient(145deg, #102635, #08141f 72%); box-shadow: 0 24px 90px rgba(0,0,0,.68), 0 0 55px rgba(80, 219, 213, .16); }
+.mission-event-incoming-card { display: grid; grid-template-columns: 190px 1fr; align-items: center; min-height: 270px; padding: 22px 30px; }
+.mission-event-incoming-lumi { height: 205px; }
+.mission-event-incoming-lumi .mission-character { width: 100%; height: 100%; }
+.mission-event-call-copy { padding: 10px 4px; }
+.mission-event-call-kicker { color: #8ee9d2; font: 700 .67rem/1.5 var(--lunar-font-mono, monospace); letter-spacing: .12em; }
+.mission-event-call-copy h2,.mission-event-tv-message h2 { margin: 8px 0 10px; color: #f0fbff; font-size: clamp(1.35rem, 3vw, 2rem); }
+.mission-event-call-copy p { color: #c5d9e0; line-height: 1.55; }
+.mission-event-call-button { min-height: 42px; padding: 10px 16px; border: 1px solid rgba(138, 238, 213, .62); border-radius: 10px; color: #e8fff5; background: linear-gradient(120deg, rgba(32, 117, 99, .86), rgba(22, 78, 87, .92)); font: 700 .83rem/1.3 'Trebuchet MS', sans-serif; cursor: pointer; box-shadow: 0 6px 20px rgba(27, 157, 132, .16); }
+.mission-event-call-button:hover { border-color: #c0ffe6; filter: brightness(1.12); }
+.mission-event-call-screen { width: min(1020px, 100%); border-radius: 15px; background: #07131d; }
+.mission-event-call-screen > header,.mission-event-call-screen > footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 13px 20px; color: #9de7dc; background: rgba(22, 61, 70, .65); font: 700 .65rem/1.4 var(--lunar-font-mono, monospace); letter-spacing: .08em; }
+.mission-event-call-screen > header { border-bottom: 1px solid rgba(123, 223, 214, .24); }
+.mission-event-call-screen > footer { border-top: 1px solid rgba(123, 223, 214, .24); color: #bed8dc; letter-spacing: 0; }
+.mission-event-tv-body { display: grid; grid-template-columns: minmax(220px, .72fr) minmax(0, 1.28fr); min-height: 440px; }
+.mission-event-tv-portrait { position: relative; display: grid; min-height: 390px; place-items: center; overflow: hidden; background: radial-gradient(ellipse at center, rgba(47, 146, 156, .3), rgba(4, 15, 24, .95)); }
+.mission-event-tv-portrait::after { position: absolute; inset: 0; content: ''; pointer-events: none; background: repeating-linear-gradient(0deg, transparent 0 4px, rgba(142, 238, 224, .035) 5px 6px); animation: mission-event-scan 5s linear infinite; }
+.mission-event-tv-portrait .mission-character { width: 100%; height: 340px; }
+.mission-event-tv-message { align-self: center; padding: 28px clamp(20px, 4vw, 42px); }
+.mission-event-tv-message > p,.mission-event-tv-message article p { color: #ccdee2; font-size: .9rem; line-height: 1.55; }
+.mission-event-tv-message article { margin-top: 12px; padding: 10px 13px; border-left: 3px solid #69d5c4; border-radius: 0 9px 9px 0; background: rgba(28, 68, 75, .38); }
+.mission-event-tv-message article strong { color: #a6eee1; font-size: .78rem; }
+.mission-event-tv-message article p { margin: 5px 0 0; }
+.mission-event-tv-message .mission-event-consequence { border-left-color: #efbb75; background: rgba(92, 60, 36, .28); }
+.mission-event-tv-message .mission-event-consequence strong { color: #ffd098; }
+.mission-event-tv-message > small { display: block; margin-top: 9px; color: #a9c5cc; line-height: 1.45; }
+@keyframes mission-event-call-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mission-event-scan { from { transform: translateY(-14px); } to { transform: translateY(14px); } }
+@media (max-width: 650px) { .mission-event-incoming-card { grid-template-columns: 110px 1fr; padding: 16px; } .mission-event-incoming-lumi { height: 150px; } .mission-event-call-screen > header { flex-wrap: wrap; font-size: .56rem; } .mission-event-tv-body { grid-template-columns: 1fr; } .mission-event-tv-portrait { min-height: 210px; max-height: 240px; } .mission-event-tv-portrait .mission-character { height: 210px; } .mission-event-call-screen > footer { align-items: stretch; flex-direction: column; } }

@@ -413,7 +413,7 @@ test('independent event scheduling uses each day timer and can select at 20 seco
     }
     assert.equal(selected?.id, 'timing-probe');
   }
-  assert.equal(scheduler.EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs, 20_000);
+  assert.equal(scheduler.EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs, 120_000);
 });
 
 test('independent event scheduler skips events already seen in the gameplay session', () => {

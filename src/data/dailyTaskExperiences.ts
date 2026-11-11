@@ -34,7 +34,7 @@ const tool = (id: string, name: string, picture: TaskToolChoice['picture']): Tas
 
 const TASK_EXPERIENCES: Record<string, DailyTaskExperience> = {
   'battery-readiness-check': {
-    scenario: 'The outpost battery is running low. Help the crew save power for the long lunar night.',
+    scenario: 'The outpost battery is running low. Save power for the long lunar night.',
     picture: 'Battery container',
     parts: ['Charge port', 'Power switch', 'Status light'],
     brokenPart: 'Charge port',
@@ -64,7 +64,7 @@ const TASK_EXPERIENCES: Record<string, DailyTaskExperience> = {
     fact: 'A tight pipe joint helps keep every drop of drinking water inside.',
   },
   'habitat-air-seal-check': {
-    scenario: 'The seal around a habitat doorway looks worn. Check it so the crew can keep their air safely inside.',
+    scenario: 'The seal around a habitat doorway looks worn. Check it to keep your air safely inside.',
     picture: 'Habitat air seal',
     parts: ['Door seal', 'Door handle', 'Wall light'],
     brokenPart: 'Door seal',
@@ -111,17 +111,17 @@ const TASK_EXPERIENCES: Record<string, DailyTaskExperience> = {
     hint: 'Find the tube that brings food and water to the plants.',
     tools: [tool('watering', 'Plant water jug', 'watering'), tool('tester', 'Plant-feed tester', 'tester'), tool('scissors', 'Plant scissors', 'scissors')],
     correctTool: 'watering', action: 'Feed the plants',
-    fact: 'Plants use light, water, and nutrients to grow food for the crew.',
+    fact: 'Plants use light, water, and nutrients to grow food for the mission.',
   },
   'food-storage-inventory': {
     scenario: 'Some meal packs are tucked behind newer ones. Find the food shelf that needs a quick tidy-up.',
-    picture: 'Crew food shelf',
+    picture: 'Food shelf',
     parts: ['Meal pack shelf', 'Storage latch', 'Cooler light'],
     brokenPart: 'Meal pack shelf',
-    hint: 'Look where the crew stores its meals.',
+    hint: 'Look where the mission meals are stored.',
     tools: [tool('checklist', 'Food checklist', 'checklist'), tool('gloves', 'Food gloves', 'gloves'), tool('cloth', 'Shelf cloth', 'cloth')],
     correctTool: 'checklist', action: 'Sort the meal packs',
-    fact: 'Putting older food at the front helps the crew use it before it expires.',
+    fact: 'Putting older food at the front helps you use it before it expires.',
   },
   'solar-tracker-alignment': {
     scenario: 'The solar panels are looking away from the Sun. Help them turn in the right direction.',
@@ -161,17 +161,17 @@ const TASK_EXPERIENCES: Record<string, DailyTaskExperience> = {
     hint: 'Look around the edge of the door for its soft sealing strip.',
     tools: [tool('tester', 'Seal tester', 'tester'), tool('patch', 'Seal patch', 'patch'), tool('wrench', 'Door wrench', 'wrench')],
     correctTool: 'tester', action: 'Test the airlock seal',
-    fact: 'An airlock uses doors to help keep the habitat air from escaping when astronauts go outside.',
+    fact: 'An airlock uses two doors to help keep habitat air from escaping when someone goes outside.',
   },
   'radiation-shelter-seal-check': {
-    scenario: 'A storm shelter seal looks worn. Find the spot that needs a patch before the crew needs shelter.',
+    scenario: 'A storm shelter seal looks worn. Find the spot that needs a patch before you need shelter.',
     picture: 'Storm shelter hatch',
     parts: ['Hatch seal', 'Hatch handle', 'Safety light'],
     brokenPart: 'Hatch seal',
     hint: 'Check the edge where the shelter hatch closes.',
     tools: [tool('patch', 'Seal patch', 'patch'), tool('tester', 'Leak tester', 'tester'), tool('cloth', 'Hatch cloth', 'cloth')],
     correctTool: 'patch', action: 'Patch the shelter seal',
-    fact: 'Lunar soil, called regolith, can be piled over shelters to help protect astronauts.',
+    fact: 'Lunar soil, called regolith, can be piled over shelters to help protect people inside.',
   },
   'communications-mast-diagnostic': {
     scenario: 'The radio antenna signal is weak. Find the connection that might be loose.',
@@ -185,7 +185,7 @@ const TASK_EXPERIENCES: Record<string, DailyTaskExperience> = {
   },
   'medical-kit-expiry-audit': {
     scenario: 'The medical kits need a tidy-up. Find the supply box where older items should be moved to the front.',
-    picture: 'Crew medical kit',
+    picture: 'Commander medical kit',
     parts: ['Supply tray', 'Kit latch', 'Cabinet light'],
     brokenPart: 'Supply tray',
     hint: 'Look where the medical supplies are sorted and stored.',
@@ -194,14 +194,14 @@ const TASK_EXPERIENCES: Record<string, DailyTaskExperience> = {
     fact: 'Keeping a medical kit organized helps people find the right item quickly.',
   },
   'eva-suit-life-support-check': {
-    scenario: 'The space suit air hose needs a check before a crew member goes outside.',
-    picture: 'Astronaut space suit',
+    scenario: 'The space suit air hose needs a check before you go outside.',
+    picture: 'Commander space suit',
     parts: ['Air hose', 'Helmet visor', 'Glove cuff'],
     brokenPart: 'Air hose',
-    hint: 'Find the hose that carries air to the astronaut.',
+    hint: 'Find the hose that carries air to your suit.',
     tools: [tool('tester', 'Suit air tester', 'tester'), tool('patch', 'Hose patch', 'patch'), tool('clamp', 'Hose clamp', 'clamp')],
     correctTool: 'tester', action: 'Test the suit air hose',
-    fact: 'A space suit is like a tiny spacecraft that gives an astronaut air and protection.',
+    fact: 'A space suit is like a tiny spacecraft that gives you air and protection.',
   },
   'rover-wheel-and-brake-check': {
     scenario: 'A rover wheel looks soft and its brake needs a check before the next trip.',
@@ -244,7 +244,7 @@ const TASK_EXPERIENCES: Record<string, DailyTaskExperience> = {
     fact: 'A tight lid helps protect stored supplies from dust and damage.',
   },
   'greenhouse-harvest-and-preservation': {
-    scenario: 'Some greenhouse leaves are ready to eat. Find the ripe greens and gather them for the crew.',
+    scenario: 'Some greenhouse leaves are ready to eat. Find the ripe greens and gather them for the mission.',
     picture: 'Greenhouse crop tray',
     parts: ['Ready leaves', 'Grow light', 'Water tray'],
     brokenPart: 'Ready leaves',
@@ -254,14 +254,14 @@ const TASK_EXPERIENCES: Record<string, DailyTaskExperience> = {
     fact: 'Fresh plants can add variety to meals during a long space mission.',
   },
   'communications-backup-beacon-test': {
-    scenario: 'The crew wants to know if the backup radio will work. Find the beacon that sends the signal.',
+    scenario: 'Mission Control wants to know if the backup radio will work. Find the beacon that sends the signal.',
     picture: 'Backup radio beacon',
     parts: ['Backup antenna', 'Control dial', 'Power light'],
     brokenPart: 'Backup antenna',
     hint: 'Look for the part that sends the radio signal.',
     tools: [tool('tester', 'Radio tester', 'tester'), tool('cable', 'Backup power cable', 'cable'), tool('brush', 'Antenna brush', 'brush')],
     correctTool: 'tester', action: 'Test the backup radio',
-    fact: 'A backup radio gives a crew another way to send a message if the main radio stops.',
+    fact: 'A backup radio gives you another way to send a message if the main radio stops.',
   },
 };
 
@@ -270,7 +270,7 @@ const VARIANT_EXPERIENCES: Record<string, Pick<DailyTaskExperience, 'scenario' |
     scenario: 'At {place}, one sensor is showing a jumpy reading. Find the sensor that needs a careful setup.',
     parts: ['Sensor lens', 'Status light', 'Mounting bracket'], brokenPart: 'Sensor lens', hint: 'Look for the part that takes the reading.',
     tools: [tool('tester', 'Calibration card', 'tester'), tool('cloth', 'Sensor cloth', 'cloth'), tool('wrench', 'Mounting wrench', 'wrench')], correctTool: 'tester', action: 'Set the sensor reading',
-    fact: 'Sensors help a crew notice changes in their spacecraft and surroundings.',
+    fact: 'Sensors help a commander notice changes in the base and surroundings.',
   },
   'connection-integrity': {
     scenario: 'At {place}, a connector feels loose. Find the link that needs to be secured.',
@@ -282,22 +282,22 @@ const VARIANT_EXPERIENCES: Record<string, Pick<DailyTaskExperience, 'scenario' |
     scenario: 'At {place}, the system needs a quick test while it is running. Find the test panel.',
     parts: ['Test panel', 'Power cable', 'Cooling vent'], brokenPart: 'Test panel', hint: 'Look for the panel used to check how the system is working.',
     tools: [tool('tester', 'Test reader', 'tester'), tool('checklist', 'Test checklist', 'checklist'), tool('cable', 'Power cable', 'cable')], correctTool: 'tester', action: 'Run the system test',
-    fact: 'A simple test can help a crew spot a problem before it grows.',
+    fact: 'A simple test can help you spot a problem before it grows.',
   },
   'control-signal': {
     scenario: 'At {place}, a warning signal is not showing clearly. Find the control that needs testing.',
-    parts: ['Warning light', 'Control switch', 'Cable clip'], brokenPart: 'Warning light', hint: 'Look for the part that tells the crew when something needs attention.',
+    parts: ['Warning light', 'Control switch', 'Cable clip'], brokenPart: 'Warning light', hint: 'Look for the part that tells you when something needs attention.',
     tools: [tool('tester', 'Signal tester', 'tester'), tool('cable', 'Signal cable', 'cable'), tool('cloth', 'Panel cloth', 'cloth')], correctTool: 'tester', action: 'Test the warning signal',
-    fact: 'Clear warning lights help astronauts know when a machine needs attention.',
+    fact: 'Clear warning lights help commanders know when a machine needs attention.',
   },
   'thermal-stability': {
-    scenario: 'At {place}, the crew wants to check for too much heat. Find the part that reads the temperature.',
+    scenario: 'At {place}, check whether the system is getting too hot. Find the part that reads temperature.',
     parts: ['Temperature sensor', 'Cooling vent', 'Power switch'], brokenPart: 'Temperature sensor', hint: 'Choose the part that measures how warm the system is.',
     tools: [tool('tester', 'Temperature reader', 'tester'), tool('brush', 'Vent brush', 'brush'), tool('wrench', 'Sensor wrench', 'wrench')], correctTool: 'tester', action: 'Read the temperature',
     fact: 'Temperature checks help keep machines from getting too hot or too cold.',
   },
   'backup-readiness': {
-    scenario: 'At {place}, the crew wants to make sure the backup is ready. Find its test switch.',
+    scenario: 'At {place}, make sure the backup is ready. Find its test switch.',
     parts: ['Backup switch', 'Main control', 'Status light'], brokenPart: 'Backup switch', hint: 'Look for the control that checks the spare system.',
     tools: [tool('tester', 'Backup tester', 'tester'), tool('cable', 'Backup power cable', 'cable'), tool('checklist', 'Backup checklist', 'checklist')], correctTool: 'tester', action: 'Test the backup system',
     fact: 'Backups give people another way to keep important equipment working.',
@@ -357,7 +357,7 @@ const TASK_SOLUTION_OPTIONS: Record<string, [Omit<DailyTaskSolutionOption, 'id' 
   ],
   'food-storage-inventory': [
     option('Move older meals to the front', 'Use the list to bring the soonest-to-expire packs forward.', tool('checklist', 'Food checklist', 'checklist'), {}, 2),
-    option('Sort meals by use-by date', 'Group packs by date so the crew can choose meals before they expire.', tool('checklist', 'Food checklist', 'checklist'), { food: 1 }, 2),
+    option('Sort meals by use-by date', 'Group packs by date so you can use meals before they expire.', tool('checklist', 'Food checklist', 'checklist'), { food: 1 }, 2),
     option('Check seals as you sort', 'Inspect each pack for damage, then move the oldest safe meals forward.', tool('gloves', 'Food gloves', 'gloves'), {}, 3),
   ],
   'solar-tracker-alignment': [
@@ -392,11 +392,11 @@ const TASK_SOLUTION_OPTIONS: Record<string, [Omit<DailyTaskSolutionOption, 'id' 
   ],
   'medical-kit-expiry-audit': [
     option('Move older items forward', 'Use the checklist to put the soonest-to-expire items in front.', tool('checklist', 'Supply checklist', 'checklist'), {}, 2),
-    option('Sort kits by what they treat', 'Group supplies so the crew can find the right kit quickly.', tool('checklist', 'Supply checklist', 'checklist'), {}, 2),
+    option('Sort kits by what they treat', 'Group supplies so you can find the right kit quickly.', tool('checklist', 'Supply checklist', 'checklist'), {}, 2),
     option('Check packs as you sort', 'Wear gloves and remove any pack with a damaged seal.', tool('gloves', 'Medical gloves', 'gloves'), {}, 3),
   ],
   'eva-suit-life-support-check': [
-    option('Replace the air hose', 'Fit a sound hose so air can reach the astronaut.', tool('patch', 'Hose repair kit', 'patch'), {}, 3),
+    option('Replace the air hose', 'Fit a sound hose so air can reach your suit.', tool('patch', 'Hose repair kit', 'patch'), {}, 3),
     option('Test the air flow', 'Check the air flow through the hose before the suit is used.', tool('tester', 'Suit air tester', 'tester'), { science: 1 }, 2),
     option('Secure the hose joint', 'Fit a fresh clamp and test that the hose stays connected.', tool('clamp', 'Hose clamp', 'clamp'), {}, 3),
   ],
@@ -428,7 +428,7 @@ const TASK_SOLUTION_OPTIONS: Record<string, [Omit<DailyTaskSolutionOption, 'id' 
   'communications-backup-beacon-test': [
     option('Test the backup signal', 'Send a short test message and check that it comes through.', tool('tester', 'Radio tester', 'tester'), { science: 1 }, 2),
     option('Check the antenna cable', 'Make sure the backup antenna has a firm power connection.', tool('cable', 'Backup power cable', 'cable'), { power: -1 }, 3),
-    option('Compare both radios', 'Test the backup and main radio so the crew knows which is clearer.', tool('tester', 'Radio tester', 'tester'), { science: 2 }, 3),
+    option('Compare both radios', 'Test the backup and main radio to see which sends the clearer signal.', tool('tester', 'Radio tester', 'tester'), { science: 2 }, 3),
   ],
   'sensor-calibration': [
     option('Match the sensor to a trusted reading', 'Use the calibration card to correct the sensor reading.', tool('tester', 'Calibration card', 'tester'), { science: 2 }, 3),

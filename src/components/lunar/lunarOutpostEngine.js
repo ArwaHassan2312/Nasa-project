@@ -13,6 +13,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 // leave every copy sharing one skeleton. SkeletonUtils rebuilds the bone rig.
 import { clone as cloneSkinnedRig } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { loadDownscaledTexture } from '../../utils/textureUtils';
+import lumiRobotImageUrl from '../../assets/images/Screenshot 2026-11-11 130507.png';
 
 // ─── Player camera ───────────────────────────────────────────────────────────
 // One camera for the whole game. The same look, eye height and gait are used on
@@ -1251,6 +1252,21 @@ export function createLunarEngine(canvas, callbacks = {}) {
   // The live eye height. Seeded from PLAYER_CAMERA and adjustable at runtime;
   // every camera measurement below reads this, never a scattered constant.
   let playerCameraHeight = PLAYER_CAMERA.height;
+  // Lumi stays close to the walking player, visible just ahead and to one side.
+  // Use the supplied friendly character art in the world and in the story UI.
+  const lumiCompanion = new THREE.Group();
+  lumiCompanion.name = 'Lumi Helper Robot';
+  const lumiTexture = new THREE.TextureLoader().load(lumiRobotImageUrl);
+  lumiTexture.colorSpace = THREE.SRGBColorSpace;
+  const lumiSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: lumiTexture, transparent: true, depthWrite: false }));
+  lumiSprite.scale.set(1.05, 0.96, 1);
+  lumiCompanion.add(lumiSprite);
+  lumiCompanion.visible = false;
+  scene.add(lumiCompanion);
+  const lumiForward = new THREE.Vector3();
+  const lumiRight = new THREE.Vector3();
+  const lumiTarget = new THREE.Vector3();
+  const lumiTrailDirection = new THREE.Vector3(0, 0, -1);
   // The two scans overlap slightly so the seam between them disappears.
   const SEAM_OVERLAP = 4 * WORLD_SCALE;
   // Default free-camera framing distance, sized to the outpost (not the map).
@@ -4285,6 +4301,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleKeyDown(event) {
+    const target = event.target;
+    const typing = target && (
+      target.tagName === 'INPUT'
+      || target.tagName === 'TEXTAREA'
+      || target.isContentEditable
+    );
+    if (typing) return;
     if (eventCinematic) {
       event.preventDefault();
       return;
@@ -4311,12 +4334,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
       }
       return;
     }
-    const target = event.target;
-    const typing = target && (
-      target.tagName === 'INPUT'
-      || target.tagName === 'TEXTAREA'
-      || target.isContentEditable
-    );
     if (key === 'v' && !event.repeat && !typing) {
       event.preventDefault();
       toggleRoverCamera();
@@ -5399,6 +5416,22 @@ export function createLunarEngine(canvas, callbacks = {}) {
       earthMesh.rotation.y += dt * 0.006;
     }
 
+    const walkingView = cameraMode === 'first-person' || cameraMode === 'interior';
+    lumiCompanion.visible = walkingView && !eventCinematic && !roverCameraActive;
+    if (lumiCompanion.visible) {
+      camera.getWorldDirection(lumiForward).setY(0).normalize();
+      if (firstPersonVelocity.lengthSq() > 0.04) lumiTrailDirection.copy(firstPersonVelocity).setY(0).normalize();
+      else if (lumiTrailDirection.lengthSq() < 0.01) lumiTrailDirection.copy(lumiForward);
+      lumiRight.set(-lumiForward.z, 0, lumiForward.x);
+      // Lumi walks beside the commander, just ahead and to the side so she
+      // stays in view without covering the center of the scene.
+      lumiTarget.copy(camera.position).addScaledVector(lumiForward, 0.85).addScaledVector(lumiRight, 1.05);
+      lumiTarget.y = camera.position.y - playerCameraHeight + 0.72;
+      lumiCompanion.position.lerp(lumiTarget, 1 - Math.exp(-dt * 8));
+      lumiCompanion.position.y += 0.035 + Math.sin(clock.elapsedTime * 3.2) * 0.035;
+      lumiCompanion.rotation.y = Math.atan2(lumiTrailDirection.x, lumiTrailDirection.z) + Math.PI;
+    }
+
     renderer.render(scene, camera);
     if (!sceneReadyReported && outpostRoot && moonTerrainMeshes.length === 2 && skyAssetReady && earthAssetsReady) {
       sceneReadyReported = true;
@@ -5626,6 +5659,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
   // Public API returned to React
   return {
     getMapSnapshot,
+    capturePhoto: () => {
+      renderer.render(scene, camera);
+      return renderer.domElement.toDataURL('image/png');
+    },
     getTaskMarkerTargets,
     hideTaskGuide,
     setEventEffects,

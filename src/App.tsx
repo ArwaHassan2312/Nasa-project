@@ -9,7 +9,10 @@ export default function App() {
   return (
     <LaunchPage
       simulation={simulation}
-      onMissionStart={() => setMissionActive(true)}
+      onMissionStart={(profile) => {
+        simulation.setMissionProfile(profile);
+        setMissionActive(true);
+      }}
       onMissionPause={() => setMissionActive(false)}
     />
   );

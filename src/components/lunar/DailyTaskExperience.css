@@ -11,6 +11,7 @@
   background: rgba(3, 9, 17, 0.56);
   backdrop-filter: blur(3px);
 }
+.daily-task-experience-backdrop.is-suspended { display: none; }
 
 .daily-task-experience {
   position: relative;
@@ -88,6 +89,11 @@
 .daily-task-stage-label { color: #a9eff1; font-size: 0.9rem; font-weight: 700; }
 .daily-task-location-note { color: #b8cbd8 !important; }
 .daily-task-location-note strong { color: #fff !important; }
+.daily-task-why-button { justify-self: start; display: inline-flex; align-items: center; gap: 8px; min-height: 38px; padding: 7px 13px; border: 1px solid rgba(120, 226, 222, 0.42); border-radius: 999px; color: #b9f2ed; background: linear-gradient(135deg, rgba(32, 92, 101, 0.76), rgba(26, 54, 75, 0.9)); box-shadow: inset 0 1px rgba(255,255,255,.08), 0 4px 12px rgba(0, 0, 0, .18); font: inherit; font-size: .83rem; font-weight: 700; letter-spacing: .01em; cursor: pointer; transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease; }
+.daily-task-why-button::before { content: '?'; display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; color: #123b47; background: #9debe0; font-size: .76rem; font-weight: 900; }
+.daily-task-why-button:hover { transform: translateY(-1px); border-color: #a4fff1; background: linear-gradient(135deg, rgba(39, 117, 121, .92), rgba(34, 69, 91, .96)); box-shadow: 0 6px 16px rgba(25, 193, 180, .16); }
+.daily-task-why-button:focus-visible { outline: 2px solid #c4fff4; outline-offset: 2px; }
+.daily-task-why-note { padding: 10px 12px; border-left: 3px solid #8ae0d5; border-radius: 0 8px 8px 0; color: #d9edf0 !important; background: rgba(28, 61, 71, .62); font-size: .88rem !important; }
 
 .daily-task-object-picture {
   display: grid;

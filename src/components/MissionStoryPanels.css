@@ -1,0 +1,106 @@
+.mission-story-panel-backdrop { position: fixed; z-index: 5000; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(2, 8, 15, 0.78); backdrop-filter: blur(9px); animation: story-fade-in 180ms ease-out both; }
+.mission-story-moment,.mission-archive,.ice-sample-panel,.mission-radio-panel { position: relative; width: min(940px, 100%); max-height: min(820px, calc(100dvh - 36px)); overflow: hidden; border: 1px solid rgba(111, 226, 234, 0.38); border-radius: 18px; color: #e8f7fb; background: radial-gradient(ellipse at 18% 8%, rgba(42, 123, 145, 0.2), transparent 42%), rgba(7, 18, 30, 0.98); box-shadow: 0 24px 84px rgba(0,0,0,.62), 0 0 40px rgba(76,199,213,.1); animation: story-panel-in 220ms ease-out both; }
+.mission-story-moment { display: grid; grid-template-columns: minmax(220px, 0.68fr) minmax(0, 1.32fr); min-height: 440px; }
+.story-moment-visual { position: relative; display: grid; min-height: 300px; place-items: center; overflow: hidden; background: radial-gradient(circle at 48% 50%, rgba(46, 119, 138, 0.32), rgba(7, 20, 33, 0.14) 70%); }
+.story-moment-visual::before { content: ''; position: absolute; width: 70%; aspect-ratio: 1; border: 1px solid rgba(116, 224, 227, .2); border-radius: 50%; box-shadow: 0 0 42px rgba(116,224,227,.08), inset 0 0 40px rgba(116,224,227,.07); }
+.story-moment-visual .mission-character { width: 100%; height: 290px; }
+.story-moment-visual .mission-character-lumi { width: 90%; height: 230px; margin: 24px 0 0; align-self: center; }
+.story-moment-content { display: flex; flex-direction: column; justify-content: center; padding: 42px clamp(24px, 4vw, 44px); border-left: 1px solid rgba(124,187,202,.14); }
+.story-panel-kicker { color: #76dce5; font: 700 .66rem/1.4 var(--lunar-font-mono,monospace); letter-spacing: .14em; }
+.story-panel-kicker.is-lumi { color: #a5efcc; }
+.story-moment-content h2,.mission-archive-header h2,.ice-sample-panel h2,.mission-radio-panel h2 { margin: 11px 0 12px; color: #f2fbff; font-size: clamp(1.35rem,2.6vw,2rem); line-height: 1.12; }
+.story-moment-message,.story-moment-extra { margin: 0; color: #c4d8df; font-size: 1rem; line-height: 1.65; }
+.story-moment-extra { margin-top: 14px; color: #a9e8df; }
+.story-location-facts { display: grid; gap: 9px; margin-top: 6px; }
+.story-location-facts article { padding: 10px 12px; border: 1px solid rgba(125,192,208,.16); border-radius: 9px; background: rgba(18,39,54,.52); }
+.story-location-facts article > span,.science-discovery-card > div:last-child > span,.mission-log-list li > span,.moon-fact-grid article > span { color: #7fd6df; font: 700 .61rem/1.4 var(--lunar-font-mono,monospace); letter-spacing: .1em; }
+.story-location-facts p { margin: 5px 0 0; color: #c6d9df; font-size: .9rem; line-height: 1.5; }
+.story-location-facts .story-fun-fact { border-color: rgba(220,183,102,.22); background: rgba(87,63,28,.22); }
+.story-location-facts .story-fun-fact > span { color: #e6c875; }
+.story-moment-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 22px; }
+.story-moment-actions button,.story-panel-continue,.story-panel-voice { min-height: 40px; padding: 0 14px; border: 1px solid rgba(133,195,207,.36); border-radius: 7px; color: #c8e4e9; background: rgba(16,38,52,.75); font: 700 .68rem/1 var(--lunar-font-mono,monospace); letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
+.story-panel-continue { border-color: #72dfe5; color: #07252c; background: linear-gradient(125deg,#8ef1e8,#7ac9e8); }
+.story-panel-continue:hover,.story-panel-voice:hover { filter: brightness(1.12); }
+.story-panel-close { position: absolute; z-index: 5; top: 12px; right: 13px; display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid rgba(180,215,220,.2); border-radius: 50%; color: #d6edf1; background: rgba(8,20,31,.76); font-size: 1.2rem; cursor: pointer; }
+.mission-archive { display: flex; flex-direction: column; width: min(1030px,100%); min-height: min(640px,calc(100dvh - 36px)); }
+.mission-archive-header { padding: 26px 30px 17px; border-bottom: 1px solid rgba(125,192,208,.16); }
+.mission-archive-header > span { color: #7fd6df; font: 700 .63rem/1.4 var(--lunar-font-mono,monospace); letter-spacing: .13em; }
+.mission-archive-header h2 { margin-bottom: 5px; }
+.mission-archive-header p { margin: 0; color: #9dbac4; font-size: .85rem; }
+.mission-archive-header .mission-archive-help { margin-top: 8px; color: #bed1d7; font-size: .78rem; line-height: 1.45; }
+.mission-archive-tabs { display: flex; gap: 8px; padding: 12px 24px 0; overflow-x: auto; scrollbar-width: none; }
+.mission-archive-tabs::-webkit-scrollbar { display:none; }
+.mission-archive-tabs button { flex: 0 0 auto; padding: 9px 12px; border: 1px solid transparent; border-radius: 6px 6px 0 0; color: #96acb5; background: transparent; font: 700 .65rem/1 var(--lunar-font-mono,monospace); text-transform: uppercase; cursor: pointer; }
+.mission-archive-tabs button.is-active { border-color: rgba(112,220,228,.28); border-bottom-color: #0d1d2a; color: #baf3ef; background: rgba(28,69,82,.42); }
+.mission-archive-content { flex: 1; min-height: 0; overflow: auto; padding: 20px 24px 26px; scrollbar-width: none; -ms-overflow-style:none; }
+.mission-archive-content::-webkit-scrollbar { display:none; }
+.science-discovery-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.science-sample-section { margin-top: 18px; }
+.science-sample-section > h3 { margin: 0 0 10px; color: #9ce8e2; font-size: 1rem; }
+.science-sample-card .science-discovery-art { border-color: rgba(130, 212, 220, .3); }
+.science-discovery-card { display: grid; grid-template-columns: 84px 1fr; gap: 12px; padding: 13px; border: 1px solid rgba(119,193,207,.2); border-radius: 11px; background: linear-gradient(125deg,rgba(24,52,68,.72),rgba(9,25,38,.72)); }
+.science-discovery-art { display: grid; min-height: 86px; place-items: center; border-radius: 8px; background: radial-gradient(circle,rgba(77,154,166,.25),rgba(8,25,37,.2)); }
+.science-discovery-art svg { width: 78px; height: 78px; }
+.science-discovery-card h3 { margin: 5px 0 4px; color: #e7fbfc; font-size: .97rem; }
+.science-discovery-card p,.science-discovery-card small { display:block; margin:0; color:#b5cad1; font-size:.78rem; line-height:1.45; }
+.science-discovery-card small { margin-top:7px; color:#8daeb8; }
+.science-discovery-card small b { color:#e0c878; }
+.mission-log-list { display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+.mission-log-list li { padding:11px 14px; border-left:2px solid #52c9d1; border-radius:0 8px 8px 0; background:rgba(19,43,57,.62); }
+.mission-log-list p { margin:5px 0 0; color:#c1d5db; font-size:.85rem; line-height:1.48; }
+.moon-fact-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.moon-fact-grid article { padding:14px; border:1px solid rgba(123,196,207,.18); border-radius:9px; background:rgba(19,43,57,.62); }
+.moon-fact-grid p { margin:8px 0 0; color:#cee0e5; font-size:.85rem; line-height:1.5; }
+.story-empty-state { display:grid; justify-items:center; align-content:center; min-height:220px; color:#bcd0d7; text-align:center; }
+.story-empty-state > span { color:#74dbe1; font-size:2rem; }
+.story-empty-state h3 { margin:9px 0 4px; color:#e8f7fa; }
+.story-empty-state p { max-width:430px; margin:0; color:#9fb7c0; line-height:1.5; }
+.mission-photo-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-bottom:15px; }
+.mission-photo-actions p { margin:0; color:#aec4cc; font-size:.86rem; }
+.mission-photo-pending { display:grid; grid-template-columns:minmax(200px,1fr) minmax(200px,1fr) auto; align-items:end; gap:12px; margin-bottom:17px; padding:12px; border:1px solid rgba(112,220,228,.24); border-radius:9px; background:rgba(16,38,52,.65); }
+.mission-photo-pending img { width:100%; max-height:150px; object-fit:contain; grid-row:span 2; }
+.mission-photo-pending label { display:grid; gap:6px; color:#8ecbd2; font-size:.72rem; }
+.mission-photo-pending input { min-width:0; padding:10px; border:1px solid rgba(125,194,207,.28); border-radius:6px; color:#e8f7fb; background:#0b1b29; }
+.mission-photo-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.mission-photo-grid figure { min-width:0; margin:0; padding:8px; border:1px solid rgba(123,196,207,.18); border-radius:8px; background:rgba(19,43,57,.62); }
+.mission-photo-grid img { display:block; width:100%; aspect-ratio:16/10; object-fit:cover; border-radius:5px; background:#07131d; }
+.mission-photo-grid figcaption { display:grid; gap:4px; padding:7px 3px 2px; color:#d3e5e8; font-size:.78rem; }
+.mission-photo-grid figcaption span { color:#7fd6df; font:700 .58rem/1.4 var(--lunar-font-mono,monospace); }
+.ice-sample-panel,.mission-radio-panel { width:min(620px,100%); padding:30px; }
+.ice-sample-panel h2,.mission-radio-panel h2 { margin-top:10px; }
+.ice-sample-intro { max-width:540px; color:#b7cbd2; line-height:1.55; }
+.ice-sample-options { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:19px; }
+.ice-sample-options button { display:grid; align-content:start; justify-items:start; gap:8px; min-height:170px; padding:13px; border:1px solid rgba(121,205,213,.25); border-radius:10px; color:#dceff2; background:linear-gradient(145deg,rgba(24,58,70,.78),rgba(9,25,36,.8)); text-align:left; cursor:pointer; transition:transform 150ms ease,border-color 150ms ease,background 150ms ease; }
+.ice-sample-options button:hover { transform:translateY(-2px); border-color:#7ce3df; background:linear-gradient(145deg,rgba(34,89,97,.8),rgba(12,34,45,.85)); }
+.ice-sample-options button > span { display:grid; width:42px; height:42px; place-items:center; border-radius:50%; color:#c6f4e8; background:rgba(99,186,177,.17); font-size:1.6rem; }
+.ice-sample-options strong { color:#e8f8f6; font-size:.86rem; }
+.ice-sample-options small { color:#9fb9c1; line-height:1.45; }
+.ice-sample-result { display:grid; justify-items:center; padding:22px 0 8px; text-align:center; }
+.ice-sample-stone { display:grid; width:80px; height:80px; place-items:center; border-radius:50%; color:#d9f5ee; background:radial-gradient(circle at 35% 28%,#9bb5b7,#465f68 70%); font-size:2.2rem; box-shadow:0 0 26px rgba(102,207,199,.2); }
+.ice-sample-result h3 { margin:15px 0 4px; }
+.ice-sample-result p { color:#aec7cf; }
+.ice-sample-result p strong { color:#92efcf; }
+.ice-sample-counter { margin-top:17px; color:#7898a2; font:600 .62rem/1.4 var(--lunar-font-mono,monospace); letter-spacing:.08em; text-align:center; text-transform:uppercase; }
+.radio-message { margin-top:16px; padding:14px 16px; border:1px solid rgba(112,220,228,.18); border-radius:10px; background:rgba(15,39,54,.68); }
+.radio-message > span { color:#8fdce0; font:700 .6rem/1.4 var(--lunar-font-mono,monospace); letter-spacing:.08em; }
+.radio-message p { margin:7px 0 0; color:#d0e2e6; line-height:1.55; }
+.radio-outgoing { border-left:3px solid #69cdd4; }
+.radio-incoming { border-left:3px solid #9be9c8; }
+.radio-incoming > span { color:#a4ebc8; }
+.radio-signal-delay { display:flex; align-items:center; gap:9px; margin:14px 0; color:#9ab7bf; font:600 .64rem/1.4 var(--lunar-font-mono,monospace); }
+.radio-signal-delay i { width:8px; height:8px; border-radius:50%; background:#eac976; box-shadow:0 0 11px rgba(234,201,118,.6); animation:radio-pulse 700ms ease-in-out infinite alternate; }
+.radio-signal-delay.is-arrived i { background:#93ebbd; box-shadow:0 0 11px rgba(147,235,189,.6); animation:none; }
+.mission-radio-panel > .story-panel-continue { margin-top:16px; }
+@keyframes story-panel-in { from { opacity:0; transform:translateY(8px) scale(.99); } to { opacity:1; transform:translateY(0) scale(1); } }
+@keyframes radio-pulse { to { opacity:.35; transform:scale(.7); } }
+@media(max-width:760px) { .mission-story-moment { grid-template-columns:1fr; grid-template-rows:160px auto; min-height:0; max-height:calc(100dvh - 36px); overflow:auto; scrollbar-width:none; } .story-moment-visual { min-height:150px; } .story-moment-visual .mission-character { width:190px; height:165px; } .story-moment-visual .mission-character-lumi { width:160px; height:145px; margin:0; } .story-moment-content { padding:20px; border-top:1px solid rgba(124,187,202,.14); border-left:0; } .science-discovery-grid { grid-template-columns:1fr; } .moon-fact-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .mission-archive { min-height:min(620px,calc(100dvh - 36px)); } .mission-archive-header { padding:23px 20px 14px; } .mission-archive-tabs { padding-left:12px; padding-right:12px; } .mission-archive-content { padding:15px 12px 20px; } .ice-sample-options { grid-template-columns:1fr; } .ice-sample-options button { min-height:0; grid-template-columns:44px 1fr; align-items:center; } .ice-sample-options button small { grid-column:2; } .ice-sample-options button > span { grid-row:span 2; } .mission-photo-pending { grid-template-columns:1fr; } .mission-photo-pending img { grid-row:auto; max-height:160px; } .mission-photo-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:440px) { .moon-fact-grid { grid-template-columns:1fr; } .mission-photo-actions { align-items:flex-start; flex-direction:column; } .ice-sample-panel,.mission-radio-panel { padding:26px 20px 20px; } }
+@media(prefers-reduced-motion:reduce) { .mission-story-panel-backdrop,.mission-story-moment,.mission-archive,.ice-sample-panel,.mission-radio-panel { animation:none; } .radio-signal-delay i { animation:none; } }
+
+/* Dr. Noor's messages use a warmer, softer mission-control palette. */
+.story-moment-visual:has(.mission-character-noor) { background: radial-gradient(circle at 48% 50%, rgba(72, 164, 164, 0.3), rgba(12, 29, 40, 0.18) 70%); }
+.story-panel-kicker:not(.is-lumi) { color: #9be7d7; }
+.story-moment-content:has(.mission-character-noor) { background: linear-gradient(135deg, rgba(20, 49, 62, 0.24), transparent 64%); }
+.mission-noor-reply { border-color: rgba(139, 220, 197, 0.42) !important; background: linear-gradient(130deg, rgba(24, 77, 77, 0.42), rgba(19, 43, 56, 0.56)) !important; border-radius: 14px !important; box-shadow: 0 8px 26px rgba(31, 132, 122, 0.1); }
+.mission-noor-reply > span { color: #a5ebd4 !important; }
+.mission-noor-reply p { color: #e0f3ed !important; line-height: 1.65; }

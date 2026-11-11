@@ -153,6 +153,13 @@ export interface EventOutcomeRecord {
 }
 
 interface GameState {
+  commanderName: string;
+  baseName: string;
+  storyPaused: boolean;
+  visitedLocationIds: string[];
+  scienceNotebookIds: string[];
+  missionLogEntries: { id: string; day: number; category: string; text: string }[];
+  collectedIceSamples: { id: string; label: string; day: number }[];
   day: number;
   maxDays: number;
   dayPhase: DayPhase;
@@ -203,16 +210,16 @@ interface GameState {
 
 const MAX_RESOURCE_LEVEL = 100;
 export const MISSION_FAILURE_RESOURCE_THRESHOLD = 10;
-export const MISSION_LENGTH_DAYS = 30;
-export const LUNAR_DAY_DURATION_MS = 240_000;
+export const MISSION_LENGTH_DAYS = 15;
+export const LUNAR_DAY_DURATION_MS = 300_000;
 const DAY_TRANSITION_DURATION_MS = 5000;
 const EVENT_RESPONSE_DURATION_MS = 60_000;
 const CRITICAL_TASK_RECOVERY_DURATION_MS = 45_000;
 const CLOCK_UPDATE_INTERVAL_MS = 1000;
 const RESOURCE_DISPLAY_NAMES: Record<ResourceKey, string> = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
-  habitat: 'Crew health', equipment: 'Crew health', health: 'Crew health',
-  radProtection: 'Crew health', comms: 'Power', science: 'Science',
+  habitat: 'Commander safety', equipment: 'Commander safety', health: 'Commander safety',
+  radProtection: 'Commander safety', comms: 'Power', science: 'Science',
   emergencyReserve: 'Water', potentialWater: 'Water',
 };
 const SYSTEM_DISPLAY_NAMES: Record<SystemKey, string> = {
@@ -306,6 +313,13 @@ function createDailyChallenges(
 export function createInitialState(seed: number): GameState {
   const initialChallenges = createDailyChallenges(1, seed);
   const initialState: GameState = {
+    commanderName: 'Commander',
+    baseName: 'Moonbase Alpha',
+    storyPaused: false,
+    visitedLocationIds: [],
+    scienceNotebookIds: [],
+    missionLogEntries: [],
+    collectedIceSamples: [],
     day: 1,
     maxDays: MISSION_LENGTH_DAYS,
     dayPhase: 'active',
@@ -396,7 +410,7 @@ function prepareEventForReadiness(
       return {
         ...decision,
         effects: { ...decision.effects, health: -8 },
-        cost: 'Crew health -8',
+        cost: 'Commander safety -8',
         risk: 'Existing power debt compounds the crisis',
       };
     }
@@ -610,7 +624,7 @@ function applyDayStartConsequences(state: GameState, day: number): GameState {
         resources,
         systemConditions,
         faultHistory,
-        challengeFeedback: `A ${system} problem needs care: ${relatedOverdueTask.title} was still waiting. You can use this to help the crew sooner next time.`,
+        challengeFeedback: `A ${system} problem needs care: ${relatedOverdueTask.title} was still waiting. Use what you learned to act sooner next time.`,
       };
       const failedVital = findFailedVital(resources);
       if (failedVital) {
@@ -675,7 +689,7 @@ function applyTimedTaskConsequences(state: GameState): GameState {
           return losses;
         }, {} as Partial<Record<ResourceKey, number>>);
       challengeFeedback = canRecover
-        ? `Time ran out for ${nextChallenge.title}, and some supplies were used. Try the recovery job to win half back. The related problem will wait while you do.`
+        ? `Time ran out for ${nextChallenge.title}, and some resources were used. Try the recovery job to win half back. The related problem will wait while you do.`
         : `${nextChallenge.title} is still waiting. ${nextChallenge.riskIfDelayed} You can try it sooner next time.`;
       nextChallenge = {
         ...nextChallenge,
@@ -1026,7 +1040,7 @@ function triggerEndOfDayCriticalConsequences(state: GameState): GameState {
       eventId: event.id,
       eventName: event.name,
       status: 'failed',
-      feedback: `The crew couldn’t finish “${event.missedTaskTitle}” today, so ${event.name} happened. Next time, you can help them sooner. ${event.failureFeedback}`,
+      feedback: `You couldn’t finish “${event.missedTaskTitle}” today, so ${event.name} happened. Next time, you can act sooner. ${event.failureFeedback}`,
       resourceChanges: eventResourceChanges.get(event.occurrenceId ?? `${event.id}-${state.day}`),
     });
   }
@@ -1316,6 +1330,7 @@ export function advanceClockState(
   dayDurationMs: number,
 ): GameState {
   let nextState = initialState;
+  if (nextState.storyPaused) return nextState;
   if (nextState.dayPhase === 'transition') return nextState;
   let remainingMs = elapsedMs;
 
@@ -1394,10 +1409,15 @@ export function advanceClockState(
     };
     remainingMs -= step;
 
-    // Baseline consumption accumulates gradually over the lunar day.
+    // Baseline consumption accumulates gradually over the lunar day. During
+    // the story's long-night stretch, solar power is unavailable, so the base
+    // draws a little extra power and uses stored battery energy.
+    const dailyResourceUse = nextState.day >= 8 && nextState.day < 10
+      ? { ...BASELINE_DAILY_CONSUMPTION, power: BASELINE_DAILY_CONSUMPTION.power - 1, battery: -2 }
+      : BASELINE_DAILY_CONSUMPTION;
     const eventDrains: Partial<Record<ResourceKey, number>> = nextState.dayPhase === 'active'
       ? getElapsedResourceEffects(
-        BASELINE_DAILY_CONSUMPTION,
+        dailyResourceUse,
         previousResourceElapsedMs,
         nextState.resourceElapsedMs,
         dayDurationMs,
@@ -1611,10 +1631,79 @@ export function useGameSimulation({
     setState((current) => current.sceneReady === ready ? current : { ...current, sceneReady: ready });
   }, []);
 
+  const setMissionProfile = useCallback((profile: { commanderName?: string; baseName?: string }) => {
+    setState((current) => ({
+      ...current,
+      commanderName: profile.commanderName?.trim() || current.commanderName,
+      baseName: profile.baseName?.trim() || current.baseName,
+    }));
+  }, []);
+
+  const setStoryPaused = useCallback((paused: boolean) => {
+    setState((current) => current.storyPaused === paused ? current : { ...current, storyPaused: paused });
+  }, []);
+
+  const markLocationVisited = useCallback((locationId: string, locationName: string) => {
+    setState((current) => current.visitedLocationIds.includes(locationId) ? current : {
+      ...current,
+      visitedLocationIds: [...current.visitedLocationIds, locationId],
+      missionLogEntries: [...current.missionLogEntries, {
+        id: `location-${locationId}-${current.day}`,
+        day: current.day,
+        category: 'Location',
+        text: `Day ${current.day}: First visit to ${locationName}.`,
+      }],
+    });
+  }, []);
+
+  const unlockScienceDiscovery = useCallback((discoveryId: string, title: string) => {
+    setState((current) => current.scienceNotebookIds.includes(discoveryId) ? current : {
+      ...current,
+      scienceNotebookIds: [...current.scienceNotebookIds, discoveryId],
+      missionLogEntries: [...current.missionLogEntries, {
+        id: `discovery-${discoveryId}`,
+        day: current.day,
+        category: 'Discovery',
+        text: `Day ${current.day}: New discovery added to the Science Notebook — ${title}.`,
+      }],
+    });
+  }, []);
+
+  const addMissionLogEntry = useCallback((text: string, category = 'Mission') => {
+    setState((current) => ({
+      ...current,
+      missionLogEntries: [...current.missionLogEntries, {
+        id: `${category}-${current.day}-${current.campaignElapsedMs}-${current.missionLogEntries.length}`,
+        day: current.day,
+        category,
+        text,
+      }],
+    }));
+  }, []);
+
+  const collectIceSample = useCallback((sampleId: string, label: string) => {
+    setState((current) => {
+      if (current.day < 11 || current.dayPhase !== 'active'
+        || current.collectedIceSamples.some((sample) => sample.id === sampleId)) return current;
+      return {
+        ...current,
+        resources: applyEffects(current.resources, { science: 3 }),
+        collectedIceSamples: [...current.collectedIceSamples, { id: sampleId, label, day: current.day }],
+        missionLogEntries: [...current.missionLogEntries, {
+          id: `sample-${sampleId}`,
+          day: current.day,
+          category: 'Sample',
+          text: `Day ${current.day}: Rover sample collected — ${label}. Science +3.`,
+        }],
+      };
+    });
+  }, []);
+
   const advanceClock = useCallback((elapsedMs: number) => {
     setState((currentState) => {
       if (
         currentState.gameStatus !== 'playing' ||
+        currentState.storyPaused ||
         currentState.dayPhase === 'transition' ||
         currentState.warningTaskId ||
         !Number.isFinite(dayDurationMs) ||
@@ -1628,7 +1717,7 @@ export function useGameSimulation({
 
   useEffect(() => {
     if (
-      !enabled || !state.sceneReady ||
+      !enabled || !state.sceneReady || state.storyPaused ||
       state.gameStatus !== 'playing' ||
       state.dayPhase === 'transition' ||
       state.warningTaskId ||
@@ -1663,6 +1752,7 @@ export function useGameSimulation({
     state.dayPhase,
     state.warningTaskId,
     state.sceneReady,
+    state.storyPaused,
   ]);
 
   useEffect(() => {
@@ -2145,7 +2235,7 @@ export function useGameSimulation({
       return {
         ...currentState,
         activeChallengeId: challenge.id,
-        challengeFeedback: `Let’s help the crew! Finish ${challenge.title} in 45 seconds to win back half of the supplies lost.`,
+        challengeFeedback: `Try ${challenge.title} again in 45 seconds to win back half of the resources lost.`,
         dailyChallenges: currentState.dailyChallenges.map((task) => task.id === challenge.id
           ? {
             ...task,
@@ -2220,8 +2310,8 @@ export function useGameSimulation({
       )) as [DisplayResourceKey, number][])
         .map(([resource, change]) => ({ resource, change }));
       const taskResourceSummary = taskResourceChanges.length > 0
-        ? ` Supply changes: ${taskResourceChanges.map(({ resource, change }) => `${RESOURCE_DISPLAY_NAMES[resource]} ${change > 0 ? '+' : ''}${Number(change.toFixed(1))}%`).join(', ')}.`
-        : ' Your supply bars stayed the same.';
+        ? ` Resource changes: ${taskResourceChanges.map(({ resource, change }) => `${RESOURCE_DISPLAY_NAMES[resource]} ${change > 0 ? '+' : ''}${Number(change.toFixed(1))}%`).join(', ')}.`
+        : ' Your resource bars stayed the same.';
       const taskConditionChange = systemConditions[challenge.affectedSystem]
         - currentState.systemConditions[challenge.affectedSystem];
       const taskConditionSummary = taskConditionChange > 0
@@ -2273,7 +2363,7 @@ export function useGameSimulation({
           },
         ],
         challengeFeedback: challenge.recoveryStatus === 'active'
-          ? `Great recovery! You won back half the supplies from this job. ${challenge.completionFeedback}`
+          ? `Great recovery! You won back half the resources from this job. ${challenge.completionFeedback}`
           : emergencyPrevented
           ? `Nice work! You finished ${challenge.title} in time and stopped a bigger problem. ${challenge.completionFeedback}`
           : completedAfterDeadline
@@ -2291,7 +2381,11 @@ export function useGameSimulation({
   }, []);
 
   const restart = useCallback(() => {
-    setState(createInitialState(seed ?? createRandomSeed()));
+    setState((current) => ({
+      ...createInitialState(seed ?? createRandomSeed()),
+      commanderName: current.commanderName,
+      baseName: current.baseName,
+    }));
   }, [seed]);
 
   const testTaskEventTrigger = useCallback((challengeId: string) => {
@@ -2469,6 +2563,12 @@ export function useGameSimulation({
   return {
     ...state,
     setSceneReady,
+    setMissionProfile,
+    setStoryPaused,
+    markLocationVisited,
+    unlockScienceDiscovery,
+    addMissionLogEntry,
+    collectIceSample,
     dayDurationMs,
     dayRemainingMs: Math.max(0, dayDurationMs - state.dayElapsedMs),
     timeOfDay: formatLunarTime(state.dayElapsedMs, dayDurationMs),

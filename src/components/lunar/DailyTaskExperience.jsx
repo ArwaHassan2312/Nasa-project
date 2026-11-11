@@ -5,8 +5,8 @@ import * as THREE from 'three';
 import { getDailyTaskExperience, getDailyTaskSolutions } from '../../data/dailyTaskExperiences';
 import './DailyTaskExperience.css';
 
-const STEPS = ['Task Idea', 'Discover Problem', 'Choose a Solution', 'Tool Selection', 'Complete Task', 'Conclusion'];
-const STAGE_ORDER = ['idea', 'discover', 'solutions', 'tool', 'perform', 'conclusion'];
+const STEPS = ['Task Idea', 'Discover Problem', 'Choose a Solution', 'Complete Task', 'Conclusion'];
+const STAGE_ORDER = ['idea', 'discover', 'solutions', 'perform', 'conclusion'];
 
 function getSolutionIcon(solution, experience, task, used) {
   const action = solution.name.toLowerCase();
@@ -78,16 +78,17 @@ function SolutionIcon({ kind }) {
   return <svg viewBox="0 0 48 48" aria-hidden="true" {...common}>{drawing}</svg>;
 }
 
-export default function DailyTaskExperience({ task, initialStage = 'idea', progressState = {}, resourceChanges, componentChange, onClose, onFindLocation, onSelectSolution, onPickUpTool, onComplete }) {
+export default function DailyTaskExperience({ task, initialStage = 'idea', progressState = {}, resourceChanges, componentChange, taskFact, startMessage, suspended = false, onClose, onFindLocation, onSelectSolution, onComplete }) {
   const experience = getDailyTaskExperience(task);
   const [stage, setStage] = useState(initialStage);
   const [hint, setHint] = useState('');
-  const selectedTool = progressState.pickedUp ? progressState.solution?.tool : null;
   const selectedSolution = progressState.solution;
   const [progress, setProgress] = useState(0);
   const [holding, setHolding] = useState(false);
   const [selectedOptionId, setSelectedOptionId] = useState(null);
   const [problemFound, setProblemFound] = useState(false);
+  const problemFoundRef = useRef(false);
+  const [whyOpen, setWhyOpen] = useState(false);
   const completionRef = useRef(false);
   const progressRef = useRef(0);
   const selectionTimerRef = useRef(null);
@@ -100,7 +101,7 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
   }, [task.status, task.recoveryStatus, stage]);
 
   useEffect(() => {
-    if (!holding || stage !== 'perform') return undefined;
+    if (!holding || stage !== 'perform' || suspended) return undefined;
     const timer = window.setInterval(() => {
       const next = Math.min(100, progressRef.current + 5);
       progressRef.current = next;
@@ -116,36 +117,61 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
       }
     }, 65);
     return () => window.clearInterval(timer);
-  }, [holding, stage, onComplete, selectedSolution]);
+  }, [holding, stage, suspended, onComplete, selectedSolution]);
+
+  useEffect(() => {
+    if (suspended) setHolding(false);
+  }, [suspended]);
 
   const stopHolding = () => setHolding(false);
+  const handleProblemFound = () => {
+    if (problemFoundRef.current) return;
+    problemFoundRef.current = true;
+    setProblemFound(true);
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      const context = new AudioContextClass();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(660, context.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(990, context.currentTime + 0.16);
+      gain.gain.setValueAtTime(0.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.16, context.currentTime + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.24);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.25);
+      oscillator.onended = () => context.close();
+    } catch { /* Audio may be unavailable; discovery still completes. */ }
+  };
   const handleSolution = (solution) => {
     if (selectedOptionId) return;
     setSelectedOptionId(solution.id);
     onSelectSolution(solution);
-    selectionTimerRef.current = window.setTimeout(() => setStage('tool'), 280);
+    selectionTimerRef.current = window.setTimeout(() => setStage('perform'), 280);
   };
 
   const guideMessages = {
-    idea: 'Mission ready! Let’s find the equipment that needs help.',
-    discover: problemFound ? 'You found the trouble spot! Great eyes, astronaut.' : 'Drag the magnifying glass over the picture to find the trouble spot.',
+    idea: startMessage ?? 'Mission ready! Let’s find the equipment that needs help.',
+    discover: problemFound ? 'You found the trouble spot! Great eyes, Commander.' : 'Drag the magnifying glass over the picture to find the trouble spot.',
     solutions: 'Pick the plan you like best. Every choice can help!',
-    tool: 'Great plan! Here’s the tool you’ll need for the job.',
-    waiting: 'Your plan is saved. Grab the tool, then come back here!',
     perform: 'You’re ready! Hold the button and keep going until it’s done.',
-    'complete-pending': 'Almost there! The crew is saving your great work.',
+    'complete-pending': 'Almost there! Your work is being saved.',
     conclusion: 'Mission complete! You helped the outpost today.',
-    failed: 'This job needs another try. The crew is ready to help.',
+    failed: 'This job needs another try. You can give it another go.',
   };
 
   return (
-    <div className="daily-task-experience-backdrop" role="presentation">
+    <div className={`daily-task-experience-backdrop${suspended ? ' is-suspended' : ''}`} role="presentation" aria-hidden={suspended}>
       <section className="daily-task-experience" role="dialog" aria-modal="true" aria-labelledby="daily-task-experience-title">
         <button className="daily-task-experience-close" type="button" aria-label="Close task activity" onClick={onClose}>×</button>
         <header className="daily-task-experience-header">
-          <span className="daily-task-experience-kicker">Crew helper activity · Day {task.scheduledDay}</span>
+          <span className="daily-task-experience-kicker">Commander activity · Day {task.scheduledDay}</span>
           <h2 id="daily-task-experience-title">{task.title}</h2>
-          {stage !== 'conclusion' && stage !== 'complete-pending' && stage !== 'failed' && <div className="daily-task-step-list" aria-label={`Step ${Math.max(0, STAGE_ORDER.indexOf(stage)) + 1} of 6`}>
+          {stage !== 'conclusion' && stage !== 'complete-pending' && stage !== 'failed' && <div className="daily-task-step-list" aria-label={`Step ${Math.max(0, STAGE_ORDER.indexOf(stage)) + 1} of ${STEPS.length}`}>
             {STEPS.map((label, index) => (
               <span className={index <= STAGE_ORDER.indexOf(stage) ? 'is-current' : ''} key={label}>
                 <b>{index + 1}</b>{label}
@@ -165,6 +191,8 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
             <span className="daily-task-stage-label">Task idea</span>
             <p>{experience.scenario}</p>
             <p className="daily-task-location-note">Your check is at <strong>{task.targetComponentName}</strong>.</p>
+            <button type="button" className="daily-task-why-button" aria-expanded={whyOpen} onClick={() => setWhyOpen((open) => !open)}>{whyOpen ? 'Hide why' : 'Why does this matter?'}</button>
+            {whyOpen && <p className="daily-task-why-note">{task.riskIfDelayed}</p>}
             <button className="daily-task-primary" type="button" onClick={onFindLocation}>Let’s find it!</button>
           </div>
         )}
@@ -178,7 +206,7 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
               brokenPart={experience.brokenPart}
               componentId={task.targetComponentId}
               problemFound={problemFound}
-              onProblemFound={() => setProblemFound(true)}
+              onProblemFound={handleProblemFound}
             />
             <p className={`daily-task-discover-feedback${problemFound ? ' is-found' : ''}`} role="status" aria-live="polite">
               {problemFound
@@ -217,25 +245,10 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
           </div>
         )}
 
-        {stage === 'tool' && selectedSolution && (
-          <div className="daily-task-stage">
-            <span className="daily-task-stage-label">Tool Selection</span>
-            <p>Great pick! You chose <strong>{selectedSolution.name}</strong>. Let’s get the tool we need!</p>
-            <ToolPicture kind={selectedSolution.tool.picture} large />
-            <p><strong>{selectedSolution.tool.name}</strong> · {selectedSolution.toolExplanation}</p>
-            <button className="daily-task-primary" type="button" onClick={onPickUpTool}>Let’s Pick Up the Tool</button>
-          </div>
-        )}
-
-        {stage === 'waiting' && <div className="daily-task-stage"><span className="daily-task-stage-label">Tool required</span><p>Pick up the <strong>{selectedSolution?.tool.name}</strong> in the Workshop and return to this location. Your solution is saved.</p><button className="daily-task-primary" type="button" onClick={onClose}>Continue exploring</button></div>}
-
-        {stage === 'perform' && (!selectedTool || !selectedSolution) && <div className="daily-task-stage"><span className="daily-task-stage-label">Required tool</span><p>Equip the selected tool in the Workshop before continuing.</p></div>}
-
-        {stage === 'perform' && selectedTool && selectedSolution && (
+        {stage === 'perform' && selectedSolution && (
           <div className="daily-task-stage daily-task-perform-stage">
             <span className="daily-task-stage-label">Complete Task</span>
-            <p>Ready? Hold the button to {experience.action.toLowerCase()} with your <strong>{selectedTool.name.toLowerCase()}</strong>.</p>
-            <ToolPicture kind={selectedTool.picture} large />
+            <p>Ready? Hold the button to {experience.action.toLowerCase()} your chosen plan.</p>
             <button
               className={`daily-task-hold-button${holding ? ' is-holding' : ''}`}
               type="button"
@@ -263,14 +276,14 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
           </div>
         )}
 
-        {stage === 'complete-pending' && <div className="daily-task-stage"><span className="daily-task-stage-label">Saving task outcome</span><p>Almost there! The crew is saving what you did.</p></div>}
+        {stage === 'complete-pending' && <div className="daily-task-stage"><span className="daily-task-stage-label">Saving task outcome</span><p>Almost there! Your work is being saved.</p></div>}
         {stage === 'failed' && <div className="daily-task-stage"><span className="daily-task-stage-label">Task needs recovery</span><p>The task deadline was reached before this completion could be recorded. Follow the existing recovery instructions to try again.</p><button className="daily-task-primary" type="button" onClick={onClose}>Close</button></div>}
 
         {stage === 'conclusion' && (
           <div className="daily-task-stage daily-task-success-stage">
             <span className="daily-task-success-check" aria-label="Task complete">✓</span>
             <span className="daily-task-stage-label">Conclusion</span>
-            <p>You chose <strong>{selectedSolution?.name}</strong> and used the <strong>{selectedTool?.name}</strong>. Nice work, astronaut!</p>
+            <p>You chose <strong>{selectedSolution?.name}</strong>. Nice work, Commander!</p>
             <p>{task.completionFeedback}</p>
             {componentChange !== null && componentChange !== undefined && <p>{componentChange > 0 ? `${task.affectedSystem} condition improved by ${componentChange} points.` : componentChange < 0 ? `${task.affectedSystem} condition changed by ${componentChange} points.` : 'The affected component condition stayed the same.'}</p>}
             <p>{resourceChanges && Object.keys(resourceChanges).length > 0
@@ -278,7 +291,7 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
               : 'No resource values changed during this task.'}</p>
             <article className="daily-task-fact-card">
               <strong>Space fact</strong>
-              <p>{experience.fact}</p>
+              <p>{taskFact ?? experience.fact}</p>
             </article>
             <button className="daily-task-primary" type="button" onClick={onClose}>Done</button>
           </div>

@@ -31,17 +31,19 @@ export interface EventSchedulerInput {
 export const EVENT_SCHEDULER_CONFIG = {
   checkIntervalMs: 10_000,
   minimumCooldownDays: 2,
-  maximumGapDays: 5.5,
   firstEventEarliestDay: 1,
-  minimumIndependentEventElapsedMs: 30_000,
-  maximumIndependentEventElapsedMs: 180_000,
-  baseDailyProbability: 0.18,
+  minimumIndependentEventElapsedMs: 120_000,
+  maximumIndependentEventElapsedMs: 240_000,
+  minimumBeforeDayEndMs: 60_000,
   elevatedSeverityCondition: 40,
   criticalSeverityCondition: 20,
 } as const;
 
 export function getIndependentEventWindowEndMs(dayDurationMs: number): number {
-  return Math.min(dayDurationMs, EVENT_SCHEDULER_CONFIG.maximumIndependentEventElapsedMs);
+  return Math.max(0, Math.min(
+    dayDurationMs - EVENT_SCHEDULER_CONFIG.minimumBeforeDayEndMs,
+    EVENT_SCHEDULER_CONFIG.maximumIndependentEventElapsedMs,
+  ));
 }
 
 function nextRandom(state: number): { value: number; state: number } {
@@ -57,7 +59,7 @@ function nextRandom(state: number): { value: number; state: number } {
 
 export function selectMajorEvent(
   input: EventSchedulerInput,
-  intervalMs: number,
+  _intervalMs: number,
 ): { event: GameEvent | null; rngState: number } {
   const {
     events,
@@ -128,7 +130,6 @@ export function selectMajorEvent(
   const candidates = unencountered;
   if (candidates.length === 0) return { event: null, rngState: input.rngState };
 
-  const overdue = daysSinceLastEvent >= EVENT_SCHEDULER_CONFIG.maximumGapDays;
   let rngState = input.rngState;
   if (
     !forceEvent
@@ -136,27 +137,9 @@ export function selectMajorEvent(
   ) {
     return { event: null, rngState: input.rngState };
   }
-  if (!forceEvent && !overdue) {
-    const roll = nextRandom(rngState);
-    rngState = roll.state;
-    const readinessMultiplier = 0.8 + Math.min(day / maxDays, 1) * 0.6;
-    const riskMultiplier = 1 + Object.values(systemConditions)
-      .reduce((total, condition) => total + (100 - condition) / 100, 0)
-      / Object.keys(systemConditions).length * 0.5
-      + [resources.power, resources.battery, resources.oxygen, resources.water]
-        .reduce((total, reserve) => total + (100 - reserve) / 100, 0) / 4 * 0.25;
-    const dailyProbability = Math.min(
-      EVENT_SCHEDULER_CONFIG.baseDailyProbability * readinessMultiplier * riskMultiplier,
-      0.75,
-    );
-    const selectionWindowMs = Math.max(
-      intervalMs,
-      (independentElapsedMs === undefined ? dayDurationMs : independentWindowEndMs)
-        - EVENT_SCHEDULER_CONFIG.minimumIndependentEventElapsedMs,
-    );
-    const intervalProbability = 1 - (1 - dailyProbability) ** (intervalMs / selectionWindowMs);
-    if (roll.value >= intervalProbability) return { event: null, rngState };
-  }
+  // Story chapters do not gate independent Moon events. Once an event is
+  // eligible and the global cooldown has passed, choose from the full pool;
+  // only event readiness and preventive work can keep an event out.
 
   const weightedCandidates = candidates.map((event) => {
     const conditionRisk = event.affectedSystems.reduce(

@@ -1,16 +1,17 @@
+import { useState } from 'react';
 import type { Decision, GameEvent } from '../data/moonEvents';
 
 const RESOURCE_LABELS: Record<string, string> = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
-  habitat: 'Crew health', equipment: 'Outpost tools', health: 'Crew health',
-  radProtection: 'Crew health', comms: 'Power', science: 'Food',
+  habitat: 'Commander safety', equipment: 'Outpost tools', health: 'Commander safety',
+  radProtection: 'Commander safety', comms: 'Power', science: 'Science',
   emergencyReserve: 'Water', potentialWater: 'Water',
 };
 const RESOURCE_GROUPS: Record<string, string> = {
   battery: 'Battery', comms: 'Power', equipment: 'Power',
-  habitat: 'Crew health', radProtection: 'Crew health',
+  habitat: 'Commander safety', radProtection: 'Commander safety',
   emergencyReserve: 'Water', potentialWater: 'Water',
-  science: 'Food',
+  science: 'Science',
 };
 const SYSTEM_LABELS: Record<string, string> = {
   power: 'Power', lifeSupport: 'Air', water: 'Water', equipment: 'Outpost tools',
@@ -30,9 +31,13 @@ interface EventModalProps {
   remainingMs: number | null;
   locked?: boolean;
   canDecide?: boolean;
+  narration?: { lumi: string; noor: string };
 }
 
 export default function EventModal({ event, events = [], onSelectEvent, taskTitles = {}, onSelectDecision, onClose, remainingMs, locked = false, canDecide = true }: EventModalProps) {
+  const eventKey = event?.occurrenceId ?? `${event?.id ?? 'none'}-${event?.day ?? 0}`;
+  const [whyState, setWhyState] = useState({ key: eventKey, open: false });
+  const whyOpen = whyState.key === eventKey && whyState.open;
   if (!event) return null;
 
   return (
@@ -43,7 +48,7 @@ export default function EventModal({ event, events = [], onSelectEvent, taskTitl
         aria-modal="true"
         aria-labelledby="event-title"
       >
-        <div className="simulation-eyebrow">The crew needs help · Day {event.day ?? '—'}</div>
+        <div className="simulation-eyebrow">Mission Control alert · Day {event.day ?? '—'}</div>
         {events.length > 1 && (
           <nav className="simulation-event-tabs" aria-label="Active mission alerts" role="tablist">
             {events.map((entry, index) => {
@@ -74,7 +79,7 @@ export default function EventModal({ event, events = [], onSelectEvent, taskTitl
         {(remainingMs !== null || locked) && (
           <div className="simulation-event-risk-panel">
             <strong>{locked ? 'The day has ended' : `Time to help · ${formatCountdown(remainingMs ?? 0)}`}</strong>
-            <span>Supplies to protect: {[...new Set(event.riskResources.map((resource) => RESOURCE_GROUPS[resource] ?? RESOURCE_LABELS[resource] ?? resource))].join(', ')}</span>
+            <span>Resources to protect: {[...new Set(event.riskResources.map((resource) => RESOURCE_GROUPS[resource] ?? RESOURCE_LABELS[resource] ?? resource))].join(', ')}</span>
             <span>{event.failureFeedback}</span>
           </div>
         )}
@@ -82,18 +87,20 @@ export default function EventModal({ event, events = [], onSelectEvent, taskTitl
           <div className="simulation-event-cause">
           <strong>This problem started after a job was missed.</strong>
           <span>Job to remember: {event.riskTaskIds?.map((id) => taskTitles[id] ?? id).join(', ') || 'Outpost check'}</span>
-          <span>Where the crew needs help: {event.affectedSystems.map((system) => SYSTEM_LABELS[system] ?? system).join(', ')}</span>
+          <span>Outpost systems affected: {event.affectedSystems.map((system) => SYSTEM_LABELS[system] ?? system).join(', ')}</span>
           </div>
         )}
         <p className="simulation-event-situation">{event.situation}</p>
+        <button type="button" className="simulation-event-why" aria-expanded={whyOpen} onClick={() => setWhyState({ key: eventKey, open: !whyOpen })}>{whyOpen ? 'Hide why this matters' : 'Why does this matter?'}</button>
+        {whyOpen && <p className="simulation-event-lesson">{event.lesson}</p>}
         {locked ? <p className="simulation-event-prompt">The day is over. We’ll add this problem to your day report.</p>
           : canDecide
-            ? <p className="simulation-event-prompt">How will you help the crew?</p>
+            ? <p className="simulation-event-prompt">How will you help the outpost?</p>
             : <p className="simulation-event-prompt">Getting the choices ready. You can pick one in a moment.</p>}
         {!locked && canDecide && <div className="simulation-decision-list">
           {event.decisions.map((decision) => (
             <button
-              className="simulation-decision"
+              className={`simulation-decision simulation-decision-${decision.id.toLowerCase()}`}
               key={decision.id}
               type="button"
               onClick={() => onSelectDecision(decision, event.occurrenceId ?? `${event.id}-${event.day ?? 0}`)}

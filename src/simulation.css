@@ -218,6 +218,24 @@
   margin: 16px 0 0;
 }
 
+.simulation-event-transmission {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.simulation-event-transmission > div {
+  padding: 10px 12px;
+  border: 1px solid rgba(105, 201, 211, 0.2);
+  border-radius: 8px;
+  background: rgba(17, 43, 56, 0.54);
+}
+.simulation-event-transmission > div:first-child { border-left: 2px solid #91e9d3; }
+.simulation-event-transmission > div:last-child { border-left: 2px solid #64dce4; }
+.simulation-event-transmission span { color: #85d9df; font: 700 0.61rem/1.4 var(--lunar-font-mono, monospace); letter-spacing: 0.09em; }
+.simulation-event-transmission > div:first-child span { color: #9cebd0; }
+.simulation-event-transmission p { margin: 5px 0 0; color: #c4d8df; font-size: 0.82rem; line-height: 1.45; }
+
 .simulation-event-prompt {
   margin: 18px 0 12px;
   color: #e1eff2;
@@ -691,6 +709,16 @@
 .simulation-decision-copy { font-size: 0.78rem; }
 .simulation-decision-copy strong { font-size: 0.88rem; }
 .simulation-decision-copy b { font-size: inherit; }
+.simulation-event-why,
+.simulation-event-voice { margin-top: 7px; padding: 6px 10px; border: 1px solid rgba(113, 213, 219, 0.35); border-radius: 8px; color: #a9eef0; background: rgba(16, 56, 67, 0.52); font: inherit; font-size: 0.76rem; cursor: pointer; }
+.simulation-event-why:hover,
+.simulation-event-voice:hover { border-color: #9ce8e2; background: rgba(25, 82, 88, 0.7); }
+.simulation-event-lesson { margin: 8px 0 0; padding: 10px 12px; border-left: 3px solid #78d9d1; border-radius: 0 8px 8px 0; color: #cde3e8; background: rgba(22, 48, 58, 0.7); font-size: 0.83rem; line-height: 1.45; }
+.simulation-narration-continue { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 12px 14px; border: 1px solid rgba(105, 202, 210, .2); border-radius: 10px; background: rgba(14, 37, 49, .7); }
+.simulation-narration-continue p { margin: 0; color: #b9cdd4; font-size: .8rem; }
+.simulation-narration-continue button { flex: 0 0 auto; padding: 9px 13px; border: 1px solid rgba(112, 222, 222, .48); border-radius: 8px; color: #d8fffb; background: linear-gradient(135deg, rgba(29, 100, 108, .85), rgba(30, 62, 82, .95)); font: inherit; font-size: .8rem; font-weight: 700; cursor: pointer; }
+.simulation-narration-continue button:hover { border-color: #a4fff1; background: linear-gradient(135deg, rgba(40, 127, 130, .95), rgba(36, 78, 99, .98)); }
+@media (max-width: 520px) { .simulation-narration-continue { align-items: stretch; flex-direction: column; } }
 .report-section > p,
 .report-insight-card p,
 .report-learning-card p,
@@ -707,3 +735,24 @@
   .simulation-event-prompt { font-size: 0.82rem; }
   .simulation-decision-copy { font-size: 0.74rem; }
 }
+/* Event choices: readable option cards with clear tradeoffs and consistent rhythm. */
+#root .simulation-event-modal { width: min(760px, 100%); max-height: min(92dvh, 940px); overflow-y: auto; overscroll-behavior: contain; padding: clamp(18px, 3vw, 30px); border: 1px solid rgba(112, 224, 215, .42); border-radius: 24px; background: radial-gradient(ellipse at 8% 0%, rgba(55, 139, 148, .2), transparent 42%), linear-gradient(150deg, #142e3b, #091720 78%); box-shadow: 0 28px 90px rgba(0, 0, 0, .62), 0 0 34px rgba(76, 199, 213, .11); scrollbar-width: none; -ms-overflow-style: none; }
+#root .simulation-event-modal::-webkit-scrollbar { display: none; width: 0; height: 0; }
+#root .simulation-event-modal .simulation-event-heading h2 { font-size: clamp(1.45rem, 3vw, 2rem) !important; letter-spacing: -.02em; }
+#root .simulation-event-modal .simulation-decision-list { display: grid; grid-template-columns: 1fr; align-items: stretch; gap: 11px; margin-top: 12px; }
+#root .simulation-event-modal .simulation-decision { position: relative; grid-template-columns: 40px minmax(0, 1fr) 30px; align-items: center; gap: 13px; min-width: 0; min-height: 0; padding: 14px 16px; overflow: hidden; border: 1px solid rgba(135, 205, 204, .28); border-radius: 17px; background: linear-gradient(110deg, rgba(25, 63, 72, .96), rgba(17, 40, 53, .98) 65%, rgba(18, 39, 52, .98)); box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 7px 18px rgba(0,0,0,.16); transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+#root .simulation-event-modal .simulation-decision:nth-child(1) { border-left: 4px solid #78e4c2; }
+#root .simulation-event-modal .simulation-decision:nth-child(2) { border-left: 4px solid #7dd7f0; }
+#root .simulation-event-modal .simulation-decision:nth-child(3) { border-left: 4px solid #f1cf7c; }
+#root .simulation-event-modal .simulation-decision:hover { transform: translateX(3px); border-color: rgba(145, 244, 222, .82); background: linear-gradient(110deg, rgba(34, 86, 86, .98), rgba(18, 48, 59, .99)); box-shadow: 0 9px 23px rgba(0,0,0,.24), 0 0 16px rgba(83, 207, 196, .12); }
+#root .simulation-event-modal .simulation-decision:focus-visible { outline: 3px solid rgba(142, 245, 228, .82); outline-offset: 2px; }
+#root .simulation-event-modal .simulation-decision-id { width: 38px; height: 38px; color: #103532; background: linear-gradient(145deg, #d6ffec, #7bdfc6); box-shadow: 0 3px 12px rgba(86, 215, 196, .2); font-size: .8rem; font-weight: 800; }
+#root .simulation-event-modal .simulation-decision-copy { min-width: 0; gap: 7px; color: #d4e3e6; font-size: .82rem; line-height: 1.5; }
+#root .simulation-event-modal .simulation-decision-copy strong { min-height: 0; color: #f4ffff; font-size: 1rem; line-height: 1.35; }
+#root .simulation-event-modal .simulation-decision-copy > span { display: block; padding: 0; border: 0; border-radius: 0; background: transparent; overflow-wrap: anywhere; }
+#root .simulation-event-modal .simulation-decision-copy > span b { color: #9febd5; font-size: .72rem; font-weight: 800; letter-spacing: .025em; }
+#root .simulation-event-modal .simulation-decision-copy > .simulation-decision-risk { padding: 7px 10px; border: 1px solid rgba(232, 183, 105, .17); border-radius: 9px; color: #f0dfb7; background: rgba(88, 59, 30, .18); }
+#root .simulation-event-modal .simulation-decision-copy > .simulation-decision-risk b { color: #ffd18e; }
+ #root .simulation-event-modal .simulation-decision-arrow { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid rgba(116, 220, 208, .32); border-radius: 50%; color: #c8fff0; background: rgba(64, 147, 142, .22); font-size: 1.1rem; }
+@media (max-width: 760px) { #root .simulation-event-modal .simulation-decision { grid-template-columns: 34px minmax(0, 1fr) 24px; gap: 10px; padding: 12px; } #root .simulation-event-modal .simulation-decision-copy { font-size: .78rem; } #root .simulation-event-modal .simulation-decision-copy strong { font-size: .94rem; } #root .simulation-event-modal { max-height: 90dvh; } }
+@media (prefers-reduced-motion: reduce) { #root .simulation-event-modal .simulation-decision { transition: none; } #root .simulation-event-modal .simulation-decision:hover { transform: none; } }

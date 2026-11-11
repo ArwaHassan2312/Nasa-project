@@ -7,12 +7,12 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   oxygen: 'Oxygen',
   water: 'Water',
   food: 'Food',
-  habitat: 'Crew health',
+  habitat: 'Commander safety',
   equipment: 'Outpost tools',
-  health: 'Crew health',
-  radProtection: 'Crew health',
+  health: 'Commander safety',
+  radProtection: 'Commander safety',
   comms: 'Power',
-  science: 'Food',
+  science: 'Science',
   emergencyReserve: 'Water',
   potentialWater: 'Water',
 };
@@ -140,13 +140,13 @@ export function buildMissionFailureNarrative({
     ? ` Missing those jobs led to ${linkedMisses} outpost problem${linkedMisses === 1 ? '' : 's'}.`
     : '';
   const responsePattern = lateTasks.length > 0
-    ? `${lateTasks.length} job${lateTasks.length === 1 ? '' : 's'} were finished after their due time${averageResponseMs === null ? '' : `; the crew took about ${Math.round(averageResponseMs / 1000)} seconds to answer urgent calls on average`}.`
+    ? `${lateTasks.length} job${lateTasks.length === 1 ? '' : 's'} were finished after their due time${averageResponseMs === null ? '' : `; you took about ${Math.round(averageResponseMs / 1000)} seconds to answer urgent calls on average`}.`
     : averageResponseMs === null
       ? 'No job was late, and no urgent-call times were saved.'
-      : `The crew answered urgent calls in about ${Math.round(averageResponseMs / 1000)} seconds on average. No job was late.`;
+      : `You answered urgent calls in about ${Math.round(averageResponseMs / 1000)} seconds on average. No job was late.`;
   const resourcePattern = criticalResources.length > 0
-    ? `${criticalResources.length} supply bar${criticalResources.length === 1 ? '' : 's'} ended low: ${criticalResources.map(({ label, amount }) => `${label} ${amount}%`).join(', ')}.`
-    : 'All tracked supplies stayed above the low mark.';
+    ? `${criticalResources.length} resource bar${criticalResources.length === 1 ? '' : 's'} ended low: ${criticalResources.map(({ label, amount }) => `${label} ${amount}%`).join(', ')}.`
+    : 'All tracked resources stayed above the low mark.';
   const choicePattern = resourceCostChoices > 0
     ? `${resourceCostChoices} emergency choice${resourceCostChoices === 1 ? '' : 's'} used more ${resourceLabel.toLowerCase()} than it gave back.`
     : `No emergency choice used more ${resourceLabel.toLowerCase()} than it gave back.`;
@@ -195,7 +195,7 @@ export function buildMissionFailureNarrative({
       tone: lateTasks.length === 0 ? 'good' : 'warn',
     },
     {
-      label: 'Supply choices',
+      label: 'Resource choices',
       value: `${resourceCostChoices} choice${resourceCostChoices === 1 ? '' : 's'} used ${resourceLabel.toLowerCase()}`,
       detail: 'From the choices you made',
       tone: resourceCostChoices === 0 ? 'good' : 'warn',
@@ -217,7 +217,7 @@ export function buildMissionFailureNarrative({
   ));
   const decisionProfile = decisions.length === 0
     ? 'There were no event choices in this record to review.'
-    : `You made ${decisions.length} event choice${decisions.length === 1 ? '' : 's'}. The crew fixed ${resolvedEvents.length} of ${events.length} problems, and ${missedPriorityTasks.length} of ${priorityTasks.length} important jobs still needed doing. This helps show what happened on the mission.`;
+    : `You made ${decisions.length} event choice${decisions.length === 1 ? '' : 's'}. You fixed ${resolvedEvents.length} of ${events.length} problems, and ${missedPriorityTasks.length} of ${priorityTasks.length} important jobs still needed doing. This helps show what happened on the mission.`;
   const strengths = [
     ...(positiveDecision ? [{
       title: `${positiveDecision.eventName ?? 'Event response'} · ${positiveDecision.decisionLabel ?? 'Decision recorded'}`,
@@ -251,7 +251,7 @@ export function buildMissionFailureNarrative({
     }),
     ...(costlyDecision ? [{
       title: `${costlyDecision.eventName ?? 'Event response'} · ${costlyDecision.decisionLabel ?? 'Decision recorded'}`,
-      detail: `${costlyDecision.actualOutcome ?? 'This choice used some supplies.'}${costlyDecision.futureConsequence ? ` It may also mean ${costlyDecision.futureConsequence.toLowerCase()}.` : ''} A cost does not make a choice wrong. Think about the problem and the other choices you had.`,
+      detail: `${costlyDecision.actualOutcome ?? 'This choice used some resources.'}${costlyDecision.futureConsequence ? ` It may also mean ${costlyDecision.futureConsequence.toLowerCase()}.` : ''} A cost does not make a choice wrong. Think about the problem and the other choices you had.`,
       tone: 'warn',
     }] : []),
   ];
@@ -263,18 +263,18 @@ export function buildMissionFailureNarrative({
   const resourceAnalysis = [
     ...criticalResources.map(({ label, amount }) => `${label} ended at ${amount}%, below the ${threshold}% low mark.`),
     ...(decisions.length > 0
-      ? [`Your event choices changed ${choiceResourceNames || 'no supplies'}. Daily use and job rewards are counted separately.`]
-      : ['No event choices changed the supplies, so there is nothing to compare here.']),
+      ? [`Your event choices changed ${choiceResourceNames || 'no resources'}. Daily use and job rewards are counted separately.`]
+      : ['No event choices changed the resources, so there is nothing to compare here.']),
   ];
   const recommendations = [
     ...(missedPriorityTasks.length > 0
       ? [`Try ${missedPriorityTasks[0].title ?? 'the most important job'} before other jobs next time; ${missedPriorityTasks[0].affectedSystem ? `it helps the ${missedPriorityTasks[0].affectedSystem} system.` : 'check what it helps and when it is due.'}`]
       : []),
     ...(criticalResources.length > 0
-      ? [`Watch ${criticalResources[0].label.toLowerCase()} early next time. It ended at ${criticalResources[0].amount}%, so save some supplies and care for its system before it falls below ${threshold}%.`]
+      ? [`Watch ${criticalResources[0].label.toLowerCase()} early next time. It ended at ${criticalResources[0].amount}%, so save some resources and care for its system before it falls below ${threshold}%.`]
       : []),
     ...(unresolvedEvents.length > 0
-      ? [`If a similar problem appears, check how soon it needs help and what supplies it may use. Then choose a way to help before time runs out.`]
+      ? [`If a similar problem appears, check how soon it needs help and what resources it may use. Then choose a way to help before time runs out.`]
       : []),
     ...(decisions.length === 0 && missedPriorityTasks.length === 0 && criticalResources.length === 0 && unresolvedEvents.length === 0
       ? ['Keep using the event and task history to compare trade-offs; this run contains no clear recorded decision pattern that supports a more specific recommendation.']
