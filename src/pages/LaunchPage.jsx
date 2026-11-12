@@ -120,6 +120,8 @@ export default function LaunchPage({
     beginMission(profile);
   }, [beginMission]);
 
+  const handleRoomExit = useCallback(() => setPhase('mode'), []);
+
   // Skipping the cinematic still takes the player through the mission briefing.
   const handleSkip = useCallback(() => {
     handleLaunchMission('moon');
@@ -178,7 +180,7 @@ export default function LaunchPage({
               </div>
             </section>
           )}
-          {phase === 'lobby' && playMode === 'multi' && <MultiplayerLobby onStart={handleCrewReady} />}
+          {phase === 'lobby' && playMode === 'multi' && <MultiplayerLobby onStart={handleCrewReady} onRoomExit={handleRoomExit} />}
         </>
       )}
     </div>

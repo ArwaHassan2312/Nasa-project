@@ -12,7 +12,7 @@ const send = (res, status, data) => {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(data));
 };
-const roomView = (room) => ({ code: room.code, hostId: room.hostId, started: room.started, seed: room.seed ?? null, players: room.players, completedTasks: room.completedTasks, events: room.events });
+const roomView = (room) => ({ code: room.code, hostId: room.hostId, started: room.started, cancelled: Boolean(room.cancelled), seed: room.seed ?? null, players: room.players, completedTasks: room.completedTasks, events: room.events });
 
 const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return send(res, 204, {});
@@ -27,14 +27,34 @@ const server = createServer(async (req, res) => {
       rooms.set(code, room);
       return send(res, 201, { playerId, room: roomView(room) });
     }
-    const roomMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]+)(?:\/(join|ready|start|tasks|events|players\/position))?$/i);
+    const roomMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]+)(?:\/(join|ready|start|tasks|events|leave|cancel|players\/position))?$/i);
     if (!roomMatch) return send(res, 404, { error: 'Not found' });
     const [, rawCode, action] = roomMatch;
     const room = rooms.get(rawCode.toUpperCase());
     if (!room) return send(res, 404, { error: 'Room not found' });
     if (!action && req.method === 'GET') return send(res, 200, { room: roomView(room) });
     const body = await readBody(req);
+    if (action === 'leave' && req.method === 'POST') {
+      const playerIndex = room.players.findIndex((entry) => entry.id === body.playerId);
+      if (playerIndex < 0) return send(res, 404, { error: 'Player is not in this room' });
+      const [leavingPlayer] = room.players.splice(playerIndex, 1);
+      if (room.hostId === leavingPlayer.id) {
+        room.hostId = room.players[0]?.id ?? null;
+        if (room.hostId) {
+          room.events.push({ id: randomUUID(), type: 'host-changed', playerId: room.hostId, playerName: room.players[0].name, at: Date.now() });
+        }
+      }
+      if (room.players.length === 0) rooms.delete(room.code);
+      return send(res, 200, { room: roomView(room) });
+    }
+    if (action === 'cancel' && req.method === 'POST') {
+      if (room.hostId !== body.playerId) return send(res, 403, { error: 'Only the host can cancel this room' });
+      room.cancelled = true;
+      room.events.push({ id: randomUUID(), type: 'room-cancelled', playerId: body.playerId, at: Date.now() });
+      return send(res, 200, { room: roomView(room) });
+    }
     if (action === 'join' && req.method === 'POST') {
+      if (room.cancelled) return send(res, 410, { error: 'This room was cancelled' });
       if (room.started) return send(res, 409, { error: 'Mission already started' });
       const id = String(body.playerId || randomUUID());
       let player = room.players.find((entry) => entry.id === id);
@@ -43,12 +63,14 @@ const server = createServer(async (req, res) => {
       return send(res, 200, { playerId: id, room: roomView(room) });
     }
     if (action === 'ready' && req.method === 'POST') {
+      if (room.cancelled) return send(res, 410, { error: 'This room was cancelled' });
       const player = room.players.find((entry) => entry.id === body.playerId);
       if (!player) return send(res, 403, { error: 'Player is not in this room' });
       player.ready = Boolean(body.ready);
       return send(res, 200, { room: roomView(room) });
     }
     if (action === 'start' && req.method === 'POST') {
+      if (room.cancelled) return send(res, 410, { error: 'This room was cancelled' });
       if (room.hostId !== body.playerId) return send(res, 403, { error: 'Only the host can start' });
       if (!room.players.length || room.players.some((player) => !player.ready)) return send(res, 409, { error: 'Everyone must be ready' });
       room.started = true;

@@ -29,7 +29,7 @@ async function request(path, body, api = DEFAULT_API) {
   return result;
 }
 
-export default function MultiplayerLobby({ onStart }) {
+export default function MultiplayerLobby({ onStart, onRoomExit }) {
   const [name, setName] = useState('');
   const [codeInput, setCodeInput] = useState('');
   const [roomCode, setRoomCode] = useState('');
@@ -39,6 +39,7 @@ export default function MultiplayerLobby({ onStart }) {
   const [busy, setBusy] = useState(false);
   const playerId = useMemo(playerIdForTab, []);
   const missionLaunchedRef = useRef(false);
+  const roomExitHandledRef = useRef(false);
 
   const showError = (err) => setError(err instanceof Error ? err.message : 'Room server is unavailable.');
   const enterRoom = async (code, create) => {
@@ -63,6 +64,15 @@ export default function MultiplayerLobby({ onStart }) {
     if (!roomCode) return;
     try {
       const result = await request(`/api/rooms/${encodeURIComponent(roomCode)}`, undefined, roomApi);
+      if (result.room.cancelled) {
+        if (!roomExitHandledRef.current) {
+          roomExitHandledRef.current = true;
+          sessionStorage.removeItem('lunar-room-code');
+          sessionStorage.removeItem('lunar-room-api');
+          onRoomExit?.();
+        }
+        return;
+      }
       setRoom(result.room);
       if (result.room.started && !missionLaunchedRef.current) {
         missionLaunchedRef.current = true;
@@ -70,7 +80,7 @@ export default function MultiplayerLobby({ onStart }) {
         onStart({ commanderName: ownName, baseName: 'Moonbase Alpha', multiplayer: true, roomCode, playerId, seed: result.room.seed });
       }
     } catch (err) { showError(err); }
-  }, [roomCode, roomApi, playerId, name, onStart]);
+  }, [roomCode, roomApi, playerId, name, onStart, onRoomExit]);
 
   useEffect(() => {
     if (!roomCode) return undefined;
@@ -91,6 +101,32 @@ export default function MultiplayerLobby({ onStart }) {
     catch (err) { showError(err); }
   };
 
+  const leaveRoom = async () => {
+    if (!roomCode || busy) return;
+    setBusy(true); setError('');
+    try {
+      await request(`/api/rooms/${roomCode}/leave`, { playerId }, roomApi);
+      roomExitHandledRef.current = true;
+      sessionStorage.removeItem('lunar-room-code');
+      sessionStorage.removeItem('lunar-room-api');
+      onRoomExit?.();
+    } catch (err) { showError(err); }
+    finally { setBusy(false); }
+  };
+
+  const cancelRoom = async () => {
+    if (!roomCode || busy) return;
+    setBusy(true); setError('');
+    try {
+      await request(`/api/rooms/${roomCode}/cancel`, { playerId }, roomApi);
+      roomExitHandledRef.current = true;
+      sessionStorage.removeItem('lunar-room-code');
+      sessionStorage.removeItem('lunar-room-api');
+      onRoomExit?.();
+    } catch (err) { showError(err); }
+    finally { setBusy(false); }
+  };
+
   return <main className="crew-lobby">
     <div className="crew-lobby__card">
       <span className="crew-lobby__eyebrow">LUNAR OUTPOST · CREW LINK</span>
@@ -103,13 +139,17 @@ export default function MultiplayerLobby({ onStart }) {
         <div className="crew-lobby__join"><input aria-label="Room code" value={codeInput} inputMode="numeric" pattern="[0-9]*" maxLength={6} onChange={(e) => setCodeInput(e.target.value.replace(/\D/g, ''))} placeholder="6-DIGIT ROOM CODE" /><button disabled={busy} onClick={() => enterRoom(codeInput.trim(), false)}>Join</button></div>
       </> : <>
         <div className="crew-lobby__code"><span>ROOM CODE</span><strong>{roomCode}</strong><small>Share this code with your crew</small></div>
+        <div className="crew-lobby__exit-actions">
+          {room.hostId === playerId && <button className="crew-lobby__cancel" disabled={busy} onClick={cancelRoom}>Cancel room for everyone</button>}
+          <button className="crew-lobby__leave" disabled={busy} onClick={leaveRoom}>Leave room</button>
+        </div>
         <div className="crew-lobby__roster"><div className="crew-lobby__roster-head"><span>CREW MANIFEST</span><span>{room.players.length}/8</span></div>
           {room.players.map((p) => <div className="crew-lobby__player" key={p.id}><span className="crew-lobby__avatar">{p.name.slice(0, 1).toUpperCase()}</span><span>{p.name}{p.id === room.hostId && <small> · HOST</small>}</span><b className={p.ready ? 'is-ready' : ''}>{p.ready ? 'READY' : 'NOT READY'}</b></div>)}
         </div>
         <button className="crew-lobby__primary" onClick={changeReady}>{room.players.find((p) => p.id === playerId)?.ready ? 'Cancel ready' : 'I’m ready'}</button>
         {room.hostId === playerId ? <button className="crew-lobby__start" disabled={!room.players.length || room.players.some((p) => !p.ready)} onClick={startMission}>Start mission</button> : <p className="crew-lobby__waiting">Waiting for the host to start the mission…</p>}
       </>}
-      {error && <p className="crew-lobby__error">{error} Configure <code>VITE_MULTIPLAYER_API_URL</code> to use a remote server.</p>}
+      {error && <p className="crew-lobby__error">{error}</p>}
     </div>
   </main>;
 }
