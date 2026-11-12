@@ -27,7 +27,7 @@ const server = createServer(async (req, res) => {
       rooms.set(code, room);
       return send(res, 201, { playerId, room: roomView(room) });
     }
-    const roomMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]+)(?:\/(join|ready|start|tasks))?$/i);
+    const roomMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]+)(?:\/(join|ready|start|tasks|events))?$/i);
     if (!roomMatch) return send(res, 404, { error: 'Not found' });
     const [, rawCode, action] = roomMatch;
     const room = rooms.get(rawCode.toUpperCase());
@@ -67,6 +67,26 @@ const server = createServer(async (req, res) => {
         room.events.push({ id: randomUUID(), type: 'task-completed', ...task });
       }
       return send(res, 200, { room: roomView(room) });
+    }
+    if (action === 'events' && req.method === 'POST') {
+      const player = room.players.find((entry) => entry.id === body.playerId);
+      if (!player || !room.started) return send(res, 403, { error: 'Player is not active in this mission' });
+      const occurrenceId = String(body.occurrenceId || '');
+      if (!occurrenceId) return send(res, 400, { error: 'Event id is required' });
+      const resolution = room.events.find((entry) => (
+        ['event-decision', 'event-abandoned'].includes(entry.type) && entry.occurrenceId === occurrenceId
+      ));
+      if (resolution) return send(res, 200, { event: resolution });
+      const abandoned = body.outcome === 'abandoned';
+      const decisionId = String(body.decisionId || '');
+      if (!abandoned && !decisionId) return send(res, 400, { error: 'Decision id is required' });
+      const event = {
+        id: randomUUID(), type: abandoned ? 'event-abandoned' : 'event-decision', occurrenceId,
+        ...(abandoned ? {} : { decisionId, decisionLabel: clean(body.decisionLabel) }),
+        eventName: clean(body.eventName), playerId: player.id, playerName: player.name, at: Date.now(),
+      };
+      room.events.push(event);
+      return send(res, 200, { event });
     }
     return send(res, 405, { error: 'Method not allowed' });
   } catch (error) {

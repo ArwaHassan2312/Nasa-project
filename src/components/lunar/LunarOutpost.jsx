@@ -276,6 +276,13 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     completeDailyChallenge,
     dismissChallengeFeedback,
   } = simulation;
+  const showCrewNotification = useCallback((id, message) => {
+    setCrewTaskNotification({ id, message });
+    window.clearTimeout(crewNotificationTimerRef.current);
+    crewNotificationTimerRef.current = window.setTimeout(() => {
+      setCrewTaskNotification((current) => current?.id === id ? null : current);
+    }, 2000);
+  }, []);
   const stopLumiSpeech = useCallback(() => {
     lumiSpeechRunRef.current += 1;
     lumiSpeechQueueRef.current = [];
@@ -357,17 +364,35 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
         const { room } = await response.json();
         if (!live) return;
         for (const event of room.events ?? []) {
-          if (event.type !== 'task-completed' || multiplayerEventIdsRef.current.has(event.id)) continue;
-          multiplayerEventIdsRef.current.add(event.id);
-          if (event.playerId === commanderProfile.playerId) continue;
-          const task = simulation.dailyChallenges.find((entry) => entry.id === event.taskId);
-          if (task) {
+          if (multiplayerEventIdsRef.current.has(event.id)) continue;
+          if (event.playerId === commanderProfile.playerId) {
+            multiplayerEventIdsRef.current.add(event.id);
+            continue;
+          }
+          if (event.type === 'task-completed') {
+            const task = simulation.dailyChallenges.find((entry) => entry.id === event.taskId);
+            if (!task) continue;
+            multiplayerEventIdsRef.current.add(event.id);
             simulation.completeDailyChallenge(task.id, task.targetComponentId, undefined, event.playerName);
-            setCrewTaskNotification({ id: event.id, message: `${event.playerName} completed ${task.title}` });
-            window.clearTimeout(crewNotificationTimerRef.current);
-            crewNotificationTimerRef.current = window.setTimeout(() => {
-              setCrewTaskNotification((current) => current?.id === event.id ? null : current);
-            }, 2000);
+            showCrewNotification(event.id, `${event.playerName} completed ${task.title}`);
+          } else if (event.type === 'event-decision' || event.type === 'event-abandoned') {
+            const eventEntry = [simulation.currentEvent, ...simulation.queuedEvents.map((entry) => entry.event)]
+              .find((entry) => getEventOccurrenceKey(entry) === event.occurrenceId);
+            if (!eventEntry) continue;
+            if (event.type === 'event-decision'
+              && getEventOccurrenceKey(simulation.currentEvent) === event.occurrenceId
+              && simulation.eventPhase !== 'awaitingDecision') continue;
+            if (event.type === 'event-abandoned') {
+              multiplayerEventIdsRef.current.add(event.id);
+              simulation.abandonEvent(event.occurrenceId);
+              showCrewNotification(event.id, `${event.playerName} closed ${event.eventName}`);
+              continue;
+            }
+            const decision = eventEntry.decisions.find((entry) => entry.id === event.decisionId);
+            if (!decision) { multiplayerEventIdsRef.current.add(event.id); continue; }
+            multiplayerEventIdsRef.current.add(event.id);
+            simulation.makeDecision(decision, event.occurrenceId);
+            showCrewNotification(event.id, `${event.playerName} chose “${event.decisionLabel}” for ${event.eventName}`);
           }
         }
       } catch { /* The local mission remains playable while the relay reconnects. */ }
@@ -375,7 +400,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     void pollCrew();
     const timer = window.setInterval(pollCrew, 1200);
     return () => { live = false; window.clearInterval(timer); };
-  }, [commanderProfile, simulation.dailyChallenges, simulation.completeDailyChallenge]);
+  }, [commanderProfile, simulation.dailyChallenges, simulation.completeDailyChallenge, simulation.currentEvent, simulation.queuedEvents, simulation.eventPhase, simulation.makeDecision, simulation.abandonEvent, showCrewNotification]);
   useEffect(() => () => window.clearTimeout(crewNotificationTimerRef.current), []);
   useEffect(() => {
     if (!storyMoment && storyRewardDay === null && !archiveOpen && !iceSampleOpen && !radioOpen && !noorCall) return undefined;
@@ -1414,6 +1439,75 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     setMapOpen(false);
     setDailyTasksOpen(false);
     setEventOptionsOpen(true);
+  };
+  const handleEventDecision = async (decision, occurrenceId) => {
+    if (!commanderProfile?.multiplayer || !commanderProfile.roomCode) {
+      simulation.makeDecision(decision, occurrenceId);
+      return;
+    }
+    try {
+      const response = await fetchLocalNetwork(`${MULTIPLAYER_API}/api/rooms/${encodeURIComponent(commanderProfile.roomCode)}/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId: commanderProfile.playerId,
+          occurrenceId,
+          eventName: [simulation.currentEvent, ...simulation.queuedEvents.map((entry) => entry.event)]
+            .find((entry) => getEventOccurrenceKey(entry) === occurrenceId)?.name || 'Mission event',
+          decisionId: decision.id,
+          decisionLabel: decision.label,
+        }),
+      });
+      if (!response.ok) throw new Error('The crew relay did not accept the event decision.');
+      const { event: sharedDecision } = await response.json();
+      const sourceEvent = [simulation.currentEvent, ...simulation.queuedEvents.map((entry) => entry.event)]
+        .find((entry) => getEventOccurrenceKey(entry) === occurrenceId);
+      if (sharedDecision.type === 'event-abandoned') {
+        simulation.abandonEvent(occurrenceId);
+        if (sharedDecision.playerId !== commanderProfile.playerId) {
+          showCrewNotification(sharedDecision.id, `${sharedDecision.playerName} closed ${sharedDecision.eventName}`);
+        }
+        return;
+      }
+      const agreedDecision = sourceEvent?.decisions.find((entry) => entry.id === sharedDecision.decisionId);
+      if (sharedDecision.playerId !== commanderProfile.playerId) {
+        showCrewNotification(sharedDecision.id, `${sharedDecision.playerName} chose “${sharedDecision.decisionLabel}” for ${sharedDecision.eventName}`);
+      }
+      if (agreedDecision) simulation.makeDecision(agreedDecision, occurrenceId);
+    } catch {
+      simulation.makeDecision(decision, occurrenceId);
+    }
+  };
+  const handleEventAbandon = async (occurrenceId) => {
+    if (!commanderProfile?.multiplayer || !commanderProfile.roomCode) {
+      simulation.abandonEvent(occurrenceId);
+      return;
+    }
+    try {
+      const response = await fetchLocalNetwork(`${MULTIPLAYER_API}/api/rooms/${encodeURIComponent(commanderProfile.roomCode)}/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId: commanderProfile.playerId,
+          occurrenceId,
+          outcome: 'abandoned',
+          eventName: [simulation.currentEvent, ...simulation.queuedEvents.map((entry) => entry.event)]
+            .find((entry) => getEventOccurrenceKey(entry) === occurrenceId)?.name || 'Mission event',
+        }),
+      });
+      if (!response.ok) throw new Error('The crew relay did not accept the event resolution.');
+      const { event: resolution } = await response.json();
+      if (resolution.type === 'event-decision') {
+        const sourceEvent = [simulation.currentEvent, ...simulation.queuedEvents.map((entry) => entry.event)]
+          .find((entry) => getEventOccurrenceKey(entry) === occurrenceId);
+        const agreedDecision = sourceEvent?.decisions.find((entry) => entry.id === resolution.decisionId);
+        if (agreedDecision) simulation.makeDecision(agreedDecision, occurrenceId);
+      } else {
+        simulation.abandonEvent(occurrenceId);
+      }
+    } catch {
+      simulation.abandonEvent(occurrenceId);
+    }
   };
   return (
     <div
@@ -2617,14 +2711,14 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
           : Math.max(0, selectedEventEntry.deadlineAtMs - simulation.campaignElapsedMs)}
         locked={simulation.eventResolutionLocked}
         canDecide={selectedEventCanDecide}
-        onSelectDecision={simulation.makeDecision}
+        onSelectDecision={handleEventDecision}
         onClose={() => {
           const selectedEventId = selectedEventEntry
             ? getEventOccurrenceKey(selectedEventEntry.event)
             : eventOptionsEventIdRef.current;
           eventOptionsEventIdRef.current = null;
           setSelectedAlertId(null);
-          if (!simulation.eventResolutionLocked) simulation.abandonEvent(selectedEventId);
+          if (!simulation.eventResolutionLocked) handleEventAbandon(selectedEventId);
           setEventOptionsOpen(false);
         }}
       />
