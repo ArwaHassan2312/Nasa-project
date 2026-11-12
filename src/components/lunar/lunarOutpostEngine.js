@@ -36,6 +36,11 @@ export const PLAYER_CAMERA = {
   pitchLimit: 1.45, // radians of look up/down travel
 };
 
+// Final world-space height for remote crew avatars; adjust this to resize them.
+export const CREW_AVATAR_HEIGHT = 0.05;
+// Correct the model's forward axis so its face follows the first-person view.
+export const CREW_AVATAR_FORWARD_OFFSET = Math.PI;
+
 // Module-level caches: raw asset buffers loaded once to prevent memory leaks and repeated downloads
 const ASSET_CACHE = {
   skyTexture: null,
@@ -51,6 +56,19 @@ const sharedDracoLoader = new DRACOLoader();
 sharedDracoLoader.setDecoderPath('/draco/');
 const sharedGltfLoader = new GLTFLoader().setDRACOLoader(sharedDracoLoader);
 const sharedStlLoader = new STLLoader();
+let crewAstronautAssetPromise = null;
+
+function loadCrewAstronautAsset() {
+  if (!crewAstronautAssetPromise) {
+    crewAstronautAssetPromise = new Promise((resolve, reject) => {
+      sharedGltfLoader.load(encodeURI('/lunar/Walking astronaut.glb'), (gltf) => {
+        registerCachedScene(gltf.scene);
+        resolve(gltf);
+      }, undefined, reject);
+    });
+  }
+  return crewAstronautAssetPromise;
+}
 
 const OUTPOST_COMPONENT_NAMES = {
   '000': 'TUNNEL JUNCTION',
@@ -215,6 +233,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const firstPersonVelocity = new THREE.Vector3();
 
   let outpostRoot = null;
+  const crewMarkers = new Map();
+  let crewAstronautGltf = null;
+  loadCrewAstronautAsset().then((gltf) => {
+    crewAstronautGltf = gltf;
+    for (const marker of crewMarkers.values()) attachCrewAstronaut(marker);
+  }).catch((error) => console.error('Could not load multiplayer astronaut model', error));
   // Rover fleet. Each entry owns its own chassis transform, wheel bones and
   // drive state so two rovers can park and roll independently.
   const rovers = [];
@@ -3707,6 +3731,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         position: camera.position.clone(),
         quaternion: camera.quaternion.clone(),
         yaw: firstPersonYaw,
+        moving: firstPersonVelocity.length() > 0.2,
         pitch: firstPersonPitch,
         // Two different skies: the interior colour to hand back on disconnect,
         // and the real lunar sky to show while the downlink is live.
@@ -5304,6 +5329,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     animId = requestAnimationFrame(animate);
 
     const dt = Math.min(clock.getDelta(), 0.05);
+    for (const marker of crewMarkers.values()) {
+      marker.group.position.lerp(marker.target, 1 - Math.exp(-dt * 14));
+      marker.mixer?.update(dt);
+    }
     updateRoverDrive(dt);
 
     // The screens are only on screen while the player stands in the command
@@ -5453,6 +5482,157 @@ export function createLunarEngine(canvas, callbacks = {}) {
         };
       }
       onSceneReady();
+    }
+  }
+
+  function getCrewPosition() {
+    if (cameraMode === 'interior') {
+      return {
+        x: camera.position.x,
+        y: camera.position.y - playerCameraHeight,
+        z: camera.position.z,
+        yaw: firstPersonYaw,
+        moving: firstPersonVelocity.length() > 0.2,
+        location: 'interior',
+        componentId: activeComponentTarget?.id ?? null,
+      };
+    }
+    const position = cameraMode === 'first-person' ? camera.position : controls.target;
+    const groundY = cameraMode === 'first-person'
+      ? position.y - playerCameraHeight
+      : sampleGroundHeight(position.x, position.z) ?? position.y;
+    return {
+      x: position.x,
+      y: groundY,
+      z: position.z,
+      yaw: cameraMode === 'first-person' ? firstPersonYaw : camera.rotation.y,
+      moving: ['first-person', 'interior'].includes(cameraMode) && firstPersonVelocity.length() > 0.2,
+      location: 'exterior',
+      componentId: null,
+    };
+  }
+
+  function createCrewMarker(playerId, name) {
+    const group = new THREE.Group();
+    group.name = `Crew marker ${playerId}`;
+
+    const halo = new THREE.Mesh(
+      new THREE.TorusGeometry(CREW_AVATAR_HEIGHT * 0.34, CREW_AVATAR_HEIGHT * 0.026, 8, 24),
+      new THREE.MeshBasicMaterial({ color: 0x66e5ff, transparent: true, opacity: 0.78, depthTest: false, depthWrite: false }),
+    );
+    halo.rotation.x = Math.PI / 2;
+    halo.position.y = 0.12;
+    halo.renderOrder = 990;
+    group.add(halo);
+
+    const labelCanvas = document.createElement('canvas');
+    labelCanvas.width = 512;
+    labelCanvas.height = 128;
+    const context = labelCanvas.getContext('2d');
+    context.fillStyle = 'rgba(5, 20, 32, 0.92)';
+    context.beginPath();
+    context.roundRect(8, 8, 496, 112, 30);
+    context.fill();
+    context.strokeStyle = '#62def7';
+    context.lineWidth = 5;
+    context.stroke();
+    context.fillStyle = '#e9fbff';
+    context.font = '700 48px system-ui, sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    const label = name.length > 20 ? `${name.slice(0, 18)}…` : name;
+    context.fillText(label, 256, 66, 455);
+    const labelTexture = new THREE.CanvasTexture(labelCanvas);
+    labelTexture.colorSpace = THREE.SRGBColorSpace;
+    const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: labelTexture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    }));
+    labelSprite.scale.set(4.4, 1.1, 1);
+    labelSprite.position.y = CREW_AVATAR_HEIGHT + 0.65;
+    labelSprite.renderOrder = 992;
+    group.add(labelSprite);
+
+    scene.add(group);
+    return { group, labelTexture, target: new THREE.Vector3(), initialized: false, mixer: null, idleAction: null, walkAction: null, walking: false };
+  }
+
+  function attachCrewAstronaut(marker) {
+    if (!crewAstronautGltf || marker.astronaut) return;
+    const astronaut = cloneSkinnedRig(crewAstronautGltf.scene);
+    const bounds = new THREE.Box3().setFromObject(astronaut);
+    const height = Math.max(0.001, bounds.max.y - bounds.min.y);
+    astronaut.scale.setScalar(CREW_AVATAR_HEIGHT / height);
+    astronaut.position.y = -bounds.min.y * astronaut.scale.y;
+    marker.group.add(astronaut);
+    marker.astronaut = astronaut;
+    marker.mixer = new THREE.AnimationMixer(astronaut);
+    const idleClip = crewAstronautGltf.animations.find((clip) => /idle/i.test(clip.name)) ?? crewAstronautGltf.animations[0];
+    const walkClip = crewAstronautGltf.animations.find((clip) => /moon_walk|walk/i.test(clip.name));
+    marker.idleAction = idleClip ? marker.mixer.clipAction(idleClip) : null;
+    marker.walkAction = walkClip ? marker.mixer.clipAction(walkClip) : null;
+    marker.idleAction?.play();
+    marker.walkAction?.setLoop(THREE.LoopRepeat, Infinity);
+    if (marker.walking && marker.walkAction) {
+      marker.walkAction.play();
+      marker.idleAction?.crossFadeTo(marker.walkAction, 0.2, false);
+    }
+  }
+
+  function setCrewMarkers(players = []) {
+    const activeIds = new Set(players.map((player) => player.id));
+    for (const [playerId, marker] of crewMarkers) {
+      if (activeIds.has(playerId)) continue;
+      scene.remove(marker.group);
+      marker.group.traverse((object) => {
+        if (object.geometry && !cachedGeometries.has(object.geometry)) object.geometry.dispose();
+        if (object.material) {
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          materials.forEach((material) => { if (!cachedMaterials.has(material)) material.dispose(); });
+        }
+      });
+      marker.labelTexture.dispose();
+      crewMarkers.delete(playerId);
+    }
+
+    for (const player of players) {
+      if (!player?.id || !player.position || ![player.position.x, player.position.y, player.position.z].every(Number.isFinite)) continue;
+      let marker = crewMarkers.get(player.id);
+      if (!marker || marker.name !== player.name) {
+        if (marker) {
+          scene.remove(marker.group);
+          marker.group.traverse((object) => {
+            if (object.geometry && !cachedGeometries.has(object.geometry)) object.geometry.dispose();
+            if (object.material) {
+              const materials = Array.isArray(object.material) ? object.material : [object.material];
+              materials.forEach((material) => { if (!cachedMaterials.has(material)) material.dispose(); });
+            }
+          });
+          marker.labelTexture.dispose();
+        }
+        marker = { ...createCrewMarker(player.id, player.name), name: player.name };
+        crewMarkers.set(player.id, marker);
+        attachCrewAstronaut(marker);
+      }
+      marker.target.set(player.position.x, player.position.y, player.position.z);
+      marker.group.rotation.y = player.position.yaw + CREW_AVATAR_FORWARD_OFFSET;
+      const walking = Boolean(player.position.moving);
+      if (walking !== marker.walking) {
+        const from = marker.walking ? marker.walkAction : marker.idleAction;
+        const to = walking ? marker.walkAction : marker.idleAction;
+        if (to) {
+          to.reset().play();
+          from?.crossFadeTo(to, 0.2, false);
+        }
+        marker.walking = walking;
+      }
+      if (!marker.initialized) {
+        marker.group.position.copy(marker.target);
+        marker.initialized = true;
+      }
     }
   }
 
@@ -5659,6 +5839,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
   // Public API returned to React
   return {
     getMapSnapshot,
+    getCrewPosition,
+    setCrewMarkers,
     capturePhoto: () => {
       renderer.render(scene, camera);
       return renderer.domElement.toDataURL('image/png');
@@ -5766,6 +5948,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
       for (let i = 0; i < labelMaterials.length; i++) labelMaterials[i].dispose();
       labelTextures.length = 0;
       labelMaterials.length = 0;
+
+      for (const marker of crewMarkers.values()) {
+        marker.labelTexture.dispose();
+        const labelSprite = marker.group.children.find((child) => child.isSprite);
+        labelSprite?.material?.dispose();
+      }
+      crewMarkers.clear();
 
       // Dispose active procedural module
       if (activeModuleInterior) {

@@ -221,6 +221,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const [taskJourneys, setTaskJourneys] = useState({});
   const [taskOutcomeStart, setTaskOutcomeStart] = useState(null);
   const [crewTaskNotification, setCrewTaskNotification] = useState(null);
+  const [crewPositions, setCrewPositions] = useState([]);
   const [taskRecapSpeaking, setTaskRecapSpeaking] = useState(false);
   const [storyMoment, setStoryMoment] = useState(null);
   const [dayOpeningMessage, setDayOpeningMessage] = useState('');
@@ -363,6 +364,25 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
         if (!response.ok) return;
         const { room } = await response.json();
         if (!live) return;
+        const currentTime = Date.now();
+        const nextCrewPositions = room.players.filter((player) => (
+          player.id !== commanderProfile.playerId
+          && player.position
+          && currentTime - player.position.updatedAt < 2500
+        ));
+        setCrewPositions((current) => {
+          const unchanged = current.length === nextCrewPositions.length && current.every((player, index) => (
+            player.id === nextCrewPositions[index]?.id
+            && Math.abs(player.position.x - nextCrewPositions[index].position.x) < 0.05
+            && Math.abs(player.position.y - nextCrewPositions[index].position.y) < 0.05
+            && Math.abs(player.position.z - nextCrewPositions[index].position.z) < 0.05
+            && Math.abs(player.position.yaw - nextCrewPositions[index].position.yaw) < 0.05
+            && player.position.moving === nextCrewPositions[index].position.moving
+            && player.position.location === nextCrewPositions[index].position.location
+            && player.position.componentId === nextCrewPositions[index].position.componentId
+          ));
+          return unchanged ? current : nextCrewPositions;
+        });
         for (const event of room.events ?? []) {
           if (multiplayerEventIdsRef.current.has(event.id)) continue;
           if (event.playerId === commanderProfile.playerId) {
@@ -398,10 +418,36 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       } catch { /* The local mission remains playable while the relay reconnects. */ }
     };
     void pollCrew();
-    const timer = window.setInterval(pollCrew, 1200);
+    const timer = window.setInterval(pollCrew, 500);
     return () => { live = false; window.clearInterval(timer); };
   }, [commanderProfile, simulation.dailyChallenges, simulation.completeDailyChallenge, simulation.currentEvent, simulation.queuedEvents, simulation.eventPhase, simulation.makeDecision, simulation.abandonEvent, showCrewNotification]);
   useEffect(() => () => window.clearTimeout(crewNotificationTimerRef.current), []);
+  useEffect(() => {
+    if (!commanderProfile?.multiplayer || !commanderProfile.roomCode || isLoading) return undefined;
+    let live = true;
+    let sending = false;
+    const publishPosition = async () => {
+      if (sending || !live) return;
+      const position = engineRef.current?.getCrewPosition?.();
+      if (!position) return;
+      sending = true;
+      try {
+        await fetchLocalNetwork(`${MULTIPLAYER_API}/api/rooms/${encodeURIComponent(commanderProfile.roomCode)}/players/position`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playerId: commanderProfile.playerId, position }),
+        });
+      } catch { /* Position markers resume when the room relay is reachable. */ }
+      finally { sending = false; }
+    };
+    void publishPosition();
+    const timer = window.setInterval(publishPosition, 400);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [commanderProfile, isLoading]);
+  useEffect(() => {
+    if (isLoading) return;
+    engineRef.current?.setCrewMarkers?.(crewPositions);
+  }, [crewPositions, isLoading]);
   useEffect(() => {
     if (!storyMoment && storyRewardDay === null && !archiveOpen && !iceSampleOpen && !radioOpen && !noorCall) return undefined;
     simulation.setStoryPaused(true);

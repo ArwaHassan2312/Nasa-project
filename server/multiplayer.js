@@ -27,7 +27,7 @@ const server = createServer(async (req, res) => {
       rooms.set(code, room);
       return send(res, 201, { playerId, room: roomView(room) });
     }
-    const roomMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]+)(?:\/(join|ready|start|tasks|events))?$/i);
+    const roomMatch = url.pathname.match(/^\/api\/rooms\/([A-Z0-9]+)(?:\/(join|ready|start|tasks|events|players\/position))?$/i);
     if (!roomMatch) return send(res, 404, { error: 'Not found' });
     const [, rawCode, action] = roomMatch;
     const room = rooms.get(rawCode.toUpperCase());
@@ -87,6 +87,23 @@ const server = createServer(async (req, res) => {
       };
       room.events.push(event);
       return send(res, 200, { event });
+    }
+    if (action === 'players/position' && req.method === 'POST') {
+      const player = room.players.find((entry) => entry.id === body.playerId);
+      if (!player || !room.started) return send(res, 403, { error: 'Player is not active in this mission' });
+      const { x, y, z, yaw, location, componentId, moving } = body.position ?? {};
+      if (![x, y, z, yaw].every(Number.isFinite)) return send(res, 400, { error: 'A valid player position is required' });
+      player.position = {
+        x: Math.max(-10000, Math.min(10000, x)),
+        y: Math.max(-10000, Math.min(10000, y)),
+        z: Math.max(-10000, Math.min(10000, z)),
+        yaw,
+        moving: Boolean(moving),
+        location: location === 'interior' ? 'interior' : 'exterior',
+        componentId: typeof componentId === 'string' ? componentId.slice(0, 12) : null,
+        updatedAt: Date.now(),
+      };
+      return send(res, 200, { ok: true });
     }
     return send(res, 405, { error: 'Method not allowed' });
   } catch (error) {
