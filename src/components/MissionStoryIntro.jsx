@@ -24,16 +24,10 @@ const OPENING = [
     text: () => 'I’m Dr. Noor. I’ll help you make sense of mission events, receive your science data, and read your daily reports. If the outpost needs help, I’ll be here with a plan.',
   },
   {
-    character: 'lumi',
-    eyebrow: 'YOUR OUTPOST BUDDY · LUMI',
-    title: 'Meet Lumi',
-    text: () => 'Hi! I’m Lumi. I’ll help you find the jobs that need doing and share fun facts about the Moon along the way.',
-  },
-  {
-    character: 'lumi',
-    eyebrow: 'READY TO BEGIN?',
-    title: 'Let’s discover!',
-    text: () => 'The outpost is waiting. Let’s explore, take care of our home on the Moon, and see what we discover together!',
+    character: 'noor',
+    eyebrow: 'MISSION CONTROL · DR. NOOR',
+    title: 'Deploy to the outpost',
+    text: () => 'Your base is ready on the lunar surface. The camera will take a quick look around before your mission begins.',
   },
 ];
 
@@ -81,7 +75,7 @@ export default function MissionStoryIntro({ onBegin }) {
           )}
           <div className="mission-story-actions">
             <button type="button" className="mission-story-voice" onClick={() => setVoiceEnabled((enabled) => !enabled)}>{voiceEnabled ? 'Voice on' : 'Hear the message'}</button>
-            <button type="button" className="mission-story-next" onClick={goForward}>{step === OPENING.length - 1 ? 'Begin Day 1' : 'Continue'} <span aria-hidden="true">→</span></button>
+            <button type="button" className="mission-story-next" onClick={goForward}>{step === OPENING.length - 1 ? 'Deploy to outpost' : 'Continue'} <span aria-hidden="true">→</span></button>
           </div>
           <div className="mission-story-progress" aria-label={`Opening ${step + 1} of ${OPENING.length}`}>
             {OPENING.map((entry, index) => <i key={entry.eyebrow} className={index <= step ? 'is-lit' : ''} />)}

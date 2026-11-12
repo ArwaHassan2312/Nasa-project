@@ -1887,7 +1887,11 @@ export function useGameSimulation({
         return occurrenceId ? failEventOccurrence(currentState, occurrenceId, true) : currentState;
       }
 
-      const resolvedLinkedTasks = getResolvedLinkedTasks(currentState.dailyChallenges, event);
+      // A task the commander is actively working on stays open through its
+      // linked event. Resolving the event handles the incident; the commander
+      // still needs to finish that task explicitly.
+      const resolvedLinkedTasks = getResolvedLinkedTasks(currentState.dailyChallenges, event)
+        .filter((task) => task.id !== currentState.activeChallengeId);
       const resolutionEffects: Partial<Record<ResourceKey, number>> = {
         ...getSuccessfulEventResourceEffects(event, decision),
       };

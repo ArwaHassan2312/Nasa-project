@@ -138,11 +138,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
     onTaskTimerClick = () => { },
     onConsoleEdit = () => { },
     onSceneReady = () => { },
+    onInitialCameraSettled = () => { },
   } = callbacks;
 
   let isDestroyed = false;
   let animId = null;
   let sceneReadyReported = false;
+  let initialCameraSettledReported = false;
   let skyAssetReady = Boolean(ASSET_CACHE.skyTexture);
   let earthAssetsReady = Boolean(ASSET_CACHE.earthTextures);
 
@@ -5371,6 +5373,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
           controls.target.copy(transition.focus);
           controls.update();
         }
+        if (!initialCameraSettledReported) {
+          initialCameraSettledReported = true;
+          onInitialCameraSettled();
+        }
       }
     } else if (roverLinkTransition) {
       // Push in on the monitor, then carry through it onto the rover.
@@ -5453,6 +5459,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
         };
       }
       onSceneReady();
+      if (!dayStartCameraTransition && !initialCameraSettledReported) {
+        initialCameraSettledReported = true;
+        onInitialCameraSettled();
+      }
     }
   }
 
@@ -5514,16 +5524,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
     taskGuideBeacon.name = 'Daily Task Guide Beacon';
 
     const beam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.72, 1.02, 2.35, 40, 1, true),
+      new THREE.CylinderGeometry(0.24, 0.24, 1.55, 24, 1, false),
       new THREE.MeshBasicMaterial({
         color: 0xff465f,
         transparent: true,
-        opacity: 0.27,
+        opacity: 0.78,
         side: THREE.DoubleSide,
         depthWrite: false,
       }),
     );
-    beam.position.y = 1.175;
+    beam.position.y = 0.775;
     beam.renderOrder = 5;
 
     const floorGlow = new THREE.Mesh(
@@ -5650,7 +5660,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       taskId: beaconAnchor.target.taskId,
       label: beaconAnchor.target.label,
       distance,
-      nearby: distance < 3.4,
+      nearby: distance < 1.35,
     }];
   }
 

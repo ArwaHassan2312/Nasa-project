@@ -75,17 +75,18 @@
 // }
 
 
-import { Suspense, lazy, useCallback, useState } from 'react';
+import { Suspense, lazy, useCallback, useRef, useState } from 'react';
 import SpaceBackground from '../components/space/SpaceBackground';
 import IntroBackdrop from '../components/space/IntroBackdrop';
 import IntroOverlay from '../components/space/Introoverlay';
 import MissionSelect from '../components/space/Missionselect';
 import MissionStoryIntro from '../components/MissionStoryIntro';
+import OutpostTutorial from '../components/OutpostTutorial';
 import '../components/space/Ui.css';
 
 const LunarOutpost = lazy(() => import('../components/lunar/LunarOutpost'));
 
-// phases: 'intro' -> 'select' -> 'briefing' -> 'lunar'
+// phases: 'intro' -> 'select' -> 'briefing' -> 'preparing' -> 'tutorial' -> 'lunar'
 export default function LaunchPage({
   simulation,
   onMissionStart,
@@ -95,6 +96,8 @@ export default function LaunchPage({
   const [selected, setSelected] = useState(null);
   const [introFinished, setIntroFinished] = useState(false);
   const [commanderProfile, setCommanderProfile] = useState({ commanderName: 'Commander', baseName: 'Moonbase Alpha' });
+  const tutorialDecisionRef = useRef(null);
+  tutorialDecisionRef.current = { phase };
 
   const handleStart = useCallback(() => setPhase('select'), []);
   const finishIntro = useCallback(() => setIntroFinished(true), []);
@@ -107,9 +110,19 @@ export default function LaunchPage({
 
   const beginMission = useCallback((profile) => {
     setCommanderProfile(profile);
-    onMissionStart?.(profile);
+    setPhase('preparing');
+  }, []);
+
+  const handleInitialCameraSettled = useCallback(() => {
+    const current = tutorialDecisionRef.current;
+    if (current.phase !== 'preparing') return;
+    setPhase('tutorial');
+  }, []);
+
+  const finishTutorial = useCallback(() => {
+    onMissionStart?.(commanderProfile);
     setPhase('lunar');
-  }, [onMissionStart]);
+  }, [commanderProfile, onMissionStart]);
 
   // Skipping the cinematic still takes the player through the mission briefing.
   const handleSkip = useCallback(() => {
@@ -123,13 +136,17 @@ export default function LaunchPage({
 
   return (
     <div className="launch-root">
-      {phase === 'lunar' ? (
+      {['preparing', 'tutorial', 'lunar'].includes(phase) ? (
         <Suspense fallback={null}>
           <LunarOutpost
             onExitToOrbit={handleExitToOrbit}
             simulation={simulation}
             commanderProfile={commanderProfile}
+            tutorialMode={phase !== 'lunar'}
+            tutorialActive={phase === 'tutorial'}
+            onInitialCameraSettled={handleInitialCameraSettled}
           />
+          {phase === 'tutorial' && <OutpostTutorial onComplete={finishTutorial} />}
         </Suspense>
       ) : (
         <>

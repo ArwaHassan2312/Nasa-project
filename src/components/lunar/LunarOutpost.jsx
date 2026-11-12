@@ -27,11 +27,6 @@ function getCommanderSafety(resources) {
   return Math.round((resources.health + resources.habitat + resources.radProtection) / 3);
 }
 
-const TASK_EVENT_TESTS = [
-  ['workshop-equipment-maintenance', 'Workshop maintenance', 'Habitat fire'],
-  ['solar-array-inspection', 'Solar array inspection', 'Power failure'],
-  ['habitat-waterline-inspection', 'Waterline inspection', 'Water leak'],
-];
 const RESOURCE_LABELS = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
   habitat: 'Commander safety', equipment: 'Commander safety', health: 'Commander safety',
@@ -168,7 +163,7 @@ function snapshotsMatch(current, next) {
   return true;
 }
 
-export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfile }) {
+export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfile, tutorialMode = false, tutorialActive = false, onInitialCameraSettled }) {
   const containerRef = useRef(null);
   const engineRef = useRef(null);
   const presentedEventRef = useRef(null);
@@ -220,7 +215,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const [taskOutcomeStart, setTaskOutcomeStart] = useState(null);
   const [taskRecapSpeaking, setTaskRecapSpeaking] = useState(false);
   const [storyMoment, setStoryMoment] = useState(null);
-  const [dayOpeningMessage, setDayOpeningMessage] = useState('');
+  const [, setDayOpeningMessage] = useState('');
   const [dayOpeningMessages, setDayOpeningMessages] = useState([]);
   const [dayOpeningIndex, setDayOpeningIndex] = useState(0);
   const [storyRewardDay, setStoryRewardDay] = useState(null);
@@ -231,21 +226,19 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const [radioOpen, setRadioOpen] = useState(false);
   const [photos, setPhotos] = useState([]);
   const [pendingPhoto, setPendingPhoto] = useState(null);
-  const [lumiGuideCollapsed, setLumiGuideCollapsed] = useState(false);
-  const [lumiVoiceSupported, setLumiVoiceSupported] = useState(true);
-  const [lumiVoiceEnabled, setLumiVoiceEnabled] = useState(true);
+  const [, setLumiVoiceSupported] = useState(true);
+  const lumiVoiceEnabled = false;
   const [lumiSpeechInProgress, setLumiSpeechInProgress] = useState(false);
   const lumiSpeechTimerRef = useRef(null);
-  const lumiVoiceEnabledRef = useRef(true);
+  const lumiVoiceEnabledRef = useRef(false);
   const lumiSpeechActiveRef = useRef(false);
   const lumiSpeechQueueRef = useRef([]);
   const lumiSpeechRunRef = useRef(0);
   const pendingNoorCallRef = useRef(null);
   const noorCallActiveRef = useRef(false);
-  const previousLumiMessageRef = useRef('');
   const [noorCall, setNoorCall] = useState(null);
   const [routeEventId, setRouteEventId] = useState(null);
-  const [lumiMilestoneMessage, setLumiMilestoneMessage] = useState('');
+  const [, setLumiMilestoneMessage] = useState('');
   const handledNoorCallsRef = useRef(new Set());
   const shownStoryDayRef = useRef(null);
   const dayOpeningStartedRef = useRef(null);
@@ -258,6 +251,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const queuedScienceIdsRef = useRef(new Set());
   const observedTaskDayRef = useRef(simulation.day);
   const [taskMarkerTargets, setTaskMarkerTargets] = useState([]);
+  const autoStartedTaskComponentRef = useRef(null);
   const [mapSnapshot, setMapSnapshot] = useState(null);
   const [miniSnapshot, setMiniSnapshot] = useState(null);
   const {
@@ -466,13 +460,13 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     setLumiMilestoneMessage('');
   }, [simulation.day, stopLumiSpeech]);
   const eventGameplayActive = eventPhase === 'idle' || eventPhase === 'awaitingDecision';
-  const stopDayOpeningQueue = () => {
+  const stopDayOpeningQueue = useCallback(() => {
     window.clearTimeout(lumiSpeechTimerRef.current);
     setDayOpeningMessages([]);
     setDayOpeningIndex(0);
     setDayOpeningMessage('');
     dayOpeningCompleteRef.current = simulation.day;
-  };
+  }, [simulation.day]);
   const openTaskIdea = (challenge) => {
     if (taskJourneys[challenge.id]?.solution) {
       showTaskLocation(challenge.id);
@@ -486,11 +480,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     setTaskExperienceId(challenge.id);
     setTaskExperienceStage('idea');
   };
-  const openTaskAtLocation = (challengeId) => {
+  const openTaskAtLocation = useCallback((challengeId) => {
     const journey = taskJourneys[challengeId];
     setTaskExperienceId(challengeId);
     setTaskExperienceStage(journey?.solution ? 'perform' : 'discover');
-  };
+  }, [taskJourneys]);
   const chooseTaskSolution = (challengeId, solution) => setTaskJourneys((items) => ({ ...items, [challengeId]: { ...items[challengeId], solution } }));
   const openMissionArchive = (tab) => {
     setArchiveTab(tab);
@@ -547,9 +541,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
           && (challenge.status === 'available' || challenge.status === 'inProgress' || challenge.status === 'overdue'),
       )
     : [];
-  const nearbyTaskMarker = taskMarkerTargets
-    .filter((marker) => marker.nearby)
-    .sort((a, b) => a.distance - b.distance)[0];
+  const closestTaskMarker = [...taskMarkerTargets].sort((a, b) => a.distance - b.distance)[0] ?? null;
+  const nearbyTaskMarker = closestTaskMarker?.nearby ? closestTaskMarker : null;
   const nearbyTask = nearbyTaskMarker
     ? insideComponentTasks.find((task) => task.id === nearbyTaskMarker.taskId)
     : null;
@@ -559,9 +552,67 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     : nearbyTaskJourney?.solution
       ? 'Continue'
       : getTaskButtonName(nearbyTask);
+  const activateNearbyTask = useCallback((challenge) => {
+    if (challenge.recoveryStatus === 'available') {
+      simulation.startCriticalTaskRecovery(challenge.id);
+      setTaskJourneys((items) => { const next = { ...items }; delete next[challenge.id]; return next; });
+      const retryMessage = `Let’s try this critical task again at ${challenge.targetComponentName}. We have 45 seconds to finish it!`;
+      setLumiMilestoneMessage(retryMessage);
+      speakLumi(retryMessage);
+      setTaskExperienceId(challenge.id);
+      setTaskExperienceStage('solutions');
+      return;
+    }
+    if (challenge.status === 'available') {
+      stopDayOpeningQueue();
+      simulation.startDailyChallenge(challenge.id);
+      const startMessage = getTaskStartMessage(challenge);
+      setLumiMilestoneMessage(startMessage);
+      speakLumi(startMessage);
+      setTaskExperienceId(challenge.id);
+      setTaskExperienceStage('idea');
+      return;
+    }
+    openTaskAtLocation(challenge.id);
+  }, [openTaskAtLocation, simulation.startCriticalTaskRecovery, simulation.startDailyChallenge, speakLumi, stopDayOpeningQueue]);
   const taskMarkerSignature = insideComponentTasks
     .map((task) => `${task.id}:${task.status}:${task.recoveryStatus ?? ''}`)
     .join('|');
+  useEffect(() => {
+    if (!insidePanel.visible || !insidePanel.componentId) {
+      autoStartedTaskComponentRef.current = null;
+      return;
+    }
+    if (autoStartedTaskComponentRef.current !== insidePanel.componentId) {
+      autoStartedTaskComponentRef.current = null;
+    }
+    if (!closestTaskMarker || taskExperienceId) return;
+    if (!closestTaskMarker.nearby) {
+      autoStartedTaskComponentRef.current = null;
+      return;
+    }
+    if (
+      autoStartedTaskComponentRef.current === insidePanel.componentId
+      || !nearbyTask
+      || simulation.gameStatus !== 'playing'
+      || simulation.dayPhase !== 'active'
+      || simulation.warningTaskId
+      || eventPhase !== 'idle'
+    ) return;
+    autoStartedTaskComponentRef.current = insidePanel.componentId;
+    activateNearbyTask(nearbyTask);
+  }, [
+    insidePanel.visible,
+    insidePanel.componentId,
+    closestTaskMarker,
+    taskExperienceId,
+    nearbyTask,
+    simulation.gameStatus,
+    simulation.dayPhase,
+    simulation.warningTaskId,
+    eventPhase,
+    activateNearbyTask,
+  ]);
   const promptedChallenge = simulation.dailyChallenges.find(
     (challenge) => (challenge.status === 'available' || challenge.status === 'inProgress' || challenge.status === 'overdue')
       && challenge.targetComponentId === prompt.data?.id,
@@ -619,6 +670,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
         },
         onConsoleEdit: (info) => setConsoleInfo(info),
         onSceneReady: () => setSceneReady(true),
+        onInitialCameraSettled: () => onInitialCameraSettled?.(),
       });
     } catch (error) {
       console.error('[LunarOutpost] Engine failed to start, retry on next mount.', error);
@@ -638,7 +690,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       setSceneReady(false);
       if (canvas.parentNode) canvas.remove();
     };
-  }, [setSceneReady]);
+  }, [setSceneReady, onInitialCameraSettled]);
 
   useEffect(() => {
     if (alertPanelDayRef.current === simulation.day) return;
@@ -1215,94 +1267,18 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const chapterProblemsFixed = reportChapter
     ? simulation.eventOutcomeHistory.filter((entry) => entry.day >= chapterStartDay && entry.day <= chapterEndDay && entry.status === 'resolved').length
     : 0;
-  const criticalGuideTask = simulation.dailyChallenges.find((task) => task.priority === 'critical' && task.status !== 'completed');
-  const currentGuideTask = criticalGuideTask ?? simulation.dailyChallenges.find((task) => task.status !== 'completed');
   const routeEventEntry = routeEventId
     ? activeEventEntries.find(({ event }) => getEventOccurrenceKey(event) === routeEventId)
     : null;
   const routeEventLocation = routeEventEntry ? getEventLocation(routeEventEntry.event) : null;
-  const locationLabel = insidePanel.label.replace(/^INSIDE\s+/i, '').split(/\s*[·|]\s*/)[0].trim();
-  let lumiGuide = {
-    view: cameraMode === 'free' ? 'Outpost overview' : cameraMode === 'interior' ? `Inside ${locationLabel || 'the base'}` : 'Walking outside',
-    message: lumiMilestoneMessage || dayOpeningMessage || (criticalGuideTask
-      ? 'A critical task needs attention. Let’s check the task list and take care of it first.'
-      : currentGuideTask
-        ? 'Ready to explore? Open the task list when you want to get started.'
-        : `All today’s tasks are complete. Your notebook has ${simulation.scienceNotebookIds.length} science discoveries. Take a look around when you’re ready.`),
-    action: currentGuideTask ? (criticalGuideTask ? 'Open critical job' : 'Open today’s jobs') : 'Open Science Notebook',
-    onAction: currentGuideTask
-      ? () => { setFocusedTaskId(currentGuideTask.id); setDailyTasksOpen(true); }
-      : () => openMissionArchive('notebook'),
-  };
-  if (routeEventEntry) {
-    lumiGuide = {
-      view: `Route to ${routeEventLocation?.name ?? 'the issue'}`,
-      message: `Let’s go together to ${routeEventLocation?.name ?? 'the place marked on the map'}. That’s where ${routeEventEntry.event.name} needs attention.`,
-      action: mapOpen ? 'Close the map' : `Show ${routeEventLocation?.name ?? 'event'} on the map`,
-      onAction: () => {
-        if (mapOpen) { setMapOpen(false); return; }
-        setSelectedMapTaskId(null);
-        setSelectedMapComponentId(routeEventLocation?.componentId ?? null);
-        setMapOpenedAtDecisionCount(simulation.decisionHistory.length);
-        setMapOpen(true);
-      },
-    };
-  } else if (mapOpen) {
-    lumiGuide = { ...lumiGuide, view: 'Outpost map', action: 'Close map', onAction: () => setMapOpen(false) };
-  } else if (roverCameraActive) {
-    lumiGuide = { ...lumiGuide, view: 'Rover view', action: 'Back to Commander', onAction: () => engineRef.current?.toggleRoverCamera() };
-  } else if (insidePanel.visible) {
-    const taskAtLocation = insideComponentTasks[0];
-    lumiGuide = {
-      ...lumiGuide,
-      view: `Inside ${locationLabel || 'the base'}`,
-      action: taskAtLocation ? 'Open this job' : 'Open today’s jobs',
-      onAction: taskAtLocation
-        ? () => openTaskAtLocation(taskAtLocation.id)
-        : () => setDailyTasksOpen(true),
-    };
-  } else if (prompt.type === 'component') {
-    lumiGuide = {
-      ...lumiGuide,
-      view: 'Outside the base',
-      action: 'Go inside',
-      onAction: () => engineRef.current?.enterNearbyComponent(),
-    };
-  } else if (cameraMode === 'free') {
-    lumiGuide = {
-      ...lumiGuide,
-      view: 'Outpost overview',
-      action: 'Start walking',
-      onAction: () => engineRef.current?.toggleCameraMode(),
-    };
-  } else if (cameraMode === 'first-person') {
-    lumiGuide = {
-      ...lumiGuide,
-      view: 'Walking outside',
-      action: currentGuideTask ? 'Open the map' : 'Open Science Notebook',
-      onAction: currentGuideTask
-        ? () => { setMapOpenedAtDecisionCount(simulation.decisionHistory.length); setMapOpen(true); }
-        : () => openMissionArchive('notebook'),
-    };
-  }
-  if (lumiMilestoneMessage) lumiGuide = { ...lumiGuide, message: lumiMilestoneMessage };
-  const showLumiGuide = !isLoading && simulation.gameStatus === 'playing'
-    && simulation.dayPhase === 'active'
-    && !storyMoment && !archiveOpen && !iceSampleOpen && !radioOpen;
   useEffect(() => {
-    const message = lumiGuide.message;
-    if (!showLumiGuide || !message) return;
-    if (previousLumiMessageRef.current && previousLumiMessageRef.current !== message) playLumiMessageChime();
-    previousLumiMessageRef.current = message;
-  }, [showLumiGuide, lumiGuide.message]);
-  useEffect(() => {
-    if (simulation.dayPhase !== 'active' || simulation.gameStatus !== 'playing'
+    if (tutorialMode || simulation.dayPhase !== 'active' || simulation.gameStatus !== 'playing'
       || isLoading || !simulation.sceneReady || dayOpeningStartedRef.current === simulation.day) return undefined;
     dayOpeningStartedRef.current = simulation.day;
     dayOpeningCompleteRef.current = null;
     setLumiMilestoneMessage('');
     const dayMessage = simulation.day === 1
-      ? `We’re on Day One at ${simulation.baseName}, Commander. This is the start of our mission!`
+      ? `Hi, Commander ${simulation.commanderName}! Welcome to ${simulation.baseName}. I’m Lumi, your outpost buddy. Ready to explore?`
       : `We’re on Day ${simulation.day} at ${simulation.baseName}, Commander. Let’s get started!`;
     const exploreMessage = `Come on, let’s explore the outpost and see what we can discover today!`;
     const jobs = simulation.dailyChallenges.filter((task) => task.status !== 'completed');
@@ -1322,7 +1298,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     setDayOpeningIndex(0);
     setDayOpeningMessage(openingMessages[0]);
     return undefined;
-  }, [simulation.day, simulation.dayPhase, simulation.gameStatus, simulation.sceneReady, simulation.baseName, isLoading, speakLumi]);
+  }, [tutorialMode, simulation.day, simulation.dayPhase, simulation.gameStatus, simulation.sceneReady, simulation.baseName, simulation.commanderName, isLoading, speakLumi]);
   useEffect(() => {
     if (simulation.dayPhase !== 'report') return;
     window.clearTimeout(lumiSpeechTimerRef.current);
@@ -1365,12 +1341,6 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       window.clearTimeout(lumiSpeechTimerRef.current);
     };
   }, [dayOpeningMessages, dayOpeningIndex, simulation.day, speakLumi, lumiVoiceEnabled]);
-  const toggleLumiVoice = () => {
-    const next = !lumiVoiceEnabled;
-    lumiVoiceEnabledRef.current = next;
-    setLumiVoiceEnabled(next);
-    if (!next) stopLumiSpeech();
-  };
   const openEventAtLocation = (event) => {
     const occurrenceId = getEventOccurrenceKey(event);
     if (!occurrenceId || simulation.eventResolutionLocked) return;
@@ -1401,13 +1371,6 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
         </div>
       )}
 
-      {showLumiGuide && (
-        <aside className={`lunar-lumi-guide${lumiGuideCollapsed ? ' is-collapsed' : ''}${noorCall ? ' is-call-active' : eventOptionsOpen || eventPhase !== 'idle' ? ' is-event-active' : ''}`} aria-live="polite" aria-label="Lumi's gameplay guide">
-          <header><div className="lunar-lumi-guide-avatar" aria-hidden="true"><svg className="lunar-lumi-robot-icon" viewBox="0 0 48 56"><path d="M24 5v5" stroke="#91efd1" strokeWidth="2.5" strokeLinecap="round"/><circle cx="24" cy="4" r="2.5" fill="#67d8b7" stroke="#c9ffed" strokeWidth="1"/><path d="M8 21H6a3 3 0 0 0 0 6h2m32-6h2a3 3 0 0 1 0 6h-2" fill="none" stroke="#78d9bc" strokeWidth="2.5"/><rect x="9" y="12" width="30" height="26" rx="8" fill="#c9f6e8" stroke="#ecfff7" strokeWidth="1.5"/><rect x="13" y="16" width="22" height="17" rx="5" fill="#153744"/><circle cx="19" cy="23" r="1.8" fill="#a4ffe0"/><circle cx="29" cy="23" r="1.8" fill="#a4ffe0"/><path d="M20 28q4 3 8 0" fill="none" stroke="#62d8b5" strokeWidth="1.5" strokeLinecap="round"/><path d="M21 38v3m6-3v3" stroke="#9cebd4" strokeWidth="2.5" strokeLinecap="round"/><rect x="13" y="41" width="22" height="11" rx="5" fill="#80d8be" stroke="#c9ffed" strokeWidth="1.5"/><circle cx="24" cy="46.5" r="2" fill="#236c68"/><path d="M16 52v2m16-2v2" stroke="#9cebd4" strokeWidth="2.5" strokeLinecap="round"/></svg></div><div><strong>Lumi</strong><small>Day {simulation.day} · {lumiGuide.view}</small></div><button type="button" className="lunar-lumi-guide-replay" aria-label="Hear Lumi say that again" title="Hear Lumi again" onClick={() => speakLumi(lumiGuide.message)}>Hear</button><button type="button" className="lunar-lumi-guide-voice-toggle" aria-pressed={!lumiVoiceEnabled} aria-label={lumiVoiceEnabled ? 'Mute Lumi' : 'Let Lumi speak'} onClick={toggleLumiVoice}>{lumiVoiceEnabled ? 'Mute' : 'Talk'}</button><button type="button" aria-label={lumiGuideCollapsed ? 'Expand Lumi guide' : 'Collapse Lumi guide'} aria-expanded={!lumiGuideCollapsed} onClick={() => setLumiGuideCollapsed((collapsed) => !collapsed)}>{lumiGuideCollapsed ? '+' : '−'}</button></header>
-          {!lumiGuideCollapsed && <><div className="lunar-lumi-guide-message"><p>{lumiGuide.message}</p></div><button type="button" className="lunar-lumi-guide-action" onClick={lumiGuide.onAction}>{lumiGuide.action}<span aria-hidden="true">→</span></button>{!lumiVoiceSupported && <small className="lunar-lumi-voice-note">Audio voice is unavailable in this browser.</small>}</>}
-        </aside>
-      )}
-
       {/* Crosshair in First Person / interior - needed to aim at the task console */}
       {(cameraMode === 'interior' || (eventGameplayActive && !insidePanel.visible)) && (
         <div className="lunar-crosshair" />
@@ -1419,14 +1382,15 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
           <button
             type="button"
             className="lunar-orbit-btn"
+            data-tour-target="mission-control"
             onClick={onExitToOrbit}
             title="Return to Mission Control"
           >
-            <span>←</span> MISSION CONTROL
+            <span>←</span> BACK
           </button>
         )}
 
-        <div className="lunar-mission-status" aria-live="polite">
+        <div className="lunar-mission-status" aria-live="polite" data-tour-target="mission-status">
           <span className="lunar-status-dot" />
           <span>Day {simulation.day} of {simulation.maxDays}</span>
           <span className="lunar-status-divider">·</span>
@@ -1449,11 +1413,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
 
 
         <div className="lunar-actions-group">
-          <button type="button" className="lunar-story-archive-button" onClick={() => openMissionArchive('notebook')}>
+          <button type="button" className="lunar-story-archive-button" data-tour-target="science-notebook" onClick={() => openMissionArchive('notebook')}>
             Science Notebook <span>{simulation.scienceNotebookIds.length}/{SCIENCE_DISCOVERIES.length}</span>
           </button>
-          <button type="button" className="lunar-story-photo-button" onClick={() => openMissionArchive('photos')}>Photo Mode</button>
-          <button type="button" className="lunar-story-lumi-button" onClick={talkToLumi}>Talk to Lumi</button>
+          <button type="button" className="lunar-story-photo-button" data-tour-target="photo-mode" onClick={() => openMissionArchive('photos')}>Photo Mode</button>
+          <button type="button" className="lunar-story-lumi-button" data-tour-target="talk-lumi" onClick={talkToLumi}>Talk to Lumi</button>
           {roverCameraActive && simulation.day >= 12 && (
             <button type="button" className="lunar-story-sample-button" onClick={() => setIceSampleOpen(true)}>Collect Sample</button>
           )}
@@ -1502,23 +1466,18 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
               <button
                 type="button"
                 className="lunar-btn lunar-status-toggle"
+                data-tour-target="daily-jobs"
                 aria-expanded={dailyTasksOpen}
                 aria-controls="lunar-daily-tasks"
                 disabled={simulation.gameStatus !== 'playing' || simulation.dayPhase !== 'active'}
                 onClick={() => setDailyTasksOpen((open) => !open)}
               >
                 Today’s jobs
-                {simulation.dailyChallenges.some((task) => (
-                  task.priority === 'critical' && task.status !== 'completed'
-                )) && (
-                  <span className="lunar-critical-task-indicator" aria-label="Critical task requires attention">
-                    Help first
-                  </span>
-                )}
               </button>
               <button
                 type="button"
                 className="lunar-btn lunar-status-toggle"
+                data-tour-target="resources"
                 aria-expanded={statusOpen}
                 aria-controls="lunar-status-drawer"
                 disabled={simulation.dayPhase !== 'active'}
@@ -1537,29 +1496,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                   className="lunar-inside-action-button lunar-task-entry-button"
                   title={nearbyTask.title}
                   aria-label={nearbyTask.recoveryStatus === 'available' ? 'Try Again' : nearbyTaskJourney?.solution ? 'Continue' : getTaskButtonName(nearbyTask)}
-                  onClick={() => {
-                    if (nearbyTask.recoveryStatus === 'available') {
-                      simulation.startCriticalTaskRecovery(nearbyTask.id);
-                      setTaskJourneys((items) => { const next = { ...items }; delete next[nearbyTask.id]; return next; });
-                      const retryMessage = `Let’s try this critical task again at ${nearbyTask.targetComponentName}. We have 45 seconds to finish it!`;
-                      setLumiMilestoneMessage(retryMessage);
-                      speakLumi(retryMessage);
-                      setTaskExperienceId(nearbyTask.id);
-                      setTaskExperienceStage('solutions');
-                      return;
-                    }
-                    if (nearbyTask.status === 'available') {
-                      stopDayOpeningQueue();
-                      simulation.startDailyChallenge(nearbyTask.id);
-                      const startMessage = getTaskStartMessage(nearbyTask);
-                      setLumiMilestoneMessage(startMessage);
-                      speakLumi(startMessage);
-                      setTaskExperienceId(nearbyTask.id);
-                      setTaskExperienceStage('idea');
-                      return;
-                    }
-                    openTaskAtLocation(nearbyTask.id);
-                  }}
+                  onClick={() => activateNearbyTask(nearbyTask)}
                 >
                   {nearbyTaskButtonLabel}
                 </button>
@@ -1585,6 +1522,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
               <button
                 type="button"
                 className={`lunar-btn ${cameraMode === 'first-person' ? 'active' : ''}`}
+                data-tour-target="walk-around"
                 disabled={roverCameraActive || !['idle', 'awaitingDecision'].includes(simulation.eventPhase) || simulation.gameStatus !== 'playing'}
                 onClick={() => engineRef.current?.toggleCameraMode()}
               >
@@ -1593,6 +1531,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
               <button
                 type="button"
                 className={`lunar-btn ${roverCameraActive ? 'active' : ''}`}
+                data-tour-target="drive-rover"
                 aria-pressed={roverCameraActive}
                 disabled={!roverCameraActive && (!roverReady || cameraMode === 'interior' || !eventGameplayActive || simulation.gameStatus !== 'playing')}
                 onClick={() => engineRef.current?.toggleRoverCamera()}
@@ -1669,49 +1608,6 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
               </div>
             ))}
         </aside>
-      )}
-
-      {(cameraMode !== 'interior' || roverCameraActive) && (
-        <div className="lunar-rover-help" role="note" aria-label="Rover keyboard controls">
-          {roverCameraActive ? (
-            <>
-              <strong>{roverLink?.roverLabel || 'ROVER'}{roverLink?.remote ? ' · REMOTE LINK' : ''}</strong>
-              <span>DRAG MOUSE TO ORBIT</span>
-              <span>SCROLL TO ZOOM</span>
-              <span><kbd>↑</kbd>/<kbd>W</kbd> DRIVE</span>
-              <span><kbd>←</kbd> <kbd>→</kbd> STEER</span>
-              <span><kbd>↓</kbd>/<kbd>S</kbd> REVERSE</span>
-              <span><kbd>V</kbd> {roverLink?.remote ? 'RETURN TO COMMAND CENTER' : 'PLAYER CAMERA'}</span>
-            </>
-          ) : (
-            <span>PLAYER CAMERA · ARROWS MOVE PLAYER · PRESS V OR SELECT ROVER CAMERA TO DRIVE</span>
-          )}
-        </div>
-      )}
-
-      {import.meta.env.DEV && (
-        <details className="lunar-event-test-tools">
-          <summary>TEST TASK ↔ EVENT LINKS</summary>
-          {TASK_EVENT_TESTS.map(([challengeId, taskLabel, eventLabel]) => (
-            <div className="lunar-event-test-row" key={challengeId}>
-              <span>{taskLabel} / {eventLabel}</span>
-              <button
-                type="button"
-                disabled={simulation.gameStatus !== 'playing' || Boolean(simulation.currentEvent) || Boolean(simulation.warningTaskId)}
-                onClick={() => simulation.testTaskEventTrigger(challengeId)}
-              >
-                TEST OVERDUE TRIGGER
-              </button>
-              <button
-                type="button"
-                disabled={simulation.gameStatus !== 'playing' || Boolean(simulation.currentEvent) || Boolean(simulation.warningTaskId)}
-                onClick={() => simulation.testTaskEventPrevention(challengeId)}
-              >
-                TEST COMPLETION BLOCK
-              </button>
-            </div>
-          ))}
-        </details>
       )}
 
       {/* Task console editor (positioning only, no coordinates) */}
@@ -1792,6 +1688,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       {showMinimap && (
         <div
           className="lunar-minimap"
+          data-tour-target="live-map"
           role="button"
           tabIndex={0}
           title="Open full outpost map (M)"
