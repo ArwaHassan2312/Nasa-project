@@ -13,7 +13,6 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 // leave every copy sharing one skeleton. SkeletonUtils rebuilds the bone rig.
 import { clone as cloneSkinnedRig } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { loadDownscaledTexture } from '../../utils/textureUtils';
-import lumiRobotImageUrl from '../../assets/images/Screenshot 2026-11-11 130507.png';
 
 // ─── Player camera ───────────────────────────────────────────────────────────
 // One camera for the whole game. The same look, eye height and gait are used on
@@ -1254,21 +1253,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
   // The live eye height. Seeded from PLAYER_CAMERA and adjustable at runtime;
   // every camera measurement below reads this, never a scattered constant.
   let playerCameraHeight = PLAYER_CAMERA.height;
-  // Lumi stays close to the walking player, visible just ahead and to one side.
-  // Use the supplied friendly character art in the world and in the story UI.
-  const lumiCompanion = new THREE.Group();
-  lumiCompanion.name = 'Lumi Helper Robot';
-  const lumiTexture = new THREE.TextureLoader().load(lumiRobotImageUrl);
-  lumiTexture.colorSpace = THREE.SRGBColorSpace;
-  const lumiSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: lumiTexture, transparent: true, depthWrite: false }));
-  lumiSprite.scale.set(1.05, 0.96, 1);
-  lumiCompanion.add(lumiSprite);
-  lumiCompanion.visible = false;
-  scene.add(lumiCompanion);
-  const lumiForward = new THREE.Vector3();
-  const lumiRight = new THREE.Vector3();
-  const lumiTarget = new THREE.Vector3();
-  const lumiTrailDirection = new THREE.Vector3(0, 0, -1);
   // The two scans overlap slightly so the seam between them disappears.
   const SEAM_OVERLAP = 4 * WORLD_SCALE;
   // Default free-camera framing distance, sized to the outpost (not the map).
@@ -5422,22 +5406,6 @@ export function createLunarEngine(canvas, callbacks = {}) {
       earthMesh.rotation.y += dt * 0.006;
     }
 
-    const walkingView = cameraMode === 'first-person' || cameraMode === 'interior';
-    lumiCompanion.visible = walkingView && !eventCinematic && !roverCameraActive;
-    if (lumiCompanion.visible) {
-      camera.getWorldDirection(lumiForward).setY(0).normalize();
-      if (firstPersonVelocity.lengthSq() > 0.04) lumiTrailDirection.copy(firstPersonVelocity).setY(0).normalize();
-      else if (lumiTrailDirection.lengthSq() < 0.01) lumiTrailDirection.copy(lumiForward);
-      lumiRight.set(-lumiForward.z, 0, lumiForward.x);
-      // Lumi walks beside the commander, just ahead and to the side so she
-      // stays in view without covering the center of the scene.
-      lumiTarget.copy(camera.position).addScaledVector(lumiForward, 0.85).addScaledVector(lumiRight, 1.05);
-      lumiTarget.y = camera.position.y - playerCameraHeight + 0.72;
-      lumiCompanion.position.lerp(lumiTarget, 1 - Math.exp(-dt * 8));
-      lumiCompanion.position.y += 0.035 + Math.sin(clock.elapsedTime * 3.2) * 0.035;
-      lumiCompanion.rotation.y = Math.atan2(lumiTrailDirection.x, lumiTrailDirection.z) + Math.PI;
-    }
-
     renderer.render(scene, camera);
     if (!sceneReadyReported && outpostRoot && moonTerrainMeshes.length === 2 && skyAssetReady && earthAssetsReady) {
       sceneReadyReported = true;
@@ -5523,46 +5491,65 @@ export function createLunarEngine(canvas, callbacks = {}) {
     taskGuideBeacon = new THREE.Group();
     taskGuideBeacon.name = 'Daily Task Guide Beacon';
 
+    const beamGeometry = new THREE.CylinderGeometry(0.82, 0.82, 2.45, 32, 32, true);
+    const beamPositions = beamGeometry.attributes.position;
+    const beamRed = new THREE.Color(0x984242);
+    const beamColors = new Float32Array(beamPositions.count * 4);
+    for (let index = 0; index < beamPositions.count; index += 1) {
+      const height = THREE.MathUtils.clamp((beamPositions.getY(index) + 1.225) / 2.45, 0, 1);
+      const fade = 1 - height * height * (3 - 2 * height);
+      const colorOffset = index * 4;
+      beamColors[colorOffset] = beamRed.r;
+      beamColors[colorOffset + 1] = beamRed.g;
+      beamColors[colorOffset + 2] = beamRed.b;
+      beamColors[colorOffset + 3] = fade;
+    }
+    beamGeometry.setAttribute('color', new THREE.BufferAttribute(beamColors, 4));
+
     const beam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.24, 0.24, 1.55, 24, 1, false),
+      beamGeometry,
       new THREE.MeshBasicMaterial({
-        color: 0xff465f,
+        color: 0xffffff,
+        vertexColors: true,
         transparent: true,
-        opacity: 0.78,
+        opacity: 0.94,
         side: THREE.DoubleSide,
+        depthTest: false,
         depthWrite: false,
       }),
     );
-    beam.position.y = 0.775;
-    beam.renderOrder = 5;
+    beam.position.y = 1.225;
+    beam.renderOrder = 1000;
 
     const floorGlow = new THREE.Mesh(
       new THREE.CircleGeometry(0.88, 48),
       new THREE.MeshBasicMaterial({
-        color: 0xff435e,
+        color: 0x984242,
         transparent: true,
         opacity: 0.23,
         side: THREE.DoubleSide,
+        depthTest: false,
         depthWrite: false,
       }),
     );
     floorGlow.rotation.x = -Math.PI / 2;
     floorGlow.position.y = 0.025;
-    floorGlow.renderOrder = 6;
+    floorGlow.renderOrder = 1001;
 
     const floorRing = new THREE.Mesh(
       new THREE.RingGeometry(0.74, 0.9, 48),
       new THREE.MeshBasicMaterial({
-        color: 0xff526b,
+        color: 0x984242,
         transparent: true,
         opacity: 0.84,
         side: THREE.DoubleSide,
+        depthTest: false,
         depthWrite: false,
       }),
     );
     floorRing.rotation.x = -Math.PI / 2;
     floorRing.position.y = 0.04;
-    floorRing.renderOrder = 7;
+    floorRing.renderOrder = 1002;
 
     taskGuideBeacon.add(beam, floorGlow, floorRing);
     scene.add(taskGuideBeacon);

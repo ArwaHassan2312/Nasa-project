@@ -4,13 +4,20 @@ import EventModal from '../EventModal';
 import EndGameReport from '../EndGameReport';
 import DailyTaskExperience from './DailyTaskExperience';
 import { getDailyTaskExperience } from '../../data/dailyTaskExperiences';
-import { getChapterReply, getEventNarration, getStoryCallback, LOCATION_STORY_CARDS, MOON_FACTS, SCIENCE_DISCOVERIES, STORY_CHAPTERS, STORY_DAY_BEATS } from '../../data/missionStory';
+import { getChapterReply, getEventNarration, getStoryCallback, LOCATION_STORY_CARDS, SCIENCE_DISCOVERIES, STORY_CHAPTERS, STORY_DAY_BEATS } from '../../data/missionStory';
 import { IceSampleActivity, MissionArchive, MissionStoryMoment, RadioCall } from '../MissionStoryPanels';
-import { createLumiSpeech } from '../../utils/missionVoice';
+import { createNoorSpeech } from '../../utils/missionVoice';
 import MissionEventCall from './MissionEventCall';
 import MissionStoryReward from '../MissionStoryReward';
 import './LunarOutpost.css';
 import '../../simulation.css';
+
+function clearOutpostLocalProgress() {
+  try {
+    window.localStorage.removeItem('lunar-outpost-task-journeys-v1');
+    window.localStorage.removeItem('lunar-outpost-photos-v1');
+  } catch { /* Starting a new mission should still work if storage is unavailable. */ }
+}
 
 const RESOURCE_ITEMS = [
   ['power', 'Power', '⚡'],
@@ -48,7 +55,7 @@ const COMPONENT_TASK_FACTS = {
   '015': ['Batteries store energy so important outpost systems can keep running when solar power is low.', 'Battery temperature affects how well it can store and deliver energy.', 'Checking a battery early can help prevent a small power issue from growing.'],
   '008': ['Plants can help provide fresh food, but they need carefully measured water and light.', 'Growing plants in space also helps scientists learn how living things respond to a new environment.', 'A greenhouse needs its water and air systems to stay steady for healthy plant growth.'],
   '017': ['Radio signals let astronauts and mission control share plans and important updates.', 'A clear antenna path helps a radio send and receive a stronger signal.', 'Communication equipment can help a crew get advice from Earth during a repair.'],
-  '018': ['A rover can reach places that are difficult or unsafe for astronauts to visit on foot.', 'A rover’s wheels need traction to cross loose lunar soil.', 'Robotic tools let scientists study lunar ground while keeping astronauts at a safer distance.'],
+  '018': ['A rover can reach places that are difficult or unsafe for astronauts to visit on foot.', 'A rover’s wheels need traction to cross loose lunar soil.', 'Automated tools let scientists study lunar ground while keeping astronauts at a safer distance.'],
   '020': ['Apollo 15 was the first mission to use a lunar rover on the Moon.', 'Rovers can carry tools and samples, helping crews explore farther from their landing site.', 'Careful route planning helps a rover save power and avoid rough terrain.'],
 };
 
@@ -60,7 +67,7 @@ function getUniqueTaskFact(task, tasks) {
   return facts[slot % facts.length];
 }
 
-function createLumiDiscoveryMessage(titles) {
+function createNarrationDiscoveryMessage(titles) {
   if (titles.length === 1) return `I have a new discovery for you: ${titles[0]}! It’s saved in your Science Notebook.`;
   return `I have ${titles.length} new discoveries for you: ${titles.join(', ')}! They’re saved in your Science Notebook.`;
 }
@@ -71,7 +78,7 @@ function getTaskStartMessage(task) {
     : `You’ve started ${task.title}. This helps keep ${task.targetComponentName} ready. Let’s do it together.`;
 }
 
-function playLumiMessageChime() {
+function playNarrationMessageChime() {
   try {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) return;
@@ -113,11 +120,6 @@ function getTaskStatusLabel(status) {
   if (status === 'completed') return 'Done';
   if (status === 'overdue') return 'Late';
   return 'Ready';
-}
-
-function getTaskButtonName(task) {
-  const title = task?.title?.trim();
-  return title?.split(/\s+[—–-]\s+/)[0]?.trim() || title || 'Open Task';
 }
 
 function formatRemainingTime(milliseconds) {
@@ -188,6 +190,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     || simulation.endOfDayNoticeHistory.length > 0;
 
   const [isLoading, setIsLoading] = useState(true);
+  const outpostControlsDisabled = isLoading || tutorialActive;
   const [cameraMode, setCameraMode] = useState('free');
   const [roverReady, setRoverReady] = useState(false);
   const [roverCameraActive, setRoverCameraActive] = useState(false);
@@ -222,23 +225,25 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const [dayReportReadyDay, setDayReportReadyDay] = useState(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiveTab, setArchiveTab] = useState('notebook');
+  const isScienceNotebookOpen = archiveOpen && archiveTab === 'notebook';
+  const scienceNotebookInterior = insidePanel.visible && isScienceNotebookOpen;
   const [iceSampleOpen, setIceSampleOpen] = useState(false);
   const [radioOpen, setRadioOpen] = useState(false);
   const [photos, setPhotos] = useState([]);
   const [pendingPhoto, setPendingPhoto] = useState(null);
-  const [, setLumiVoiceSupported] = useState(true);
-  const lumiVoiceEnabled = false;
-  const [lumiSpeechInProgress, setLumiSpeechInProgress] = useState(false);
-  const lumiSpeechTimerRef = useRef(null);
-  const lumiVoiceEnabledRef = useRef(false);
-  const lumiSpeechActiveRef = useRef(false);
-  const lumiSpeechQueueRef = useRef([]);
-  const lumiSpeechRunRef = useRef(0);
+  const [, setNarrationVoiceSupported] = useState(true);
+  const narrationVoiceEnabled = false;
+  const [narrationSpeechInProgress, setNarrationSpeechInProgress] = useState(false);
+  const narrationSpeechTimerRef = useRef(null);
+  const narrationVoiceEnabledRef = useRef(false);
+  const narrationSpeechActiveRef = useRef(false);
+  const narrationSpeechQueueRef = useRef([]);
+  const narrationSpeechRunRef = useRef(0);
   const pendingNoorCallRef = useRef(null);
   const noorCallActiveRef = useRef(false);
   const [noorCall, setNoorCall] = useState(null);
   const [routeEventId, setRouteEventId] = useState(null);
-  const [, setLumiMilestoneMessage] = useState('');
+  const [, setNarrationMilestoneMessage] = useState('');
   const handledNoorCallsRef = useRef(new Set());
   const shownStoryDayRef = useRef(null);
   const dayOpeningStartedRef = useRef(null);
@@ -265,12 +270,12 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     completeDailyChallenge,
     dismissChallengeFeedback,
   } = simulation;
-  const stopLumiSpeech = useCallback(() => {
-    lumiSpeechRunRef.current += 1;
-    lumiSpeechQueueRef.current = [];
-    lumiSpeechActiveRef.current = false;
-    setLumiSpeechInProgress(false);
-    window.clearTimeout(lumiSpeechTimerRef.current);
+  const stopNarrationSpeech = useCallback(() => {
+    narrationSpeechRunRef.current += 1;
+    narrationSpeechQueueRef.current = [];
+    narrationSpeechActiveRef.current = false;
+    setNarrationSpeechInProgress(false);
+    window.clearTimeout(narrationSpeechTimerRef.current);
     window.speechSynthesis?.cancel();
     setTaskRecapSpeaking(false);
     if (pendingNoorCallRef.current) {
@@ -279,40 +284,40 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       pendingNoorCallRef.current = null;
     }
   }, []);
-  const speakLumi = useCallback((text, onEnd, queueIfBusy = false, onStart) => {
+  const speakNarration = useCallback((text, onEnd, queueIfBusy = false, onStart) => {
     if (!text) { onEnd?.(); return; }
-    if (!lumiVoiceEnabledRef.current) { setLumiSpeechInProgress(false); onStart?.(); onEnd?.(); return; }
+    if (!narrationVoiceEnabledRef.current) { setNarrationSpeechInProgress(false); onStart?.(); onEnd?.(); return; }
     if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
-      setLumiVoiceSupported(false);
-      setLumiSpeechInProgress(false);
+      setNarrationVoiceSupported(false);
+      setNarrationSpeechInProgress(false);
       onStart?.();
       onEnd?.();
       return;
     }
     if (pendingNoorCallRef.current && !queueIfBusy) return;
-    if (queueIfBusy && (lumiSpeechActiveRef.current || window.speechSynthesis.speaking)) {
-      lumiSpeechQueueRef.current.push({ text, onEnd, onStart });
+    if (queueIfBusy && (narrationSpeechActiveRef.current || window.speechSynthesis.speaking)) {
+      narrationSpeechQueueRef.current.push({ text, onEnd, onStart });
       return;
     }
     if (!queueIfBusy) {
-      lumiSpeechRunRef.current += 1;
-      lumiSpeechQueueRef.current = [];
-      lumiSpeechActiveRef.current = false;
+      narrationSpeechRunRef.current += 1;
+      narrationSpeechQueueRef.current = [];
+      narrationSpeechActiveRef.current = false;
       window.speechSynthesis.cancel();
     }
-    const run = lumiSpeechRunRef.current;
+    const run = narrationSpeechRunRef.current;
     const play = (line, onDone, onBegin) => {
-      if (run !== lumiSpeechRunRef.current || !lumiVoiceEnabledRef.current) return;
-      const speech = createLumiSpeech(line);
-      lumiSpeechActiveRef.current = true;
-      setLumiSpeechInProgress(true);
+      if (run !== narrationSpeechRunRef.current || !narrationVoiceEnabledRef.current) return;
+      const speech = createNoorSpeech(line);
+      narrationSpeechActiveRef.current = true;
+      setNarrationSpeechInProgress(true);
       onBegin?.();
       const finish = () => {
-        if (run !== lumiSpeechRunRef.current) return;
-        lumiSpeechActiveRef.current = false;
-        const next = lumiSpeechQueueRef.current.shift();
+        if (run !== narrationSpeechRunRef.current) return;
+        narrationSpeechActiveRef.current = false;
+        const next = narrationSpeechQueueRef.current.shift();
         if (next) play(next.text, next.onEnd, next.onStart);
-        else setLumiSpeechInProgress(false);
+        else setNarrationSpeechInProgress(false);
         onDone?.();
       };
       speech.onend = finish;
@@ -321,17 +326,20 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     };
     play(text, onEnd, onStart);
   }, []);
-  const interruptLumiForEvent = useCallback(() => {
-    lumiSpeechRunRef.current += 1;
-    lumiSpeechQueueRef.current = [];
-    lumiSpeechActiveRef.current = false;
-    setLumiSpeechInProgress(false);
+  const interruptNarrationForEvent = useCallback(() => {
+    narrationSpeechRunRef.current += 1;
+    narrationSpeechQueueRef.current = [];
+    narrationSpeechActiveRef.current = false;
+    setNarrationSpeechInProgress(false);
     setTaskRecapSpeaking(false);
-    window.clearTimeout(lumiSpeechTimerRef.current);
+    window.clearTimeout(narrationSpeechTimerRef.current);
     window.speechSynthesis?.cancel();
     setDayOpeningMessages([]);
     setDayOpeningIndex(0);
     setDayOpeningMessage('');
+  }, []);
+  useEffect(() => {
+    clearOutpostLocalProgress();
   }, []);
   useEffect(() => {
     if (commanderProfile) simulation.setMissionProfile(commanderProfile);
@@ -351,20 +359,20 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     let cancelled = false;
     let timerId;
     setDayReportReadyDay(null);
-    const waitForLumi = () => {
+    const waitForNarration = () => {
       if (cancelled) return;
-      if (taskRecapSpeaking || lumiSpeechInProgress || lumiSpeechActiveRef.current || lumiSpeechQueueRef.current.length > 0 || window.speechSynthesis?.speaking) {
-        timerId = window.setTimeout(waitForLumi, 100);
+      if (taskRecapSpeaking || narrationSpeechInProgress || narrationSpeechActiveRef.current || narrationSpeechQueueRef.current.length > 0 || window.speechSynthesis?.speaking) {
+        timerId = window.setTimeout(waitForNarration, 100);
         return;
       }
       setDayReportReadyDay(reportDay);
     };
-    timerId = window.setTimeout(waitForLumi, 0);
+    timerId = window.setTimeout(waitForNarration, 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timerId);
     };
-  }, [simulation.dayPhase, simulation.dayReport?.day, taskRecapSpeaking, lumiSpeechInProgress]);
+  }, [simulation.dayPhase, simulation.dayReport?.day, taskRecapSpeaking, narrationSpeechInProgress]);
 
   useEffect(() => {
     if (simulation.dayPhase === 'active' && dayStartClockRef.current.day !== simulation.day) {
@@ -376,11 +384,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     const jobs = simulation.dailyChallenges;
     if (!jobs.length || jobs.some((task) => task.status !== 'completed') || rewardedStoryDayRef.current === simulation.day || taskRecapSpeaking) return;
     const reportIsReady = simulation.dayPhase === 'report';
-    if ((!reportIsReady && simulation.dayPhase !== 'active') || simulation.currentEvent || simulation.queuedEvents.length || noorCall || storyMoment || (!reportIsReady && taskExperienceId) || eventOptionsOpen || simulation.warningTaskId || lumiSpeechInProgress || lumiSpeechActiveRef.current || lumiSpeechQueueRef.current.length > 0 || window.speechSynthesis?.speaking) return;
+    if ((!reportIsReady && simulation.dayPhase !== 'active') || simulation.currentEvent || simulation.queuedEvents.length || noorCall || storyMoment || (!reportIsReady && taskExperienceId) || eventOptionsOpen || simulation.warningTaskId || narrationSpeechInProgress || narrationSpeechActiveRef.current || narrationSpeechQueueRef.current.length > 0 || window.speechSynthesis?.speaking) return;
     rewardedStoryDayRef.current = simulation.day;
-    setLumiMilestoneMessage('You are amazing, Commander! You finished every job today! I’m so proud of you. You kept the outpost safer, learned new things, and earned story time with me!');
+    setNarrationMilestoneMessage('You are amazing, Commander! You finished every job today! I’m so proud of you. You kept the outpost safer, learned new things, and earned story time with me!');
     setStoryRewardDay(simulation.day);
-  }, [simulation.dailyChallenges, simulation.day, simulation.dayPhase, simulation.currentEvent, simulation.queuedEvents, noorCall, storyMoment, taskExperienceId, eventOptionsOpen, simulation.warningTaskId, taskRecapSpeaking, lumiSpeechInProgress]);
+  }, [simulation.dailyChallenges, simulation.day, simulation.dayPhase, simulation.currentEvent, simulation.queuedEvents, noorCall, storyMoment, taskExperienceId, eventOptionsOpen, simulation.warningTaskId, taskRecapSpeaking, narrationSpeechInProgress]);
   useEffect(() => {
     if (simulation.dayPhase !== 'transition' || shownStoryDayRef.current === simulation.day) return;
     shownStoryDayRef.current = simulation.day;
@@ -419,7 +427,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       fact: 'Every part of a Moon base must work together because help is far away.',
     };
     simulation.markLocationVisited(locationId, card.name);
-    setStoryMoment({ character: 'lumi', eyebrow: 'LOCATION DISCOVERED · LUMI', title: card.name, location: card });
+    setStoryMoment({ character: 'noor', noReplay: true, title: card.name, location: card });
   }, [insidePanel.visible, insidePanel.componentId, insidePanel.label, taskExperienceId, simulation.eventPhase, simulation.visitedLocationIds, simulation.markLocationVisited]);
   useEffect(() => {
     const iceDataFound = simulation.collectedIceSamples.length > 0
@@ -445,23 +453,23 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     const timeout = window.setTimeout(() => {
       const titles = pendingScienceTitlesRef.current.splice(0);
       if (!titles.length) return;
-      const message = createLumiDiscoveryMessage(titles);
-      setLumiMilestoneMessage(message);
-      speakLumi(message);
+      const message = createNarrationDiscoveryMessage(titles);
+      setNarrationMilestoneMessage(message);
+      speakNarration(message);
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [isLoading, simulation.sceneReady, simulation.day, simulation.dayPhase, simulation.scienceNotebookIds.length, speakLumi]);
+  }, [isLoading, simulation.sceneReady, simulation.day, simulation.dayPhase, simulation.scienceNotebookIds.length, speakNarration]);
   useEffect(() => {
     if (observedTaskDayRef.current === simulation.day) return;
     observedTaskDayRef.current = simulation.day;
     setTaskJourneys({});
     setTaskExperienceId(null);
-    stopLumiSpeech();
-    setLumiMilestoneMessage('');
-  }, [simulation.day, stopLumiSpeech]);
+    stopNarrationSpeech();
+    setNarrationMilestoneMessage('');
+  }, [simulation.day, stopNarrationSpeech]);
   const eventGameplayActive = eventPhase === 'idle' || eventPhase === 'awaitingDecision';
   const stopDayOpeningQueue = useCallback(() => {
-    window.clearTimeout(lumiSpeechTimerRef.current);
+    window.clearTimeout(narrationSpeechTimerRef.current);
     setDayOpeningMessages([]);
     setDayOpeningIndex(0);
     setDayOpeningMessage('');
@@ -475,8 +483,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     stopDayOpeningQueue();
     startDailyChallenge(challenge.id);
     const startMessage = getTaskStartMessage(challenge);
-    setLumiMilestoneMessage(startMessage);
-    speakLumi(startMessage);
+    setNarrationMilestoneMessage(startMessage);
+    speakNarration(startMessage);
     setTaskExperienceId(challenge.id);
     setTaskExperienceStage('idea');
   };
@@ -489,25 +497,6 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const openMissionArchive = (tab) => {
     setArchiveTab(tab);
     setArchiveOpen(true);
-  };
-  const talkToLumi = () => {
-    const resources = simulation.resources;
-    const message = resources.power < 35
-      ? 'Beep! Power is getting low. Let’s check today’s jobs and look after the batteries.'
-      : resources.water < 35
-        ? 'Drip alert, Commander! Water is running low. Let’s see if there is a water job to do.'
-        : simulation.day >= 11
-          ? 'Crater time! Let’s take the rover out and look for clues about Moon ice.'
-          : simulation.day >= 8
-            ? 'The long dark days are coming. Let’s save some power for later!'
-            : 'Ready for a Moon mystery? Pick a job, follow the map, and let’s learn something new!';
-    setStoryMoment({
-      character: 'lumi',
-      eyebrow: 'LUMI · YOUR BASE BUDDY',
-      title: 'Let’s do this together!',
-      text: message,
-      extra: `Moon fact: ${MOON_FACTS[(simulation.day - 1) % MOON_FACTS.length]}`,
-    });
   };
   const captureMissionPhoto = () => {
     try {
@@ -523,6 +512,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const saveMissionPhoto = (photo) => {
     setPhotos((items) => [{ ...photo, caption: photo.caption.trim() }, ...items]);
     setPendingPhoto(null);
+  };
+  const saveAndExitToMissionControl = () => {
+    onExitToOrbit?.();
   };
   const showTaskLocation = (challengeId) => {
     const challenge = simulation.dailyChallenges.find((task) => task.id === challengeId);
@@ -546,19 +538,13 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const nearbyTask = nearbyTaskMarker
     ? insideComponentTasks.find((task) => task.id === nearbyTaskMarker.taskId)
     : null;
-  const nearbyTaskJourney = nearbyTask ? taskJourneys[nearbyTask.id] : null;
-  const nearbyTaskButtonLabel = nearbyTask?.recoveryStatus === 'available'
-    ? 'Try Again'
-    : nearbyTaskJourney?.solution
-      ? 'Continue'
-      : getTaskButtonName(nearbyTask);
   const activateNearbyTask = useCallback((challenge) => {
     if (challenge.recoveryStatus === 'available') {
       simulation.startCriticalTaskRecovery(challenge.id);
       setTaskJourneys((items) => { const next = { ...items }; delete next[challenge.id]; return next; });
       const retryMessage = `Let’s try this critical task again at ${challenge.targetComponentName}. We have 45 seconds to finish it!`;
-      setLumiMilestoneMessage(retryMessage);
-      speakLumi(retryMessage);
+      setNarrationMilestoneMessage(retryMessage);
+      speakNarration(retryMessage);
       setTaskExperienceId(challenge.id);
       setTaskExperienceStage('solutions');
       return;
@@ -567,14 +553,14 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       stopDayOpeningQueue();
       simulation.startDailyChallenge(challenge.id);
       const startMessage = getTaskStartMessage(challenge);
-      setLumiMilestoneMessage(startMessage);
-      speakLumi(startMessage);
+      setNarrationMilestoneMessage(startMessage);
+      speakNarration(startMessage);
       setTaskExperienceId(challenge.id);
       setTaskExperienceStage('idea');
       return;
     }
     openTaskAtLocation(challenge.id);
-  }, [openTaskAtLocation, simulation.startCriticalTaskRecovery, simulation.startDailyChallenge, speakLumi, stopDayOpeningQueue]);
+  }, [openTaskAtLocation, simulation.startCriticalTaskRecovery, simulation.startDailyChallenge, speakNarration, stopDayOpeningQueue]);
   const taskMarkerSignature = insideComponentTasks
     .map((task) => `${task.id}:${task.status}:${task.recoveryStatus ?? ''}`)
     .join('|');
@@ -597,7 +583,6 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       || simulation.gameStatus !== 'playing'
       || simulation.dayPhase !== 'active'
       || simulation.warningTaskId
-      || eventPhase !== 'idle'
     ) return;
     autoStartedTaskComponentRef.current = insidePanel.componentId;
     activateNearbyTask(nearbyTask);
@@ -610,7 +595,6 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     simulation.gameStatus,
     simulation.dayPhase,
     simulation.warningTaskId,
-    eventPhase,
     activateNearbyTask,
   ]);
   const promptedChallenge = simulation.dailyChallenges.find(
@@ -800,8 +784,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     engineRef.current?.setConsoleEditMode?.(consoleEdit);
   }, [consoleEdit]);
 
-  // Keep interiors clean: entering a component closes the drawers, leaving
-  // only the inside label, EXIT and MOVE buttons. Leaving resets console edit.
+  // Keep interiors clean: entering a component closes the drawers. Leaving
+  // the component resets console edit mode.
   const [prevInsidePanelVisible, setPrevInsidePanelVisible] = useState(false);
   if (prevInsidePanelVisible !== insidePanel.visible) {
     setPrevInsidePanelVisible(insidePanel.visible);
@@ -908,7 +892,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     const occurrenceId = getEventOccurrenceKey(event);
 
     if (eventPhase === 'pending') {
-      interruptLumiForEvent();
+      interruptNarrationForEvent();
       beginPresentation(occurrenceId);
       return;
     }
@@ -940,7 +924,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     completeResolution,
     currentEvent,
     eventPhase,
-    interruptLumiForEvent,
+    interruptNarrationForEvent,
   ]);
 
   useEffect(() => {
@@ -1114,38 +1098,38 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     const occurrenceId = getEventOccurrenceKey(currentEvent);
     if (!occurrenceId || handledNoorCallsRef.current.has(occurrenceId)) return;
     handledNoorCallsRef.current.add(occurrenceId);
-    interruptLumiForEvent();
+    interruptNarrationForEvent();
     const callMessage = `Commander, you have a call from Dr. Noor.`;
-    speakLumi(
+    speakNarration(
       callMessage,
       () => { pendingNoorCallRef.current = null; },
       false,
       () => {
-        playLumiMessageChime();
+        playNarrationMessageChime();
         pendingNoorCallRef.current = currentEvent;
         noorCallActiveRef.current = true;
         setNoorCall({ event: currentEvent, stage: 'incoming' });
       },
     );
-  }, [eventPhase, currentEvent, speakLumi, interruptLumiForEvent]);
+  }, [eventPhase, currentEvent, speakNarration, interruptNarrationForEvent]);
   useEffect(() => {
     simulation.eventFailureNotices.filter((notice) => (
       notice.expired && !announcedFailureNoticesRef.current.has(`event:${notice.id}`)
     )).forEach((notice) => {
       announcedFailureNoticesRef.current.add(`event:${notice.id}`);
       const message = `We ran out of time for that event. That’s okay—we can try again next time!`;
-      setLumiMilestoneMessage(message);
-      speakLumi(message, undefined, true);
+      setNarrationMilestoneMessage(message);
+      speakNarration(message, undefined, true);
     });
     (simulation.taskFailureNotices ?? []).filter((notice) => (
       !announcedFailureNoticesRef.current.has(`task:${notice.id}`)
     )).forEach((notice) => {
       announcedFailureNoticesRef.current.add(`task:${notice.id}`);
       const message = `We ran out of time for that critical task. That’s okay—let’s try again!`;
-      setLumiMilestoneMessage(message);
-      speakLumi(message, undefined, true);
+      setNarrationMilestoneMessage(message);
+      speakNarration(message, undefined, true);
     });
-  }, [simulation.eventFailureNotices, simulation.taskFailureNotices, speakLumi]);
+  }, [simulation.eventFailureNotices, simulation.taskFailureNotices, speakNarration]);
   useEffect(() => {
     if (!routeEventId) return;
     if (!activeEventEntries.some(({ event }) => getEventOccurrenceKey(event) === routeEventId)) {
@@ -1276,9 +1260,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       || isLoading || !simulation.sceneReady || dayOpeningStartedRef.current === simulation.day) return undefined;
     dayOpeningStartedRef.current = simulation.day;
     dayOpeningCompleteRef.current = null;
-    setLumiMilestoneMessage('');
+    setNarrationMilestoneMessage('');
     const dayMessage = simulation.day === 1
-      ? `Hi, Commander ${simulation.commanderName}! Welcome to ${simulation.baseName}. I’m Lumi, your outpost buddy. Ready to explore?`
+      ? `Welcome to ${simulation.baseName}, Commander ${simulation.commanderName}! Your outpost is ready to explore.`
       : `We’re on Day ${simulation.day} at ${simulation.baseName}, Commander. Let’s get started!`;
     const exploreMessage = `Come on, let’s explore the outpost and see what we can discover today!`;
     const jobs = simulation.dailyChallenges.filter((task) => task.status !== 'completed');
@@ -1292,16 +1276,16 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     if (pendingDayBeatRef.current) openingMessages.push(pendingDayBeatRef.current);
     pendingDayBeatRef.current = null;
     const availableDiscoveries = pendingScienceTitlesRef.current.splice(0);
-    if (availableDiscoveries.length) openingMessages.push(createLumiDiscoveryMessage(availableDiscoveries));
+    if (availableDiscoveries.length) openingMessages.push(createNarrationDiscoveryMessage(availableDiscoveries));
     openingMessages.push(jobMessage);
     setDayOpeningMessages(openingMessages);
     setDayOpeningIndex(0);
     setDayOpeningMessage(openingMessages[0]);
     return undefined;
-  }, [tutorialMode, simulation.day, simulation.dayPhase, simulation.gameStatus, simulation.sceneReady, simulation.baseName, simulation.commanderName, isLoading, speakLumi]);
+  }, [tutorialMode, simulation.day, simulation.dayPhase, simulation.gameStatus, simulation.sceneReady, simulation.baseName, simulation.commanderName, isLoading, speakNarration]);
   useEffect(() => {
     if (simulation.dayPhase !== 'report') return;
-    window.clearTimeout(lumiSpeechTimerRef.current);
+    window.clearTimeout(narrationSpeechTimerRef.current);
     setDayOpeningMessages([]);
     setDayOpeningIndex(0);
     setDayOpeningMessage('');
@@ -1313,7 +1297,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     const advance = () => {
       if (cancelled) return;
       if (pendingNoorCallRef.current || noorCallActiveRef.current) {
-        lumiSpeechTimerRef.current = window.setTimeout(advance, 300);
+        narrationSpeechTimerRef.current = window.setTimeout(advance, 300);
         return;
       }
       const nextIndex = dayOpeningIndex + 1;
@@ -1324,7 +1308,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       }
       const discoveries = pendingScienceTitlesRef.current.splice(0);
       if (discoveries.length) {
-        setDayOpeningMessages((messages) => [...messages, createLumiDiscoveryMessage(discoveries)]);
+        setDayOpeningMessages((messages) => [...messages, createNarrationDiscoveryMessage(discoveries)]);
         setDayOpeningIndex(nextIndex);
         return;
       }
@@ -1333,14 +1317,14 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       setDayOpeningIndex(0);
       setDayOpeningMessage('');
     };
-    speakLumi(currentMessage, () => {
-      lumiSpeechTimerRef.current = window.setTimeout(advance, 1000);
+    speakNarration(currentMessage, () => {
+      narrationSpeechTimerRef.current = window.setTimeout(advance, 1000);
     });
     return () => {
       cancelled = true;
-      window.clearTimeout(lumiSpeechTimerRef.current);
+      window.clearTimeout(narrationSpeechTimerRef.current);
     };
-  }, [dayOpeningMessages, dayOpeningIndex, simulation.day, speakLumi, lumiVoiceEnabled]);
+  }, [dayOpeningMessages, dayOpeningIndex, simulation.day, speakNarration, narrationVoiceEnabled]);
   const openEventAtLocation = (event) => {
     const occurrenceId = getEventOccurrenceKey(event);
     if (!occurrenceId || simulation.eventResolutionLocked) return;
@@ -1378,12 +1362,13 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
 
       {/* Clean HUD: Mission Control & Camera Mode Toggle */}
       <div className="lunar-hud-clean">
-        {onExitToOrbit && (
+        {onExitToOrbit && !insidePanel.visible && (
           <button
             type="button"
             className="lunar-orbit-btn"
             data-tour-target="mission-control"
-            onClick={onExitToOrbit}
+            disabled={outpostControlsDisabled}
+            onClick={saveAndExitToMissionControl}
             title="Return to Mission Control"
           >
             <span>←</span> BACK
@@ -1413,15 +1398,18 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
 
 
         <div className="lunar-actions-group">
-          <button type="button" className="lunar-story-archive-button" data-tour-target="science-notebook" onClick={() => openMissionArchive('notebook')}>
-            Science Notebook <span>{simulation.scienceNotebookIds.length}/{SCIENCE_DISCOVERIES.length}</span>
-          </button>
-          <button type="button" className="lunar-story-photo-button" data-tour-target="photo-mode" onClick={() => openMissionArchive('photos')}>Photo Mode</button>
-          <button type="button" className="lunar-story-lumi-button" data-tour-target="talk-lumi" onClick={talkToLumi}>Talk to Lumi</button>
-          {roverCameraActive && simulation.day >= 12 && (
-            <button type="button" className="lunar-story-sample-button" onClick={() => setIceSampleOpen(true)}>Collect Sample</button>
+          {!insidePanel.visible && !isScienceNotebookOpen && (
+            <button type="button" className="lunar-story-archive-button" data-tour-target="science-notebook" disabled={outpostControlsDisabled} onClick={() => openMissionArchive('notebook')}>
+              Science Notebook <span>{simulation.scienceNotebookIds.length}/{SCIENCE_DISCOVERIES.length}</span>
+            </button>
           )}
-          {activeEventEntries.length > 0 && (
+          {!insidePanel.visible && (
+            <button type="button" className="lunar-story-photo-button" data-tour-target="photo-mode" disabled={outpostControlsDisabled} onClick={() => openMissionArchive('photos')}>Photo Mode</button>
+          )}
+          {!insidePanel.visible && roverCameraActive && simulation.day >= 12 && (
+            <button type="button" className="lunar-story-sample-button" disabled={outpostControlsDisabled} onClick={() => setIceSampleOpen(true)}>Collect Sample</button>
+          )}
+          {!insidePanel.visible && activeEventEntries.length > 0 && (
             <div className="lunar-event-alert-menu-anchor" ref={eventAlertMenuRef}>
               <button
                 type="button"
@@ -1429,6 +1417,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                 aria-expanded={eventAlertListOpen}
                 aria-haspopup="true"
                 aria-controls="lunar-active-event-list"
+                disabled={outpostControlsDisabled}
                 onClick={() => setEventAlertListOpen((open) => !open)}
               >
                 <span className="lunar-event-alert-pulse" aria-hidden="true" />
@@ -1469,7 +1458,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                 data-tour-target="daily-jobs"
                 aria-expanded={dailyTasksOpen}
                 aria-controls="lunar-daily-tasks"
-                disabled={simulation.gameStatus !== 'playing' || simulation.dayPhase !== 'active'}
+                disabled={outpostControlsDisabled || simulation.gameStatus !== 'playing' || simulation.dayPhase !== 'active'}
                 onClick={() => setDailyTasksOpen((open) => !open)}
               >
                 Today’s jobs
@@ -1480,7 +1469,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                 data-tour-target="resources"
                 aria-expanded={statusOpen}
                 aria-controls="lunar-status-drawer"
-                disabled={simulation.dayPhase !== 'active'}
+                disabled={outpostControlsDisabled || simulation.dayPhase !== 'active'}
                 onClick={() => setStatusOpen((open) => !open)}
               >
                  Resources
@@ -1489,32 +1478,21 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
           )}
           {insidePanel.visible ? (
             <div className="lunar-inside-panel">
-              <span>{insidePanel.label}</span>
-              {nearbyTask && (
-                <button
-                  type="button"
-                  className="lunar-inside-action-button lunar-task-entry-button"
-                  title={nearbyTask.title}
-                  aria-label={nearbyTask.recoveryStatus === 'available' ? 'Try Again' : nearbyTaskJourney?.solution ? 'Continue' : getTaskButtonName(nearbyTask)}
-                  onClick={() => activateNearbyTask(nearbyTask)}
-                >
-                  {nearbyTaskButtonLabel}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => engineRef.current?.exitAirlock()}
-              >
+              <span className="lunar-inside-panel-title">LOCATION CONTROLS</span>
+              <button type="button" className="lunar-component-action-button" disabled={outpostControlsDisabled} onClick={() => engineRef.current?.exitAirlock()}>
                 {insidePanel.buttonText || 'EXIT'}
               </button>
-              {insidePanel.componentId === '017' && <button type="button" className="lunar-inside-action-button lunar-radio-call-button" onClick={() => setRadioOpen(true)}>Call Earth</button>}
               <button
                 type="button"
-                className={consoleEdit ? 'lunar-console-edit-active' : ''}
+                className={`lunar-component-action-button ${consoleEdit ? 'active' : ''}`}
                 title="Move / resize the task console"
+                disabled={outpostControlsDisabled}
                 onClick={() => setConsoleEdit((editing) => !editing)}
               >
                 {consoleEdit ? 'DONE' : 'MOVE'}
+              </button>
+              <button type="button" className="lunar-component-action-button lunar-component-photo-button" data-tour-target="photo-mode" disabled={outpostControlsDisabled} onClick={() => openMissionArchive('photos')}>
+                Photo Mode
               </button>
             </div>
           ) : (
@@ -1523,7 +1501,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                 type="button"
                 className={`lunar-btn ${cameraMode === 'first-person' ? 'active' : ''}`}
                 data-tour-target="walk-around"
-                disabled={roverCameraActive || !['idle', 'awaitingDecision'].includes(simulation.eventPhase) || simulation.gameStatus !== 'playing'}
+                disabled={outpostControlsDisabled || roverCameraActive || !['idle', 'awaitingDecision'].includes(simulation.eventPhase) || simulation.gameStatus !== 'playing'}
                 onClick={() => engineRef.current?.toggleCameraMode()}
               >
                 {cameraMode === 'free' ? 'Walk around' : 'Look around'}
@@ -1533,7 +1511,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                 className={`lunar-btn ${roverCameraActive ? 'active' : ''}`}
                 data-tour-target="drive-rover"
                 aria-pressed={roverCameraActive}
-                disabled={!roverCameraActive && (!roverReady || cameraMode === 'interior' || !eventGameplayActive || simulation.gameStatus !== 'playing')}
+                disabled={outpostControlsDisabled || (!roverCameraActive && (!roverReady || cameraMode === 'interior' || !eventGameplayActive || simulation.gameStatus !== 'playing'))}
                 onClick={() => engineRef.current?.toggleRoverCamera()}
                 title={
                   roverCameraActive
@@ -1553,6 +1531,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       </div>
 
       {simulation.dayPhase === 'active' && (
+        simulation.dailyChallenges.some((task) => (
+          (task.status === 'inProgress' && task.urgentDeadlineAtMs !== null)
+          || (task.recoveryStatus === 'active' && task.recoveryDeadlineAtMs !== null)
+        )) || activeEventEntries.some(({ deadlineAtMs }) => deadlineAtMs !== null)
+      ) && (
         <aside className={`lunar-countdown-panel${statusOpen ? ' is-status-open' : ''}${simulation.currentEvent?.triggerSource === 'task' ? ' is-task-event' : ''}`} aria-label="Active task and event timers">
           {simulation.dailyChallenges
             .filter((task) => task.status === 'inProgress' && task.urgentDeadlineAtMs !== null)
@@ -2072,7 +2055,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                   </p>
                 )}
                 {!selectedMapTask && routeEventEntry && routeEventLocation && (
-                  <p className="lunar-map-selected-note">Lumi is taking you to {routeEventLocation.name} for {routeEventEntry.event.name}. The highlighted location is where to go next.</p>
+                  <p className="lunar-map-selected-note">Your route leads to {routeEventLocation.name} for {routeEventEntry.event.name}. The highlighted location is where to go next.</p>
                 )}
               </aside>
             </div>
@@ -2143,8 +2126,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                         simulation.startCriticalTaskRecovery(challenge.id);
                         setTaskJourneys((items) => { const next = { ...items }; delete next[challenge.id]; return next; });
                         const retryMessage = `Let’s try this critical task again at ${challenge.targetComponentName}. We have 45 seconds to finish it!`;
-                        setLumiMilestoneMessage(retryMessage);
-                        speakLumi(retryMessage);
+                        setNarrationMilestoneMessage(retryMessage);
+                        speakNarration(retryMessage);
                         setTaskExperienceId(challenge.id);
                         setTaskExperienceStage('idea');
                       }}
@@ -2490,7 +2473,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
         }}
       />
       <MissionEventCall
-        call={noorCall}
+        call={taskExperienceId ? null : noorCall}
         narration={noorCall?.event ? getEventNarration(noorCall.event) : null}
         location={noorCall?.event ? getEventLocation(noorCall.event) : null}
         onAnswer={() => setNoorCall((call) => call ? { ...call, stage: 'connected' } : null)}
@@ -2507,7 +2490,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
           setMapOpenedAtDecisionCount(simulation.decisionHistory.length);
           setMapOpen(true);
           setEventAlertListOpen(false);
-          speakLumi(`Let’s go to ${location?.name ?? 'the outpost'} and fix the ${event.name} problem together!`);
+          speakNarration(`Let’s go to ${location?.name ?? 'the outpost'} and fix the ${event.name} problem together!`);
         }}
       />
       {taskExperienceId
@@ -2523,11 +2506,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
             startMessage={getTaskStartMessage(experienceTask)}
             initialStage={taskExperienceStage}
             progressState={taskJourneys[experienceTask.id] ?? {}}
-            suspended={eventPhase !== 'idle' || Boolean(noorCall) || Boolean(simulation.warningTaskId)}
+            suspended={false}
             onClose={() => {
               setTaskExperienceId(null);
               if (experienceTask.status === 'completed') {
-                stopLumiSpeech();
+                stopNarrationSpeech();
                 const remaining = simulation.dailyChallenges.filter((task) => task.id !== experienceTask.id && task.status !== 'completed').length;
                 const message = [
                   `Great job! You finished ${experienceTask.title}.`,
@@ -2536,15 +2519,15 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                     ? `${remaining} ${remaining === 1 ? 'task' : 'tasks'} left. Let’s keep going!`
                     : 'You finished all today’s tasks. Amazing work!',
                 ].join(' ');
-                setLumiMilestoneMessage(message);
+                setNarrationMilestoneMessage(message);
                 setTaskRecapSpeaking(true);
-                speakLumi(message, () => setTaskRecapSpeaking(false));
+                speakNarration(message, () => setTaskRecapSpeaking(false));
               } else {
-                stopLumiSpeech();
+                stopNarrationSpeech();
               }
             }}
             onFindLocation={() => {
-              stopLumiSpeech();
+              stopNarrationSpeech();
               if (insidePanel.visible && insidePanel.componentId === experienceTask.targetComponentId) {
                 setTaskExperienceStage('discover');
               } else {
@@ -2567,11 +2550,11 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       })()}
       <MissionStoryMoment
         moment={storyMoment}
-        voiceEnabled={lumiVoiceEnabled}
+        voiceEnabled={narrationVoiceEnabled}
         onClose={() => setStoryMoment(null)}
         onContinue={() => setStoryMoment((current) => current?.next ?? null)}
       />
-      {storyRewardDay !== null && <MissionStoryReward day={storyRewardDay} voiceEnabled={lumiVoiceEnabled} onClose={() => setStoryRewardDay(null)} />}
+      {storyRewardDay !== null && <MissionStoryReward day={storyRewardDay} voiceEnabled={narrationVoiceEnabled} onClose={() => setStoryRewardDay(null)} />}
       <MissionArchive
         open={archiveOpen}
         onClose={() => setArchiveOpen(false)}
@@ -2763,6 +2746,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
           onRestart={() => {
             setMapOpen(false);
             setTaskExperienceId(null);
+            clearOutpostLocalProgress();
             simulation.restart();
           }}
         />

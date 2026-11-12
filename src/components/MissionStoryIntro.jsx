@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import lumiRobotImage from '../assets/images/Screenshot 2026-11-11 130507.png';
-import { createLumiSpeech, createNoorSpeech } from '../utils/missionVoice';
+import { createNoorSpeech } from '../utils/missionVoice';
 import './MissionStoryIntro.css';
 
 const OPENING = [
@@ -43,7 +42,7 @@ export default function MissionStoryIntro({ onBegin }) {
   useEffect(() => {
     if (!voiceEnabled || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return undefined;
     window.speechSynthesis?.cancel();
-    const speech = current.character === 'lumi' ? createLumiSpeech(line) : createNoorSpeech(line);
+    const speech = createNoorSpeech(line);
     window.speechSynthesis?.speak(speech);
     return () => window.speechSynthesis?.cancel();
   }, [current.character, line, step, voiceEnabled]);
@@ -60,7 +59,7 @@ export default function MissionStoryIntro({ onBegin }) {
         <header className="mission-story-topline"><span>MOONBASE ALPHA</span><span>THE QUESTION OF HOME</span></header>
         <div className="mission-story-scene">
           <div className="mission-story-moon" aria-hidden="true" />
-          <CharacterModel character={current.character} />
+          <CharacterModel />
           <div className="mission-story-orbit-mark" aria-hidden="true">⌖</div>
         </div>
         <div className="mission-story-copy">
@@ -86,24 +85,21 @@ export default function MissionStoryIntro({ onBegin }) {
   );
 }
 
-function CharacterModel({ character }) {
-  if (character === 'lumi') {
-    return <div className="mission-character mission-character-lumi" aria-label="Lumi, the friendly helper robot"><img src={lumiRobotImage} alt="Lumi, a cheerful white-and-blue robot waving" /></div>;
-  }
+function CharacterModel() {
   return (
-    <div className={`mission-character mission-character-${character}`} aria-label={character === 'noor' ? '3D portrait of Dr. Noor' : '3D model of Lumi, the helper robot'}>
+    <div className="mission-character mission-character-noor" aria-label="3D portrait of Dr. Noor">
       <Canvas dpr={[1, 1.5]} camera={{ position: [0, 0, 4.4], fov: 36 }} gl={{ alpha: true, antialias: true }}>
         <ambientLight intensity={1.6} />
-        <directionalLight position={[3, 4, 5]} intensity={2.4} color={character === 'noor' ? '#d6faff' : '#c8fff4'} />
-        <pointLight position={[-2, 0, 2]} intensity={1.2} color={character === 'noor' ? '#4cbace' : '#8bf0d3'} />
-        {character === 'noor' ? <NoorModel /> : <LumiModel />}
+        <directionalLight position={[3, 4, 5]} intensity={2.4} color="#d6faff" />
+        <pointLight position={[-2, 0, 2]} intensity={1.2} color="#4cbace" />
+        <NoorModel />
       </Canvas>
     </div>
   );
 }
 
-export function MissionStoryAvatar({ character }) {
-  return <CharacterModel character={character === 'lumi' ? 'lumi' : 'noor'} />;
+export function MissionStoryAvatar() {
+  return <CharacterModel />;
 }
 
 function NoorModel() {
@@ -125,26 +121,6 @@ function NoorModel() {
       <mesh position={[0, -0.14, 0.48]}><torusGeometry args={[0.1, 0.025, 8, 24]} /><meshStandardMaterial color="#b7f4df" emissive="#35a9a0" emissiveIntensity={0.7} /></mesh>
       <mesh position={[-0.55, 0.4, 0.08]} rotation={[0.2, 0, -0.28]}><capsuleGeometry args={[0.07, 0.38, 6, 12]} /><meshStandardMaterial color="#e1b87d" roughness={0.62} /></mesh>
       <mesh position={[-0.51, 0.46, 0]}><sphereGeometry args={[0.12, 16, 16]} /><meshStandardMaterial color="#70dbd1" metalness={0.45} roughness={0.35} /></mesh>
-    </group>
-  );
-}
-
-function LumiModel() {
-  const body = useRef(null);
-  useFrame(({ clock }) => { if (body.current) body.current.position.y = Math.sin(clock.elapsedTime * 1.5) * 0.06; });
-  return (
-    <group ref={body} position={[0, -0.08, 0]}>
-      <mesh position={[0, 0, 0]} castShadow><boxGeometry args={[1.05, 0.88, 0.62]} /><meshStandardMaterial color="#cbdde0" metalness={0.38} roughness={0.32} /></mesh>
-      <mesh position={[0, 0.04, 0.33]}><boxGeometry args={[0.74, 0.48, 0.05]} /><meshStandardMaterial color="#102632" emissive="#0b5263" emissiveIntensity={0.38} /></mesh>
-      <mesh position={[-0.17, 0.08, 0.37]}><sphereGeometry args={[0.055, 18, 12]} /><meshStandardMaterial color="#77f5df" emissive="#25bfa6" emissiveIntensity={1.5} /></mesh>
-      <mesh position={[0.17, 0.08, 0.37]}><sphereGeometry args={[0.055, 18, 12]} /><meshStandardMaterial color="#77f5df" emissive="#25bfa6" emissiveIntensity={1.5} /></mesh>
-      <mesh position={[0, -0.12, 0.38]}><torusGeometry args={[0.1, 0.018, 8, 24, Math.PI]} /><meshStandardMaterial color="#8beedc" /></mesh>
-      <mesh position={[0, 0.52, 0]}><cylinderGeometry args={[0.035, 0.035, 0.3, 12]} /><meshStandardMaterial color="#96e9dd" metalness={0.5} /></mesh>
-      <mesh position={[0, 0.7, 0]}><sphereGeometry args={[0.11, 20, 16]} /><meshStandardMaterial color="#a4fff0" emissive="#4ed5c3" emissiveIntensity={1.5} /></mesh>
-      <mesh position={[-0.4, -0.54, 0]}><cylinderGeometry args={[0.11, 0.14, 0.25, 16]} /><meshStandardMaterial color="#7aa3af" metalness={0.55} /></mesh>
-      <mesh position={[0.4, -0.54, 0]}><cylinderGeometry args={[0.11, 0.14, 0.25, 16]} /><meshStandardMaterial color="#7aa3af" metalness={0.55} /></mesh>
-      <mesh position={[-0.67, -0.06, 0]}><sphereGeometry args={[0.11, 16, 16]} /><meshStandardMaterial color="#8bf0d3" emissive="#318d7a" emissiveIntensity={0.6} /></mesh>
-      <mesh position={[0.67, -0.06, 0]}><sphereGeometry args={[0.11, 16, 16]} /><meshStandardMaterial color="#8bf0d3" emissive="#318d7a" emissiveIntensity={0.6} /></mesh>
     </group>
   );
 }

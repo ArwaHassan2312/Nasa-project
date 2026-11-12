@@ -9,12 +9,9 @@
 .mission-story-moon::after { width: 24%; aspect-ratio: 1; right: 22%; bottom: 25%; }
 .mission-character { position: relative; z-index: 1; width: min(88%, 430px); height: min(60vh, 470px); filter: drop-shadow(0 18px 28px rgba(0,0,0,0.35)); animation: story-character-in 500ms cubic-bezier(.2,.7,.2,1) both; }
 .mission-character canvas { width: 100%; height: 100%; }
-.mission-character img { display: block; width: 100%; height: 100%; object-fit: contain; object-position: center bottom; filter: drop-shadow(0 18px 28px rgba(0,0,0,.3)); animation: lumi-image-float 3s ease-in-out infinite; }
-.mission-character-lumi { width: min(80%, 360px); height: min(46vh, 340px); align-self: end; margin-bottom: 42px; }
 .mission-story-orbit-mark { position: absolute; z-index: 1; left: 12%; bottom: 13%; color: rgba(136, 234, 228, 0.58); font-size: 3rem; animation: story-orbit 18s linear infinite; }
 .mission-story-copy { position: relative; z-index: 1; display: flex; flex-direction: column; justify-content: center; padding: 86px clamp(24px, 4vw, 56px) 36px; border-left: 1px solid rgba(124, 187, 202, 0.16); background: linear-gradient(95deg, rgba(10, 25, 39, 0.48), rgba(9, 21, 34, 0.82)); }
 .mission-story-speaker { color: #70dce4; font: 700 0.7rem/1.4 var(--lunar-font-mono, monospace); letter-spacing: 0.15em; }
-.mission-story-speaker.is-lumi { color: #a5f1cf; }
 .mission-story-copy h1 { margin: 16px 0 12px; color: #f2fbff; font-size: clamp(1.7rem, 3.2vw, 2.55rem); font-weight: 700; line-height: 1.08; letter-spacing: -0.03em; }
 .mission-story-copy > p { min-height: 5.5em; margin: 0; color: #c2d5de; font-size: clamp(1rem, 1.4vw, 1.13rem); line-height: 1.7; }
 .mission-story-name-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 24px; }
@@ -36,7 +33,6 @@
 @keyframes story-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes story-character-in { from { opacity: 0; transform: translateY(14px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes story-orbit { to { transform: rotate(360deg); } }
-@keyframes lumi-image-float { 50% { transform: translateY(-7px); } }
-@media (max-width: 760px) { .mission-story-intro { grid-template-columns: 1fr; grid-template-rows: minmax(210px, 30vh) 1fr; min-height: min(760px, calc(100dvh - 24px)); } .mission-story-topline { top: 16px; left: 18px; right: 18px; font-size: 0.57rem; } .mission-story-scene { min-height: 220px; } .mission-story-moon { width: min(42vw, 250px); } .mission-character { width: 60%; height: 250px; } .mission-character-lumi { width: 50%; height: 190px; margin-bottom: 0; } .mission-story-copy { padding: 25px 22px 20px; border-top: 1px solid rgba(124, 187, 202, 0.16); border-left: 0; } .mission-story-copy h1 { margin-top: 10px; } .mission-story-copy > p { min-height: auto; } .mission-story-progress { margin-top: 18px; } }
+@media (max-width: 760px) { .mission-story-intro { grid-template-columns: 1fr; grid-template-rows: minmax(210px, 30vh) 1fr; min-height: min(760px, calc(100dvh - 24px)); } .mission-story-topline { top: 16px; left: 18px; right: 18px; font-size: 0.57rem; } .mission-story-scene { min-height: 220px; } .mission-story-moon { width: min(42vw, 250px); } .mission-character { width: 60%; height: 250px; } .mission-story-copy { padding: 25px 22px 20px; border-top: 1px solid rgba(124, 187, 202, 0.16); border-left: 0; } .mission-story-copy h1 { margin-top: 10px; } .mission-story-copy > p { min-height: auto; } .mission-story-progress { margin-top: 18px; } }
 @media (max-width: 420px) { .mission-story-name-fields { grid-template-columns: 1fr; gap: 8px; margin-top: 16px; } .mission-story-actions button { padding: 0 11px; font-size: 0.68rem; } }
-@media (prefers-reduced-motion: reduce) { .mission-story-backdrop,.mission-character,.mission-story-orbit-mark,.mission-character img { animation: none; } .mission-story-actions button { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .mission-story-backdrop,.mission-character,.mission-story-orbit-mark { animation: none; } .mission-story-actions button { transition: none; } }

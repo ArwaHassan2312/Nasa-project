@@ -38,18 +38,18 @@ export function getStoryChapter(day: number): StoryChapter {
     ?? STORY_CHAPTERS[STORY_CHAPTERS.length - 1];
 }
 
-export const STORY_DAY_BEATS: Record<number, { character: 'noor' | 'lumi'; text: string }> = {
+export const STORY_DAY_BEATS: Record<number, { character: 'noor'; text: string }> = {
   2: { character: 'noor', text: 'The first small problem is part of exploration. Check the system, choose a safe fix, and we will learn from the result.' },
-  3: { character: 'lumi', text: 'Beep! Look at that gray dust! It is called Moon dust. It can stick to things and scratch surfaces.' },
+  3: { character: 'noor', text: 'Look at that gray dust! It is called Moon dust. It can stick to things and scratch surfaces.' },
   5: { character: 'noor', text: 'You have had time to explore the base. Notice how a small hop carries you farther here? The Moon’s pull is much weaker than Earth’s.' },
-  6: { character: 'lumi', text: 'Beep! Battery check! The dark days are coming, so let’s save some power.' },
+  6: { character: 'noor', text: 'Battery check! The dark days are coming, so let’s save some power.' },
   7: { character: 'noor', text: 'A solar storm may send extra radiation across the surface. Let’s keep an eye on the shelter and plan outdoor work carefully.' },
-  8: { character: 'lumi', text: 'The Sun is going down. I saved your power notes. You are doing great!' },
+  8: { character: 'noor', text: 'The Sun is going down. Your power notes are saved. You are doing great!' },
   9: { character: 'noor', text: 'The lunar night is close. Let’s check the batteries and heating tasks together before the sunlight fades.' },
   10: { character: 'noor', text: 'Sunrise! The panels can make power again. Your careful energy choices gave us valuable data.' },
   11: { character: 'noor', text: 'We have reached the final chapter. Let’s visit the shadowed crater and learn what the ice clues mean.' },
-  12: { character: 'lumi', text: 'We made it to the crater! Pick a marked spot and collect a sample. I will save it in your Science Notebook.' },
-  13: { character: 'lumi', text: 'Wow! The sample has water ice! I am putting the news in your Science Notebook.' },
+  12: { character: 'noor', text: 'We made it to the crater! Pick a marked spot and collect a sample. It will be saved in your Science Notebook.' },
+  13: { character: 'noor', text: 'The sample has water ice! The discovery is being added to your Science Notebook.' },
   14: { character: 'noor', text: 'Water ice could be cleaned to make drinking water. Scientists would need to test how much energy that takes.' },
   15: { character: 'noor', text: 'It is time to send your final report. Every result matters, including the things that did not go to plan.' },
 };
@@ -115,29 +115,23 @@ export const MOON_FACTS = [
   'Future explorers hope to use some lunar materials instead of carrying everything from Earth.',
 ];
 
-export const EVENT_NARRATION: Record<string, { lumi: string; noor: string }> = {
+export const EVENT_NARRATION: Record<string, { noor: string }> = {
   'solar_storm': {
-    lumi: 'Beep-beep! The Sun is having a storm. Let’s get ready!',
     noor: 'The Sun has sent out a burst of tiny charged particles. Earth has air and a magnetic field for protection. The Moon has very little natural shielding, so choose a careful plan.',
   },
   'lunar_night': {
-    lumi: 'The Sun is going away. I will check our saved power!',
     noor: 'Solar panels cannot make electricity in darkness. Your choice now will affect how much power is left for later.',
   },
   'power_failure': {
-    lumi: 'Beep! The power numbers look different. Let’s check the base.',
     noor: 'A weak connection or a tired power source can affect the whole base. Let’s compare the options and protect the systems that matter most.',
   },
   'water_leak': {
-    lumi: 'Drip, drip! Water is escaping. Let’s stop it!',
     noor: 'Water is precious on the Moon. Find a safe way to stop the leak and save as much as you can.',
   },
   'fire_lab': {
-    lumi: 'Smoke alert! There is a fire in the lab. Let’s act quickly and stay safe.',
     noor: 'A fire in a sealed habitat needs a quick, careful response. Protect the air system while you stop the fire.',
   },
   'water_ice_exploration': {
-    lumi: 'I found a clue in the cold crater! Could it be ice?',
     noor: 'The signal may point to water ice, but a reading is only a clue. Choose how much time and energy to spend checking the site.',
   },
 };
@@ -153,7 +147,6 @@ export function getEventNarration(event: { id?: string; sourceEventId?: string; 
   if (name.includes('water')) return EVENT_NARRATION.water_leak;
   if (name.includes('fire')) return EVENT_NARRATION.fire_lab;
   return {
-    lumi: `Beep! Something needs help: ${event.name ?? 'a base system'}. Let’s take a look!`,
     noor: 'Look at what changed, then choose a safe plan. Your observation will help us understand the Moon better.',
   };
 }

@@ -1,6 +1,6 @@
 .daily-task-experience-backdrop {
   position: fixed;
-  z-index: 2200;
+  z-index: 7000;
   inset: 0;
   display: grid;
   place-items: center;

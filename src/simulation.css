@@ -745,6 +745,7 @@
 #root .simulation-event-modal .simulation-decision:nth-child(2) { border-left: 4px solid #7dd7f0; }
 #root .simulation-event-modal .simulation-decision:nth-child(3) { border-left: 4px solid #f1cf7c; }
 #root .simulation-event-modal .simulation-decision:hover { transform: translateX(3px); border-color: rgba(145, 244, 222, .82); background: linear-gradient(110deg, rgba(34, 86, 86, .98), rgba(18, 48, 59, .99)); box-shadow: 0 9px 23px rgba(0,0,0,.24), 0 0 16px rgba(83, 207, 196, .12); }
+#root .simulation-event-modal .simulation-decision.is-allow:hover { border-color: rgba(120, 178, 255, .95); color: #f4f8ff; background: linear-gradient(110deg, #234d86, #173960); box-shadow: 0 9px 24px rgba(0,0,0,.28), 0 0 18px rgba(68, 139, 244, .28); }
 #root .simulation-event-modal .simulation-decision:focus-visible { outline: 3px solid rgba(142, 245, 228, .82); outline-offset: 2px; }
 #root .simulation-event-modal .simulation-decision-id { width: 38px; height: 38px; color: #103532; background: linear-gradient(145deg, #d6ffec, #7bdfc6); box-shadow: 0 3px 12px rgba(86, 215, 196, .2); font-size: .8rem; font-weight: 800; }
 #root .simulation-event-modal .simulation-decision-copy { min-width: 0; gap: 7px; color: #d4e3e6; font-size: .82rem; line-height: 1.5; }

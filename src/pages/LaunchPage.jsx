@@ -84,7 +84,8 @@ import MissionStoryIntro from '../components/MissionStoryIntro';
 import OutpostTutorial from '../components/OutpostTutorial';
 import '../components/space/Ui.css';
 
-const LunarOutpost = lazy(() => import('../components/lunar/LunarOutpost'));
+const preloadLunarOutpost = () => import('../components/lunar/LunarOutpost');
+const LunarOutpost = lazy(preloadLunarOutpost);
 
 // phases: 'intro' -> 'select' -> 'briefing' -> 'preparing' -> 'tutorial' -> 'lunar'
 export default function LaunchPage({
@@ -96,19 +97,30 @@ export default function LaunchPage({
   const [selected, setSelected] = useState(null);
   const [introFinished, setIntroFinished] = useState(false);
   const [commanderProfile, setCommanderProfile] = useState({ commanderName: 'Commander', baseName: 'Moonbase Alpha' });
+  const [resumeMissionId, setResumeMissionId] = useState(null);
   const tutorialDecisionRef = useRef(null);
   tutorialDecisionRef.current = { phase };
 
   const handleStart = useCallback(() => setPhase('select'), []);
   const finishIntro = useCallback(() => setIntroFinished(true), []);
 
-  const handleLaunchMission = useCallback((id) => {
+  const handleLaunchMission = useCallback(async (id) => {
     if (id === 'moon') {
-      setPhase('briefing');
+      if (resumeMissionId === id) {
+        await preloadLunarOutpost();
+        const profile = { commanderName: simulation.commanderName, baseName: simulation.baseName };
+        setCommanderProfile(profile);
+        setPhase('tutorial');
+      } else {
+        void preloadLunarOutpost();
+        setPhase('briefing');
+      }
+      setResumeMissionId(null);
     }
-  }, []);
+  }, [resumeMissionId, simulation.baseName, simulation.commanderName]);
 
-  const beginMission = useCallback((profile) => {
+  const beginMission = useCallback(async (profile) => {
+    await preloadLunarOutpost();
     setCommanderProfile(profile);
     setPhase('preparing');
   }, []);
@@ -130,6 +142,7 @@ export default function LaunchPage({
   }, [handleLaunchMission]);
 
   const handleExitToOrbit = useCallback(() => {
+    setResumeMissionId('moon');
     onMissionPause?.();
     setPhase('select');
   }, [onMissionPause]);

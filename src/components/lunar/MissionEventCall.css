@@ -1,8 +1,9 @@
 .mission-event-call-backdrop { position: fixed; z-index: 6500; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(2, 8, 16, .82); backdrop-filter: blur(9px); animation: mission-event-call-in .24s ease-out both; }
 .mission-event-incoming-card,.mission-event-call-screen { position: relative; width: min(780px, 100%); overflow: hidden; border: 1px solid rgba(106, 229, 218, .55); border-radius: 20px; color: #edfaff; background: linear-gradient(145deg, #102635, #08141f 72%); box-shadow: 0 24px 90px rgba(0,0,0,.68), 0 0 55px rgba(80, 219, 213, .16); }
-.mission-event-incoming-card { display: grid; grid-template-columns: 190px 1fr; align-items: center; min-height: 270px; padding: 22px 30px; }
-.mission-event-incoming-lumi { height: 205px; }
-.mission-event-incoming-lumi .mission-character { width: 100%; height: 100%; }
+.mission-event-incoming-card { display: grid; grid-template-columns: 150px 1fr; align-items: center; min-height: 250px; padding: 22px 30px; }
+.mission-event-incoming-signal { display: grid; justify-items: center; gap: 10px; color: #9de7dc; }
+.mission-event-incoming-signal span { display: grid; width: 86px; height: 86px; place-items: center; border: 1px solid rgba(142, 233, 210, .42); border-radius: 50%; color: #a8f0df; background: radial-gradient(circle, rgba(49, 139, 130, .28), rgba(8, 29, 40, .32) 70%); box-shadow: 0 0 0 10px rgba(75, 173, 158, .06), 0 0 30px rgba(80, 219, 213, .12); font-size: 2.5rem; }
+.mission-event-incoming-signal small { color: #8db9c1; font: 700 .54rem/1.3 var(--lunar-font-mono, monospace); letter-spacing: .12em; }
 .mission-event-call-copy { padding: 10px 4px; }
 .mission-event-call-kicker { color: #8ee9d2; font: 700 .67rem/1.5 var(--lunar-font-mono, monospace); letter-spacing: .12em; }
 .mission-event-call-copy h2,.mission-event-tv-message h2 { margin: 8px 0 10px; color: #f0fbff; font-size: clamp(1.35rem, 3vw, 2rem); }
@@ -27,4 +28,116 @@
 .mission-event-tv-message > small { display: block; margin-top: 9px; color: #a9c5cc; line-height: 1.45; }
 @keyframes mission-event-call-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes mission-event-scan { from { transform: translateY(-14px); } to { transform: translateY(14px); } }
-@media (max-width: 650px) { .mission-event-incoming-card { grid-template-columns: 110px 1fr; padding: 16px; } .mission-event-incoming-lumi { height: 150px; } .mission-event-call-screen > header { flex-wrap: wrap; font-size: .56rem; } .mission-event-tv-body { grid-template-columns: 1fr; } .mission-event-tv-portrait { min-height: 210px; max-height: 240px; } .mission-event-tv-portrait .mission-character { height: 210px; } .mission-event-call-screen > footer { align-items: stretch; flex-direction: column; } }
+@media (max-width: 650px) { .mission-event-incoming-card { grid-template-columns: 86px 1fr; padding: 16px; } .mission-event-incoming-signal span { width: 62px; height: 62px; font-size: 1.8rem; } .mission-event-incoming-signal small { font-size: .42rem; text-align: center; } .mission-event-call-screen > header { flex-wrap: wrap; font-size: .56rem; } .mission-event-tv-body { grid-template-columns: 1fr; } .mission-event-tv-portrait { min-height: 210px; max-height: 240px; } .mission-event-tv-portrait .mission-character { height: 210px; } .mission-event-call-screen > footer { align-items: stretch; flex-direction: column; } }
+
+.mission-event-incoming-card {
+  width: min(700px, 100%);
+  min-height: 278px;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 26px;
+  padding: 30px 36px;
+  border-color: rgba(92, 175, 202, .5);
+  border-radius: 22px;
+  background:
+    radial-gradient(ellipse at 12% 48%, rgba(30, 104, 127, .3), transparent 42%),
+    linear-gradient(145deg, #102b3d, #081622 72%);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .68), 0 0 48px rgba(57, 145, 186, .15);
+}
+.mission-event-incoming-card::before {
+  position: absolute;
+  top: 0;
+  left: 9%;
+  width: 82%;
+  height: 1px;
+  content: '';
+  background: linear-gradient(90deg, transparent, rgba(126, 204, 231, .72), transparent);
+}
+.mission-event-incoming-signal { position: relative; gap: 13px; }
+.mission-event-incoming-signal span {
+  position: relative;
+  width: 94px;
+  height: 94px;
+  border-color: rgba(106, 197, 218, .68);
+  color: #b5edf3;
+  background: radial-gradient(circle at 50% 44%, rgba(42, 129, 158, .34), rgba(8, 27, 41, .9) 72%);
+  box-shadow: 0 0 0 7px rgba(59, 151, 181, .07), 0 0 28px rgba(64, 172, 204, .18), inset 0 0 22px rgba(72, 168, 194, .12);
+}
+.mission-event-incoming-signal span::before {
+  position: absolute;
+  inset: -10px;
+  border: 1px solid rgba(113, 196, 218, .3);
+  border-radius: 50%;
+  content: '';
+  animation: mission-event-signal-pulse 2.4s ease-out infinite;
+}
+.mission-event-incoming-signal span::after {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid #0b1b29;
+  border-radius: 50%;
+  content: '';
+  background: #7ce5c2;
+  box-shadow: 0 0 12px rgba(124, 229, 194, .7);
+}
+.mission-event-incoming-signal small { color: #a4c9d2; font-size: .58rem; letter-spacing: .15em; }
+.mission-event-call-copy { padding: 8px 0; }
+.mission-event-call-copy .mission-event-call-kicker {
+  display: inline-block;
+  padding: 5px 9px;
+  border: 1px solid rgba(87, 166, 191, .3);
+  border-radius: 6px;
+  color: #8fd5e3;
+  background: rgba(23, 66, 86, .34);
+  font-size: .6rem;
+  letter-spacing: .14em;
+}
+.mission-event-call-copy h2 { margin: 13px 0 9px; font-size: clamp(1.55rem, 3vw, 2.15rem); letter-spacing: -.025em; }
+.mission-event-call-copy p { margin: 0 0 20px; color: #bbd0dc; font-size: .94rem; line-height: 1.6; }
+.mission-event-call-copy p strong {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid rgba(92, 171, 202, .3);
+  border-radius: 5px;
+  color: #b4e6f4;
+  background: rgba(33, 83, 112, .38);
+}
+.mission-event-incoming-card .mission-event-call-button {
+  min-height: 44px;
+  padding: 10px 17px;
+  border-color: rgba(93, 179, 210, .62);
+  border-radius: 9px;
+  color: #e5f5fb;
+  background: linear-gradient(135deg, #174768, #12344f);
+  box-shadow: 0 6px 20px rgba(13, 82, 125, .22), inset 0 1px rgba(255, 255, 255, .08);
+}
+.mission-event-incoming-card .mission-event-call-button:hover {
+  border-color: #8acdea;
+  background: linear-gradient(135deg, #205d83, #174569);
+}
+@keyframes mission-event-signal-pulse {
+  0% { transform: scale(.82); opacity: .8; }
+  100% { transform: scale(1.28); opacity: 0; }
+}
+@media (max-width: 650px) {
+  .mission-event-incoming-card { grid-template-columns: 82px minmax(0, 1fr); gap: 15px; min-height: 0; padding: 22px 18px; border-radius: 17px; }
+  .mission-event-incoming-signal { gap: 10px; }
+  .mission-event-incoming-signal span { width: 62px; height: 62px; font-size: 1.8rem; }
+  .mission-event-incoming-signal small { font-size: .44rem; }
+  .mission-event-call-copy { padding: 2px 0; }
+  .mission-event-call-copy h2 { margin-top: 10px; }
+  .mission-event-call-copy p { margin-bottom: 15px; font-size: .86rem; }
+  .mission-event-incoming-card .mission-event-call-button { width: 100%; padding-inline: 10px; font-size: .76rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mission-event-incoming-signal span::before { animation: none; }
+}
+
+.mission-event-incoming-card {
+  display: block;
+  width: min(560px, 100%);
+  min-height: 0;
+  padding: 30px clamp(22px, 5vw, 42px);
+}
