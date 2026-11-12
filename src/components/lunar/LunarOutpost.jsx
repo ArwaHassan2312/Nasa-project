@@ -9,6 +9,7 @@ import { IceSampleActivity, MissionArchive, MissionStoryMoment, RadioCall } from
 import { createLumiSpeech } from '../../utils/missionVoice';
 import MissionEventCall from './MissionEventCall';
 import MissionStoryReward from '../MissionStoryReward';
+import { fetchLocalNetwork } from '../../utils/localNetworkFetch';
 import './LunarOutpost.css';
 import '../../simulation.css';
 
@@ -32,6 +33,7 @@ const TASK_EVENT_TESTS = [
   ['solar-array-inspection', 'Solar array inspection', 'Power failure'],
   ['habitat-waterline-inspection', 'Waterline inspection', 'Water leak'],
 ];
+const MULTIPLAYER_API = (sessionStorage.getItem('lunar-room-api') || import.meta.env.VITE_MULTIPLAYER_API_URL || `http://${window.location.hostname}:3001`).replace(/\/$/, '');
 const RESOURCE_LABELS = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
   habitat: 'Commander safety', equipment: 'Commander safety', health: 'Commander safety',
@@ -218,6 +220,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const [taskExperienceStage, setTaskExperienceStage] = useState('idea');
   const [taskJourneys, setTaskJourneys] = useState({});
   const [taskOutcomeStart, setTaskOutcomeStart] = useState(null);
+  const [crewTaskNotification, setCrewTaskNotification] = useState(null);
   const [taskRecapSpeaking, setTaskRecapSpeaking] = useState(false);
   const [storyMoment, setStoryMoment] = useState(null);
   const [dayOpeningMessage, setDayOpeningMessage] = useState('');
@@ -256,6 +259,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const dayStartClockRef = useRef({ day: simulation.day, at: Date.now() });
   const pendingScienceTitlesRef = useRef([]);
   const queuedScienceIdsRef = useRef(new Set());
+  const multiplayerEventIdsRef = useRef(new Set());
+  const crewNotificationTimerRef = useRef(null);
   const observedTaskDayRef = useRef(simulation.day);
   const [taskMarkerTargets, setTaskMarkerTargets] = useState([]);
   const [mapSnapshot, setMapSnapshot] = useState(null);
@@ -342,6 +347,36 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   useEffect(() => {
     if (commanderProfile) simulation.setMissionProfile(commanderProfile);
   }, [commanderProfile, simulation.setMissionProfile]);
+  useEffect(() => {
+    if (!commanderProfile?.multiplayer || !commanderProfile.roomCode) return undefined;
+    let live = true;
+    const pollCrew = async () => {
+      try {
+        const response = await fetchLocalNetwork(`${MULTIPLAYER_API}/api/rooms/${encodeURIComponent(commanderProfile.roomCode)}`);
+        if (!response.ok) return;
+        const { room } = await response.json();
+        if (!live) return;
+        for (const event of room.events ?? []) {
+          if (event.type !== 'task-completed' || multiplayerEventIdsRef.current.has(event.id)) continue;
+          multiplayerEventIdsRef.current.add(event.id);
+          if (event.playerId === commanderProfile.playerId) continue;
+          const task = simulation.dailyChallenges.find((entry) => entry.id === event.taskId);
+          if (task) {
+            simulation.completeDailyChallenge(task.id, task.targetComponentId, undefined, event.playerName);
+            setCrewTaskNotification({ id: event.id, message: `${event.playerName} completed ${task.title}` });
+            window.clearTimeout(crewNotificationTimerRef.current);
+            crewNotificationTimerRef.current = window.setTimeout(() => {
+              setCrewTaskNotification((current) => current?.id === event.id ? null : current);
+            }, 2000);
+          }
+        }
+      } catch { /* The local mission remains playable while the relay reconnects. */ }
+    };
+    void pollCrew();
+    const timer = window.setInterval(pollCrew, 1200);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [commanderProfile, simulation.dailyChallenges, simulation.completeDailyChallenge]);
+  useEffect(() => () => window.clearTimeout(crewNotificationTimerRef.current), []);
   useEffect(() => {
     if (!storyMoment && storyRewardDay === null && !archiveOpen && !iceSampleOpen && !radioOpen && !noorCall) return undefined;
     simulation.setStoryPaused(true);
@@ -1387,6 +1422,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     >
       <div className="lunar-grain" />
       <div className="lunar-shade" />
+      {crewTaskNotification && <div key={crewTaskNotification.id} className="lunar-crew-task-notification" role="status" aria-live="polite">{crewTaskNotification.message}</div>}
       {simulation.day >= 8 && simulation.day < 10 && simulation.dayPhase === 'active' && <div className="lunar-story-night-overlay" aria-hidden="true" />}
       {simulation.day === 10 && simulation.dayPhase === 'active' && <div className="lunar-story-sunrise-overlay" aria-hidden="true" />}
     {activeEventVisuals.some(({ eventId }) => eventId === 'lunar_night') && (
@@ -2664,6 +2700,13 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
             onComplete={(solution) => {
               setTaskOutcomeStart({ taskId: experienceTask.id, resources: simulation.resources, condition: simulation.systemConditions[experienceTask.affectedSystem] });
               completeDailyChallenge(experienceTask.id, experienceTask.targetComponentId, solution);
+              if (commanderProfile?.multiplayer && commanderProfile.roomCode) {
+                void fetchLocalNetwork(`${MULTIPLAYER_API}/api/rooms/${encodeURIComponent(commanderProfile.roomCode)}/tasks`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ playerId: commanderProfile.playerId, taskId: experienceTask.id, title: experienceTask.title }),
+                }).catch(() => {});
+              }
             }}
           />
         ) : null;

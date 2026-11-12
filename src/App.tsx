@@ -10,6 +10,7 @@ export default function App() {
     <LaunchPage
       simulation={simulation}
       onMissionStart={(profile) => {
+        simulation.restart(profile?.multiplayer ? profile.seed : undefined);
         simulation.setMissionProfile(profile);
         setMissionActive(true);
       }}

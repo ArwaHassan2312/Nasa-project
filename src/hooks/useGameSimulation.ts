@@ -2248,7 +2248,7 @@ export function useGameSimulation({
     });
   }, []);
 
-  const completeDailyChallenge = useCallback((challengeId: string, componentId: string, selectedSolution?: { resourceEffects?: Partial<Record<ResourceKey, number>>; conditionDelta?: number }) => {
+  const completeDailyChallenge = useCallback((challengeId: string, componentId: string, selectedSolution?: { resourceEffects?: Partial<Record<ResourceKey, number>>; conditionDelta?: number }, remotePlayerName?: string) => {
     setState((currentState) => {
       if (
         currentState.gameStatus !== 'playing' ||
@@ -2261,7 +2261,7 @@ export function useGameSimulation({
       const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
       if (
         !challenge ||
-        (challenge.status !== 'inProgress' && challenge.status !== 'overdue') ||
+        (challenge.status !== 'inProgress' && challenge.status !== 'overdue' && !(remotePlayerName && challenge.status === 'available')) ||
         (challenge.recoveryStatus === 'available') ||
         (challenge.priority === 'critical'
           && TASK_CONSEQUENCE_EVENTS.some((event) => event.riskTaskIds?.includes(challenge.id))
@@ -2319,7 +2319,9 @@ export function useGameSimulation({
         : taskConditionChange < 0
           ? ` ${SYSTEM_DISPLAY_NAMES[challenge.affectedSystem]} is working ${Math.abs(taskConditionChange)}% less well.`
           : '';
-      const taskSuccessFeedback = `You did it! ${challenge.title} is done. ${challenge.completionFeedback}${taskResourceSummary}${taskConditionSummary}`;
+      const taskSuccessFeedback = remotePlayerName
+        ? `${remotePlayerName} completed ${challenge.title}. The task is done for the whole crew.`
+        : `You did it! ${challenge.title} is done. ${challenge.completionFeedback}${taskResourceSummary}${taskConditionSummary}`;
 
       let nextState: GameState = {
         ...currentState,
@@ -2362,7 +2364,9 @@ export function useGameSimulation({
             preventedEscalation: emergencyPrevented,
           },
         ],
-        challengeFeedback: challenge.recoveryStatus === 'active'
+        challengeFeedback: remotePlayerName
+          ? taskSuccessFeedback
+          : challenge.recoveryStatus === 'active'
           ? `Great recovery! You won back half the resources from this job. ${challenge.completionFeedback}`
           : emergencyPrevented
           ? `Nice work! You finished ${challenge.title} in time and stopped a bigger problem. ${challenge.completionFeedback}`
@@ -2380,9 +2384,9 @@ export function useGameSimulation({
     });
   }, []);
 
-  const restart = useCallback(() => {
+  const restart = useCallback((nextSeed?: number) => {
     setState((current) => ({
-      ...createInitialState(seed ?? createRandomSeed()),
+      ...createInitialState(nextSeed ?? seed ?? createRandomSeed()),
       commanderName: current.commanderName,
       baseName: current.baseName,
     }));
