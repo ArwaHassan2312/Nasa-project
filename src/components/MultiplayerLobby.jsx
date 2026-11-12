@@ -3,9 +3,18 @@ import './MultiplayerLobby.css';
 import { fetchLocalNetwork } from '../utils/localNetworkFetch';
 
 const DEFAULT_API = (import.meta.env.VITE_MULTIPLAYER_API_URL || `http://${window.location.hostname}:3001`).replace(/\/$/, '');
+const createPlayerId = () => {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  if (globalThis.crypto?.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+};
 const playerIdForTab = () => {
   let id = sessionStorage.getItem('lunar-player-id');
-  if (!id) { id = crypto.randomUUID(); sessionStorage.setItem('lunar-player-id', id); }
+  if (!id) { id = createPlayerId(); sessionStorage.setItem('lunar-player-id', id); }
   return id;
 };
 
