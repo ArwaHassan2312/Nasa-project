@@ -11,7 +11,7 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   equipment: 'Outpost tools',
   health: 'Commander safety',
   radProtection: 'Commander safety',
-  comms: 'Power',
+  comms: 'Radio signal',
   science: 'Science',
   emergencyReserve: 'Water',
   potentialWater: 'Water',
@@ -20,6 +20,7 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
 const RESOURCE_SYSTEMS: Partial<Record<ResourceKey, string[]>> = {
   power: ['power'],
   battery: ['power'],
+  comms: ['equipment'],
   oxygen: ['lifeSupport'],
   water: ['water'],
   emergencyReserve: ['water'],

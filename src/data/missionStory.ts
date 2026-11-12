@@ -98,7 +98,7 @@ export const SCIENCE_DISCOVERIES = [
   { id: 'solar-radiation', title: 'Solar Radiation', day: 7, science: 36, summary: 'The Moon has little natural protection from charged particles released by the Sun.', didYouKnow: 'Earth’s atmosphere and magnetic field shield much of this radiation.' },
   { id: 'temperature-swings', title: 'Temperature Swings', day: 8, science: 38, summary: 'The lunar surface can become very hot in sunlight and very cold in darkness.', didYouKnow: 'A lunar day and night each last about two Earth weeks.' },
   { id: 'moon-night', title: 'The Long Moon Night', day: 9, science: 40, summary: 'Some places on the Moon go without sunlight for many Earth days.', didYouKnow: 'Energy storage is one way future bases could prepare for the dark.' },
-  { id: 'water-ice', title: 'Water Ice', day: 13, science: 45, eventId: 'water_ice_exploration', summary: 'Very cold, shadowed craters may hold water ice that has been there for a long time.', didYouKnow: 'Water could be used for drinking and, with special equipment, split into oxygen and hydrogen.' },
+  { id: 'water-ice', title: 'Water Ice', day: 13, science: 45, summary: 'Very cold, shadowed craters may hold water ice that has been there for a long time.', didYouKnow: 'Water could be used for drinking and, with special equipment, split into oxygen and hydrogen.' },
   { id: 'growing-food', title: 'Growing Food', day: 12, science: 48, summary: 'A greenhouse can help grow fresh food far from Earth.', didYouKnow: 'Plants need light, water, nutrients, and a safe place to grow.' },
   { id: 'moonquakes', title: 'Moonquakes', day: 14, science: 55, summary: 'The Moon can shake gently as its surface and deep interior shift.', didYouKnow: 'Apollo astronauts left instruments that measured moonquakes.' },
 ].map((entry) => ({ ...entry, image: entry.id }));
@@ -136,9 +136,21 @@ export const EVENT_NARRATION: Record<string, { lumi: string; noor: string }> = {
     lumi: 'Smoke alert! There is a fire in the lab. Let’s act quickly and stay safe.',
     noor: 'A fire in a sealed habitat needs a quick, careful response. Protect the air system while you stop the fire.',
   },
-  'water_ice_exploration': {
-    lumi: 'I found a clue in the cold crater! Could it be ice?',
-    noor: 'The signal may point to water ice, but a reading is only a clue. Choose how much time and energy to spend checking the site.',
+  'greenhouse_failure': {
+    lumi: 'The greenhouse plants are wilting and the humidity alarm is flashing. Let’s check the pump!',
+    noor: 'The nutrient pump stopped and the growing bay is losing moisture. Restore a steady feed or isolate the damaged section before more crops are lost.',
+  },
+  'communication_loss': {
+    lumi: 'Mission Control went quiet! I see sparks and smoke at the radio mast. Let’s get a safe signal back.',
+    noor: 'The mast power coupler appears damaged. Isolate the overheated equipment, then use the backup beacon or restart the link safely.',
+  },
+  'rover_navigation_failure': {
+    lumi: 'The rover stopped following its route! There is smoke near the drive. Let’s stop it before the battery drains.',
+    noor: 'A wheel encoder has failed, so the rover cannot trust its position. Stop the drive before choosing a manual recovery or a safe return.',
+  },
+  'moonquake': {
+    lumi: 'The Moon is shaking! Secure the habitat and the loose equipment now.',
+    noor: 'A moonquake is stressing the habitat supports. Brace the pressure shell and protect the crew while the shaking continues.',
   },
 };
 
@@ -149,7 +161,6 @@ export function getEventNarration(event: { id?: string; sourceEventId?: string; 
   if (name.includes('solar storm')) return EVENT_NARRATION.solar_storm;
   if (name.includes('lunar night')) return EVENT_NARRATION.lunar_night;
   if (name.includes('power')) return EVENT_NARRATION.power_failure;
-  if (name.includes('water') && name.includes('ice')) return EVENT_NARRATION.water_ice_exploration;
   if (name.includes('water')) return EVENT_NARRATION.water_leak;
   if (name.includes('fire')) return EVENT_NARRATION.fire_lab;
   return {
@@ -169,6 +180,24 @@ export function getChapterReply(day: number, completedTasks: number, totalEvents
 
 export function getStoryCallback(decisions: { eventName: string; decisionLabel: string }[], resources: Record<string, number>) {
   const choices = decisions.map((decision) => `${decision.eventName} ${decision.decisionLabel}`.toLowerCase()).join(' ');
+  if (/greenhouse failure|nutrient pump|reserve feed|grow bay/.test(choices)) {
+    return (resources.food ?? 100) < 60
+      ? 'The greenhouse is stable, but some crops were lost while the feed system was repaired. A plant check can help prevent another interruption.'
+      : 'The greenhouse feed is running again. Keeping the nutrient pump and reserve line checked will help protect the next harvest.';
+  }
+  if (/communication loss|smoking coupler|backup beacon|power down the mast/.test(choices)) {
+    return (resources.comms ?? 100) < 60
+      ? 'The emergency link is still weak. Check the mast coupler before relying on a long-range message.'
+      : 'The radio link is back. Keeping the backup beacon ready gives Mission Control another way to reach the crew.';
+  }
+  if (/rover navigation failure|wheel encoder|manual driving|recover the rover/.test(choices)) {
+    return (resources.battery ?? 100) < 45
+      ? 'The rover is safe, but its battery is low. Recharge it before sending it beyond radio range.'
+      : 'The rover route is stable again. Check the wheel encoders before the next long trip.';
+  }
+  if (/moonquake|habitat supports|inner shelter|loose equipment/.test(choices)) {
+    return 'The shaking has stopped. Inspect the habitat supports and equipment racks before returning to normal work.';
+  }
   if (/battery|backup/.test(choices) && (resources.battery ?? 100) < 65) {
     return 'Remember the backup power you used earlier? It helped at the time, so there is less stored energy for the next challenge.';
   }

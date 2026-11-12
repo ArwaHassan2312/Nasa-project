@@ -255,6 +255,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let mapBounds = null;
   const eventVisualizations = new Map();
   let currentEventAnimations = null;
+  const eventCameraShakeOffset = new THREE.Vector3();
+  const eventCameraShakeEuler = new THREE.Euler();
+  const eventCameraShakeRotation = new THREE.Quaternion();
   let eventCinematic = null;
   const queuedEventPresentations = [];
   const EVENT_TARGET_PREFIXES = {
@@ -263,7 +266,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     power_failure: ['011', '012'],
     water_leak: ['001'],
     lunar_night: ['011', '012', '013'],
-    water_ice_exploration: ['018'],
+    greenhouse_failure: ['008'],
+    communication_loss: ['017'],
+    rover_navigation_failure: ['020'],
+    moonquake: ['001'],
   };
   const EVENT_CAMERA_DIRECTIONS = {
     fire_lab: new THREE.Vector3(0.82, 0.5, 1),
@@ -271,7 +277,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     power_failure: new THREE.Vector3(-0.95, 0.55, 0.8),
     water_leak: new THREE.Vector3(0.78, 0.42, -1),
     lunar_night: new THREE.Vector3(-0.8, 0.7, 1),
-    water_ice_exploration: new THREE.Vector3(0.9, 0.48, -0.9),
+    greenhouse_failure: new THREE.Vector3(0.9, 0.48, -0.9),
+    communication_loss: new THREE.Vector3(-0.75, 0.55, 0.9),
+    rover_navigation_failure: new THREE.Vector3(0.8, 0.42, 1),
+    moonquake: new THREE.Vector3(-0.8, 0.55, 1),
   };
   let airlockTriggerCenter = null;
   let airlockTriggerRadius = 0;
@@ -731,7 +740,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     });
   }
 
-  function buildEventVisualization(eventId, occurrenceId) {
+  function buildEventVisualization(eventId, occurrenceId, active = false) {
     if (!eventId || !occurrenceId || !outpostRoot) return;
 
     const mappedTarget = findEventTarget(eventId);
@@ -836,36 +845,78 @@ export function createLunarEngine(canvas, callbacks = {}) {
           aurora.material.opacity = 0.2 + (Math.sin(time * 1.4 + index) + 1) * 0.11;
         });
       }
-    } else if (eventId === 'water_ice_exploration') {
-      const scanRing = new THREE.Mesh(
-        new THREE.TorusGeometry(Math.max(1, width * 0.28), Math.max(0.25, height * 0.04), 8, 64),
-        new THREE.MeshBasicMaterial({
-          color: 0x70eaff,
-          transparent: true,
-          opacity: 0.78,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        }),
+    } else if (eventId === 'greenhouse_failure') {
+      const ventOffset = new THREE.Vector3(
+        cameraDirection.x * size.x * 0.3,
+        -height * 0.08,
+        cameraDirection.z * size.z * 0.3,
       );
-      scanRing.rotation.x = Math.PI / 2;
-      scanRing.position.y = -height * 0.35;
-      group.add(scanRing);
-      const scanLight = new THREE.PointLight(0x56dfff, 38, width * 1.6);
-      scanLight.position.set(0, height * 0.2, 0);
-      group.add(scanLight);
       addAnimatedParticles(group, {
-        count: 34,
-        color: 0x9aeeff,
-        size: Math.max(0.7, height * 0.055),
-        offset: new THREE.Vector3(0, -height * 0.2, 0),
-        rise: Math.max(height * 0.9, 3),
-        speed: Math.max(height * 0.2, 0.8),
-        opacity: 0.7,
+        count: 32,
+        color: 0xc6d5a0,
+        size: Math.max(0.65, height * 0.045),
+        offset: ventOffset,
+        rise: Math.max(height * 0.55, 2),
+        speed: Math.max(height * 0.12, 0.35),
+        opacity: 0.42,
       });
+      const warningLight = new THREE.PointLight(0xffb347, 32, width * 0.7);
+      warningLight.position.copy(ventOffset).add(new THREE.Vector3(0, height * 0.1, 0));
+      group.add(warningLight);
       currentEventAnimations.push((time) => {
-        scanRing.rotation.z = time * 0.32;
-        scanRing.material.opacity = 0.38 + (Math.sin(time * 2.2) + 1) * 0.25;
-        scanLight.intensity = 24 + (Math.sin(time * 3.5) + 1) * 16;
+        warningLight.intensity = 14 + (Math.sin(time * 4.2) + 1) * 14;
+      });
+    } else if (eventId === 'communication_loss' || eventId === 'rover_navigation_failure') {
+      const isRover = eventId === 'rover_navigation_failure';
+      const faultOffset = new THREE.Vector3(
+        cameraDirection.x * size.x * (isRover ? 0.34 : 0.22),
+        isRover ? -height * 0.22 : height * 0.12,
+        cameraDirection.z * size.z * (isRover ? 0.34 : 0.22),
+      );
+      addAnimatedParticles(group, {
+        count: isRover ? 48 : 40,
+        color: 0x292b30,
+        size: Math.max(1, height * (isRover ? 0.07 : 0.075)),
+        offset: faultOffset.clone().add(new THREE.Vector3(0, height * 0.12, 0)),
+        rise: Math.max(height * 0.8, 3),
+        speed: Math.max(height * 0.18, 0.5),
+        opacity: 0.62,
+      });
+      addAnimatedParticles(group, {
+        count: 18,
+        color: 0xff8b45,
+        size: Math.max(0.6, height * 0.035),
+        offset: faultOffset,
+        rise: Math.max(height * 0.28, 1.5),
+        speed: Math.max(height * 0.5, 1.2),
+        opacity: 0.95,
+      });
+      const faultLight = new THREE.PointLight(isRover ? 0xff5638 : 0xffa13b, 52, width * 0.62);
+      faultLight.position.copy(faultOffset);
+      group.add(faultLight);
+      currentEventAnimations.push((time) => {
+        faultLight.intensity = 20 + (Math.sin(time * (isRover ? 11 : 7)) + 1) * 24;
+      });
+    } else if (eventId === 'moonquake') {
+      const dustOffset = new THREE.Vector3(
+        cameraDirection.x * size.x * 0.38,
+        -height * 0.34,
+        cameraDirection.z * size.z * 0.38,
+      );
+      addAnimatedParticles(group, {
+        count: 64,
+        color: 0xb9aa91,
+        size: Math.max(0.8, height * 0.05),
+        offset: dustOffset,
+        rise: Math.max(height * 0.8, 3),
+        speed: Math.max(height * 0.22, 0.7),
+        opacity: 0.58,
+      });
+      const warningLight = new THREE.PointLight(0xff684d, 38, width * 0.8);
+      warningLight.position.copy(dustOffset).add(new THREE.Vector3(0, height * 0.16, 0));
+      group.add(warningLight);
+      currentEventAnimations.push((time) => {
+        warningLight.intensity = 18 + (Math.sin(time * 5.5) + 1) * 15;
       });
     } else if (eventId === 'power_failure' || eventId === 'water_leak') {
       const location = new THREE.Vector3(
@@ -908,7 +959,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         });
       }
     }
-    eventVisualizations.set(occurrenceId, { eventId, group, animations });
+    eventVisualizations.set(occurrenceId, { eventId, active, group, animations });
     currentEventAnimations = null;
   }
 
@@ -930,7 +981,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function setEventEffects(events) {
-    const desiredEvents = new Map(events.map(({ occurrenceId, eventId }) => [occurrenceId, eventId]));
+    const desiredEvents = new Map(events.map(({ occurrenceId, eventId, active = false }) => (
+      [occurrenceId, { eventId, active }]
+    )));
     for (let index = queuedEventPresentations.length - 1; index >= 0; index -= 1) {
       if (!desiredEvents.has(queuedEventPresentations[index].occurrenceId)) {
         queuedEventPresentations.splice(index, 1);
@@ -943,11 +996,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
         changed = true;
       }
     }
-    for (const [occurrenceId, eventId] of desiredEvents) {
+    for (const [occurrenceId, { eventId, active }] of desiredEvents) {
       const existing = eventVisualizations.get(occurrenceId);
-      if (existing?.eventId === eventId) continue;
+      if (existing?.eventId === eventId) {
+        existing.active = active;
+        continue;
+      }
       if (existing) removeEventVisualization(occurrenceId);
-      buildEventVisualization(eventId, occurrenceId);
+      buildEventVisualization(eventId, occurrenceId, active);
       changed = true;
     }
     if (changed) updateEventLighting();
@@ -5303,6 +5359,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
     if (isDestroyed) return;
     animId = requestAnimationFrame(animate);
 
+    camera.position.sub(eventCameraShakeOffset);
+    eventCameraShakeOffset.set(0, 0, 0);
+    camera.quaternion.multiply(eventCameraShakeRotation.invert());
+    eventCameraShakeRotation.identity();
     const dt = Math.min(clock.getDelta(), 0.05);
     updateRoverDrive(dt);
 
@@ -5430,6 +5490,23 @@ export function createLunarEngine(canvas, callbacks = {}) {
       lumiCompanion.position.lerp(lumiTarget, 1 - Math.exp(-dt * 8));
       lumiCompanion.position.y += 0.035 + Math.sin(clock.elapsedTime * 3.2) * 0.035;
       lumiCompanion.rotation.y = Math.atan2(lumiTrailDirection.x, lumiTrailDirection.z) + Math.PI;
+    }
+
+    if ([...eventVisualizations.values()].some(({ eventId, active }) => eventId === 'moonquake' && active)) {
+      const quakeTime = clock.elapsedTime;
+      eventCameraShakeOffset.set(
+        Math.sin(quakeTime * 31) * 0.14,
+        Math.sin(quakeTime * 23) * 0.07,
+        Math.cos(quakeTime * 27) * 0.12,
+      );
+      camera.position.add(eventCameraShakeOffset);
+      eventCameraShakeEuler.set(
+        Math.sin(quakeTime * 34) * 0.014,
+        Math.cos(quakeTime * 29) * 0.012,
+        Math.sin(quakeTime * 38) * 0.018,
+      );
+      eventCameraShakeRotation.setFromEuler(eventCameraShakeEuler);
+      camera.quaternion.multiply(eventCameraShakeRotation);
     }
 
     renderer.render(scene, camera);

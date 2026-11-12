@@ -19,6 +19,7 @@ const RESOURCE_ITEMS = [
   ['water', 'Water', '💧'],
   ['food', 'Food', '🥕'],
   ['health', 'Commander safety', '💚'],
+  ['comms', 'Radio signal', '📡'],
   ['science', 'Science', '🔬'],
 ];
 
@@ -27,15 +28,10 @@ function getCommanderSafety(resources) {
   return Math.round((resources.health + resources.habitat + resources.radProtection) / 3);
 }
 
-const TASK_EVENT_TESTS = [
-  ['workshop-equipment-maintenance', 'Workshop maintenance', 'Habitat fire'],
-  ['solar-array-inspection', 'Solar array inspection', 'Power failure'],
-  ['habitat-waterline-inspection', 'Waterline inspection', 'Water leak'],
-];
 const RESOURCE_LABELS = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
   habitat: 'Commander safety', equipment: 'Commander safety', health: 'Commander safety',
-  radProtection: 'Commander safety', comms: 'Power', science: 'Science',
+  radProtection: 'Commander safety', comms: 'Radio signal', science: 'Science',
   emergencyReserve: 'Water', potentialWater: 'Water',
 };
 const EVENT_LOCATIONS = {
@@ -44,7 +40,10 @@ const EVENT_LOCATIONS = {
   power_failure: { componentId: '011', name: 'Solar Array' },
   water_leak: { componentId: '001', name: 'Cylinder Habitat' },
   lunar_night: { componentId: '011', name: 'Solar Array' },
-  water_ice_exploration: { componentId: '018', name: 'Regolith Excavator' },
+  greenhouse_failure: { componentId: '008', name: 'Greenhouse' },
+  communication_loss: { componentId: '017', name: 'Communications Mast' },
+  rover_navigation_failure: { componentId: '020', name: 'Pressurized Rover' },
+  moonquake: { componentId: '001', name: 'Cylinder Habitat' },
 };
 const COMPONENT_TASK_FACTS = {
   '001': ['A habitat’s air, water, and temperature systems have to work together to keep astronauts safe.', 'Lunar dust is sharp and clingy, so seals and filters need careful checks around a habitat.', 'A small leak can matter in a sealed habitat because air and water are limited supplies.'],
@@ -1133,15 +1132,18 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       ? [{
         occurrenceId: getEventOccurrenceKey(simulation.currentEvent),
         eventId: simulation.currentEvent.sourceEventId ?? simulation.currentEvent.id,
+        active: true,
       }]
       : []),
     ...simulation.queuedEvents.map(({ event }) => ({
       occurrenceId: getEventOccurrenceKey(event),
       eventId: event.sourceEventId ?? event.id,
+      active: false,
     })),
     ...simulation.endOfDayEvents.map((event) => ({
       occurrenceId: getEventOccurrenceKey(event),
       eventId: event.sourceEventId ?? event.id,
+      active: false,
     })),
   ], [simulation.currentEvent, simulation.eventPhase, simulation.queuedEvents, simulation.endOfDayEvents]);
   const activeEventPresentationIds = useMemo(() => [
@@ -1687,31 +1689,6 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
             <span>PLAYER CAMERA · ARROWS MOVE PLAYER · PRESS V OR SELECT ROVER CAMERA TO DRIVE</span>
           )}
         </div>
-      )}
-
-      {import.meta.env.DEV && (
-        <details className="lunar-event-test-tools">
-          <summary>TEST TASK ↔ EVENT LINKS</summary>
-          {TASK_EVENT_TESTS.map(([challengeId, taskLabel, eventLabel]) => (
-            <div className="lunar-event-test-row" key={challengeId}>
-              <span>{taskLabel} / {eventLabel}</span>
-              <button
-                type="button"
-                disabled={simulation.gameStatus !== 'playing' || Boolean(simulation.currentEvent) || Boolean(simulation.warningTaskId)}
-                onClick={() => simulation.testTaskEventTrigger(challengeId)}
-              >
-                TEST OVERDUE TRIGGER
-              </button>
-              <button
-                type="button"
-                disabled={simulation.gameStatus !== 'playing' || Boolean(simulation.currentEvent) || Boolean(simulation.warningTaskId)}
-                onClick={() => simulation.testTaskEventPrevention(challengeId)}
-              >
-                TEST COMPLETION BLOCK
-              </button>
-            </div>
-          ))}
-        </details>
       )}
 
       {/* Task console editor (positioning only, no coordinates) */}

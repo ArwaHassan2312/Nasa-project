@@ -397,53 +397,6 @@
 }
 .lunar-countdown-event .lunar-countdown-time { color: #ff858c; }
 
-.lunar-event-test-tools {
-  position: absolute;
-  z-index: 20;
-  bottom: 14px;
-  left: 14px;
-  max-width: min(94vw, 460px);
-  padding: 9px 11px;
-  border: 1px solid rgba(127, 240, 255, 0.45);
-  border-radius: 6px;
-  color: #e7f2f5;
-  background: rgba(7, 13, 20, 0.94);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.38);
-  font: 0.63rem var(--lunar-font-mono);
-  pointer-events: auto;
-}
-
-.lunar-event-test-tools summary {
-  color: var(--lunar-cyan);
-  font-family: var(--lunar-font-tech);
-  letter-spacing: 0.08em;
-  cursor: pointer;
-}
-
-.lunar-event-test-row {
-  display: grid;
-  grid-template-columns: minmax(125px, 1fr) auto auto;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.lunar-event-test-row button {
-  padding: 5px 7px;
-  border: 1px solid rgba(127, 240, 255, 0.35);
-  border-radius: 4px;
-  color: #dff7fb;
-  background: rgba(34, 184, 255, 0.09);
-  font: inherit;
-  font-size: 0.55rem;
-  cursor: pointer;
-}
-
-.lunar-event-test-row button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
 @keyframes lunarAlertFlash {
   from { background-color: rgba(92, 12, 18, 0.9); }
   to { background-color: rgba(158, 20, 27, 0.96); }
@@ -2046,6 +1999,7 @@
 .lunar-lumi-guide.is-collapsed { width: auto; padding: 8px 10px; }
 .lunar-lumi-guide.is-collapsed .lunar-lumi-guide-orb { width: 28px; height: 28px; flex-basis: 28px; }
 @media (max-width: 600px) { .lunar-lumi-guide { bottom: 12px; width: min(278px, calc(100vw - 24px)); } }
+
 
 .lunar-equipped-tool {
   position: absolute;

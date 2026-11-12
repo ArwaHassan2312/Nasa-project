@@ -39,7 +39,7 @@ export type GameStatus = 'playing' | 'success' | 'failed';
 export type ResourceLevels = Record<ResourceKey, number>;
 export type EventPhase = 'idle' | 'pending' | 'presenting' | 'awaitingDecision' | 'resolving';
 export type DayPhase = 'active' | 'closing' | 'report' | 'transition';
-type DisplayResourceKey = 'power' | 'battery' | 'oxygen' | 'water' | 'food' | 'health' | 'science';
+type DisplayResourceKey = 'power' | 'battery' | 'oxygen' | 'water' | 'food' | 'health' | 'comms' | 'science';
 
 export interface DayReport {
   day: number;
@@ -219,7 +219,7 @@ const CLOCK_UPDATE_INTERVAL_MS = 1000;
 const RESOURCE_DISPLAY_NAMES: Record<ResourceKey, string> = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
   habitat: 'Commander safety', equipment: 'Commander safety', health: 'Commander safety',
-  radProtection: 'Commander safety', comms: 'Power', science: 'Science',
+  radProtection: 'Commander safety', comms: 'Radio signal', science: 'Science',
   emergencyReserve: 'Water', potentialWater: 'Water',
 };
 const SYSTEM_DISPLAY_NAMES: Record<SystemKey, string> = {
@@ -227,10 +227,10 @@ const SYSTEM_DISPLAY_NAMES: Record<SystemKey, string> = {
 };
 // Task completion toast stays on screen for this long before auto-dismissing.
 const CHALLENGE_FEEDBACK_DURATION_MS = 3000;
-const EVENT_OPTION_RESOURCES: SurvivalResourceKey[] = ['oxygen', 'water', 'power', 'food', 'health'];
+const EVENT_OPTION_RESOURCES: (SurvivalResourceKey | 'comms')[] = ['oxygen', 'water', 'power', 'food', 'health', 'comms'];
 
-function isEventOptionResource(resource: string): resource is SurvivalResourceKey {
-  return EVENT_OPTION_RESOURCES.includes(resource as SurvivalResourceKey);
+function isEventOptionResource(resource: string): resource is SurvivalResourceKey | 'comms' {
+  return EVENT_OPTION_RESOURCES.includes(resource as SurvivalResourceKey | 'comms');
 }
 
 function eventOccurrenceKey(event: GameEvent | null | undefined): string | null {
@@ -458,16 +458,36 @@ function prepareEventForReadiness(
         benefit: 'Power +35; the checked reserve helps',
       };
     }
-    if (
-      readinessEventId === 'water_ice_exploration'
-      && decision.id === 'A'
-      && isPrepared('workshopMaintenanceComplete')
-    ) {
+    if (readinessEventId === 'greenhouse_failure' && decision.id === 'A' && isPrepared('greenhouseNutrientsBalanced')) {
       return {
         ...decision,
-        conditionEffects: { ...decision.conditionEffects, equipment: -3 },
-        benefit: 'Water +25; the outpost check makes ice collection safer',
-        cost: 'Food -8',
+        effects: { ...decision.effects, food: 12 },
+        conditionEffects: { ...decision.conditionEffects, equipment: 11, water: 4 },
+        benefit: 'The earlier plant-feed check helps restart the pump before more crops wilt',
+      };
+    }
+    if (readinessEventId === 'communication_loss' && decision.id === 'B' && isPrepared('communicationsLinkVerified')) {
+      return {
+        ...decision,
+        effects: { ...decision.effects, comms: 36 },
+        conditionEffects: { ...decision.conditionEffects, equipment: 6, power: 3 },
+        benefit: 'The earlier radio check confirms the backup beacon is ready',
+      };
+    }
+    if (readinessEventId === 'rover_navigation_failure' && decision.id === 'A' && isPrepared('roverDriveChecked')) {
+      return {
+        ...decision,
+        effects: { ...decision.effects, science: 3 },
+        conditionEffects: { ...decision.conditionEffects, equipment: 12 },
+        benefit: 'The wheel check helps identify the faulty encoder and recalibrate the rover',
+      };
+    }
+    if (readinessEventId === 'moonquake' && decision.id === 'A' && isPrepared('habitatSealVerified')) {
+      return {
+        ...decision,
+        effects: { ...decision.effects, oxygen: 2 },
+        conditionEffects: { ...decision.conditionEffects, lifeSupport: 12, equipment: 7 },
+        benefit: 'The seal inspection helps lock the habitat supports before pressure drops',
       };
     }
     if (readinessEventId === 'solar_storm' && isPrepared('solarArrayInspected')) {
@@ -825,6 +845,7 @@ function getVisibleResourceLevels(resources: ResourceLevels): Record<DisplayReso
     water: resources.water,
     food: resources.food,
     health: (resources.health + resources.habitat + resources.radProtection) / 3,
+    comms: resources.comms,
     science: resources.science,
   };
 }
@@ -1887,13 +1908,14 @@ export function useGameSimulation({
         return occurrenceId ? failEventOccurrence(currentState, occurrenceId, true) : currentState;
       }
 
+
       const resolvedLinkedTasks = getResolvedLinkedTasks(currentState.dailyChallenges, event);
       const resolutionEffects: Partial<Record<ResourceKey, number>> = {
         ...getSuccessfulEventResourceEffects(event, decision),
       };
       for (const task of resolvedLinkedTasks) {
         for (const [resource, amount] of Object.entries(getTaskCompletionResourceEffects(task))
-          .filter(([key]) => isEventOptionResource(key) || key === 'science') as [SurvivalResourceKey | 'science', number][]) {
+          .filter(([key]) => isEventOptionResource(key) || key === 'science') as [SurvivalResourceKey | 'comms' | 'science', number][]) {
           resolutionEffects[resource] = (resolutionEffects[resource] ?? 0) + amount;
         }
       }
@@ -2388,128 +2410,6 @@ export function useGameSimulation({
     }));
   }, [seed]);
 
-  const testTaskEventTrigger = useCallback((challengeId: string) => {
-    setState((currentState) => {
-      const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
-      const relatedEvent = TASK_CONSEQUENCE_EVENTS.find((event) => event.riskTaskIds?.includes(challengeId));
-      if (
-        currentState.gameStatus !== 'playing'
-        || currentState.dayPhase !== 'active'
-        || hasEventOccurredOnDay(currentState)
-        || currentState.currentEvent
-        || currentState.warningTaskId
-        || !challenge
-        || !relatedEvent
-      ) return currentState;
-
-      const testDay = Math.max(currentState.day, relatedEvent.minDay);
-      const selection = selectMajorEvent({
-        events: [relatedEvent],
-        day: testDay,
-        maxDays: Math.max(currentState.maxDays, testDay),
-        dayDurationMs,
-        elapsedMs: currentState.campaignElapsedMs,
-        rngState: currentState.rngState,
-        flags: currentState.flags,
-        systemConditions: currentState.systemConditions,
-        resources: currentState.resources,
-        eventHistory: [],
-        forceEvent: true,
-        ignoreMinimumDay: true,
-      }, EVENT_SCHEDULER_CONFIG.checkIntervalMs);
-
-      if (!selection.event) {
-        return {
-          ...currentState,
-          challengeFeedback: `TEST PASSED: ${relatedEvent.name} was blocked by the completed ${challenge.title} task.`,
-        };
-      }
-
-      const event = prepareEventForReadiness(
-        {
-          ...selection.event,
-          day: currentState.day,
-          triggerSource: 'task',
-          occurrenceId: `task-${challengeId}-${currentState.day}`,
-        },
-        currentState.flags,
-        currentState.systemConditions,
-      );
-      return {
-        ...currentState,
-        rngState: selection.rngState,
-        dailyChallenges: currentState.dailyChallenges.map((task) =>
-          task.id === challengeId
-            ? {
-              ...startTaskOccurrence(task, currentState.day, currentState.campaignElapsedMs),
-              status: 'overdue',
-              deadlineMissed: true,
-              triggeredEventIds: [...new Set([...task.triggeredEventIds, relatedEvent.id])],
-            }
-            : task,
-        ),
-        currentEvent: event,
-        eventPhase: 'pending',
-        eventDrainElapsedMs: 0,
-        eventEffectId: getEventVisualId(event),
-        eventHistory: [
-          ...currentState.eventHistory,
-          {
-            eventId: event.id,
-            day: currentState.day,
-            elapsedMs: currentState.campaignElapsedMs,
-            source: 'task',
-            occurrenceId: event.occurrenceId,
-          },
-        ],
-        challengeFeedback: `TEST: overdue ${challenge.title} triggered ${event.name}.`,
-      };
-    });
-  }, [dayDurationMs]);
-
-  const testTaskEventPrevention = useCallback((challengeId: string) => {
-    setState((currentState) => {
-      const challenge = currentState.dailyChallenges.find((task) => task.id === challengeId);
-      const relatedEvent = TASK_CONSEQUENCE_EVENTS.find((event) => event.riskTaskIds?.includes(challengeId));
-      if (
-        currentState.gameStatus !== 'playing'
-        || currentState.currentEvent
-        || currentState.warningTaskId
-        || !challenge
-        || !relatedEvent
-      ) return currentState;
-
-      const flags = [...new Set([...currentState.flags, challenge.readinessFlag])];
-      const testDay = Math.max(currentState.day, relatedEvent.minDay);
-      const selection = selectMajorEvent({
-        events: [relatedEvent],
-        day: testDay,
-        maxDays: Math.max(currentState.maxDays, testDay),
-        dayDurationMs,
-        elapsedMs: currentState.campaignElapsedMs,
-        rngState: currentState.rngState,
-        flags,
-        systemConditions: currentState.systemConditions,
-        resources: currentState.resources,
-        eventHistory: [],
-        forceEvent: true,
-        ignoreMinimumDay: true,
-      }, EVENT_SCHEDULER_CONFIG.checkIntervalMs);
-
-      if (selection.event) return currentState;
-      return {
-        ...currentState,
-        flags,
-        dailyChallenges: currentState.dailyChallenges.map((task) =>
-          task.id === challengeId
-            ? { ...task, status: 'completed', completedDay: currentState.day }
-            : task,
-        ),
-        challengeFeedback: `TEST PASSED: completing ${challenge.title} blocks ${relatedEvent.name} for this mission.`,
-      };
-    });
-  }, [dayDurationMs]);
-
   const dismissChallengeFeedback = useCallback(() => {
     setState((currentState) => (
       currentState.challengeFeedback
@@ -2592,8 +2492,6 @@ export function useGameSimulation({
     dismissTaskFailureNotice,
     makeDecision,
     restart,
-    testTaskEventTrigger,
-    testTaskEventPrevention,
   };
 }
 

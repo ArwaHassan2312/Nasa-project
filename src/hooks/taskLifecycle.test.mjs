@@ -357,19 +357,15 @@ test('every Moon event has a relevant resource risk map and ongoing losses stay 
     for (const amount of Object.values(event.failureEffects)) {
       assert.ok(Number.isInteger(amount), `${event.id} failure impact must be an integer`);
     }
-    if (event.id !== 'water_ice_exploration') {
-      assert.ok(event.initialResourceEffects, `${event.id} should apply a defined incident-start impact`);
-      assert.ok(event.ongoingResourceEffects, `${event.id} should deteriorate while unresolved`);
-      assert.ok(Number.isInteger(event.ongoingEffectIntervalMs) && event.ongoingEffectIntervalMs > 0);
-    }
+    assert.ok(event.initialResourceEffects, `${event.id} should apply a defined incident-start impact`);
+    assert.ok(event.ongoingResourceEffects, `${event.id} should deteriorate while unresolved`);
+    assert.ok(Number.isInteger(event.ongoingEffectIntervalMs) && event.ongoingEffectIntervalMs > 0);
   }
   assert.equal(penaltyProfiles.size, events.MOON_EVENTS.length,
     'Each event should have an event-specific unresolved-penalty profile');
   const leak = events.MOON_EVENTS.find(({ id }) => id === 'water_leak');
   assert.deepEqual(leak.ongoingResourceEffects, { water: -1, emergencyReserve: -1, oxygen: -1 });
   assert.equal(leak.failureEffects.water, -30);
-  const waterSurvey = events.MOON_EVENTS.find(({ id }) => id === 'water_ice_exploration');
-  assert.equal(waterSurvey.ongoingResourceEffects, undefined);
 });
 
 test('independent event scheduling uses each day timer and can select at 20 seconds on every day', () => {

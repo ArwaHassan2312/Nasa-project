@@ -39,7 +39,7 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   equipment: 'Outpost tools',
   health: 'Commander safety',
   radProtection: 'Commander safety',
-  comms: 'Power',
+  comms: 'Radio signal',
   science: 'Science',
   emergencyReserve: 'Water',
   potentialWater: 'Water',

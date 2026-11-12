@@ -156,7 +156,8 @@ export function selectMajorEvent(
         ? 0.45
         : 0
     ) + (event.id === 'fire_lab' && flags.includes('labDamaged') ? 0.3 : 0)
-      + (event.id === 'water_leak' && flags.includes('sparesLow') ? 0.3 : 0);
+      + (event.id === 'water_leak' && flags.includes('sparesLow') ? 0.3 : 0)
+      + (event.id === 'water_leak' && flags.includes('waterReserveUsed') ? 0.25 : 0);
     const weight = event.baseWeight * (
       1 + conditionRisk * 0.65 + resourceRisk * 0.4 + decisionHistoryRisk
     );
