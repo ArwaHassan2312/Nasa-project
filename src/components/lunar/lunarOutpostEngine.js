@@ -76,7 +76,8 @@ const OUTPOST_COMPONENT_NAMES = {
   '020': 'PRESSURIZED ROVER',
   '021': 'EVA SUIT',
   '022': 'EQUIPMENT SLED',
-  '023': 'SURVEY MARKERS'
+  '023': 'SURVEY MARKERS',
+  '025': 'REGOLITH PLANT'
 };
 
 function loadCachedGLTF(path, onLoad, onProgress, onError) {
@@ -249,6 +250,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let commandCenterModelRoot = null;
   let commandCenterExteriorShell = null;
   let commandCenterInteriorActive = false;
+  // Add-on structures register their interaction target here so the shared
+  // outpost rebuild always puts them back after re-indexing.
+  let commandCenterTarget = null;
+  // Emissive materials on the plant, pulsed when a maintenance cycle runs so the
+  // machine visibly acknowledges the action.
+  const regolithPlantLights = [];
+  let regolithPlantFlash = 0;
+  let regolithPlantTarget = null;
   let jumpVelocity = 0; // vertical speed while the walker is airborne
   let airborne = false;
   let mapComponents = [];
@@ -264,6 +273,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     water_leak: ['001'],
     lunar_night: ['011', '012', '013'],
     water_ice_exploration: ['018'],
+    oxygen_plant_failure: ['025'],
   };
   const EVENT_CAMERA_DIRECTIONS = {
     fire_lab: new THREE.Vector3(0.82, 0.5, 1),
@@ -288,6 +298,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let componentTargets = [];
   let activeComponentTarget = null;
   let dismissedComponentId = null;
+  // Set once this day's plant maintenance has been run, so the prompt stops
+  // offering a cycle that is already done.
+  let regolithPlantMaintained = false;
   let componentInteriorKit = null;
   let workshopInteriorModel = null;
   let activeModuleInterior = null;
@@ -867,7 +880,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         scanRing.material.opacity = 0.38 + (Math.sin(time * 2.2) + 1) * 0.25;
         scanLight.intensity = 24 + (Math.sin(time * 3.5) + 1) * 16;
       });
-    } else if (eventId === 'power_failure' || eventId === 'water_leak') {
+    } else if (eventId === 'power_failure' || eventId === 'water_leak' || eventId === 'oxygen_plant_failure') {
       const location = new THREE.Vector3(
         cameraDirection.x * size.x * 0.36,
         eventId === 'water_leak' ? -height * 0.25 : height * 0.08,
@@ -904,6 +917,18 @@ export function createLunarEngine(canvas, callbacks = {}) {
           offset: location.clone().add(new THREE.Vector3(0, height * 0.12, 0)),
           rise: Math.max(height * 0.5, 2),
           speed: height * 0.8,
+          falling: true,
+        });
+      }
+      if (eventId === 'oxygen_plant_failure') {
+        // Regolith dust venting out of the jammed digester.
+        addAnimatedParticles(group, {
+          count: 34,
+          color: 0xb8a894,
+          size: Math.max(0.9, height * 0.05),
+          offset: location.clone().add(new THREE.Vector3(0, height * 0.28, 0)),
+          rise: Math.max(height * 0.9, 3),
+          speed: height * 0.5,
           falling: true,
         });
       }
@@ -1192,6 +1217,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const LUNAR_OUTPOST_POSITION_Z = 0;
   const COMMAND_CENTER_WIDTH = 18;
   const COMMAND_CENTER_GAP = 4;
+  // The regolith kit is modelled in metres; one game unit is about half a metre.
+  const REGOLITH_PLANT_SCALE = 1.88;
+  const REGOLITH_PLANT_GAP = 6;
+  // Clearance of the grade plane above the highest ground under the footprint.
+  // Small on purpose: the tank's footing ring sits 0.36 units below grade, so it
+  // stays buried while the machine itself rests on the surface.
+  const REGOLITH_PLANT_LIFT = 0.12;
   const OUTPOST_SITE_MARGIN = 6;
   const OUTPOST_GROUND_EPSILON = 0.05;
   const ROVER_TARGET_WIDTH = 3; // Change this value to resize the playable rover.
@@ -1512,13 +1544,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
     commandCenter.updateMatrixWorld(true);
     outpost.attach(commandCenter);
     outpost.updateMatrixWorld(true);
-    outpostHeightField = buildOutpostHeightField(outpost);
-    componentTargets = buildComponentTargets(outpost);
     const entrance = model.getObjectByName('commandCenter_Exterior_stairs_SM') || model;
     const entranceBounds = new THREE.Box3().setFromObject(entrance);
     if (!entranceBounds.isEmpty()) {
       const entranceSize = entranceBounds.getSize(new THREE.Vector3());
-      componentTargets.push({
+      commandCenterTarget = {
         id: '024',
         name: 'Command Center',
         roomType: 'commandCenter',
@@ -1530,11 +1560,23 @@ export function createLunarEngine(canvas, callbacks = {}) {
           maxZ: entranceBounds.max.z,
         },
         radius: Math.max(8, Math.max(entranceSize.x, entranceSize.z) * 1.5),
-      });
+      };
     }
+    rebuildOutpostSpatial(outpost);
+    buildRoverMonitors();
+  }
+
+  // Collision, interaction targets and the map all describe "the outpost", and
+  // the outpost keeps growing as add-on structures stream in. Every mount calls
+  // this once so all three stay in step instead of each one patching its own copy.
+  function rebuildOutpostSpatial(outpost) {
+    outpostHeightField = buildOutpostHeightField(outpost);
+    componentTargets = buildComponentTargets(outpost);
+    if (commandCenterTarget) componentTargets.push(commandCenterTarget);
+    if (regolithPlantTarget) componentTargets.push(regolithPlantTarget);
     mapComponents = buildMapComponents(outpost);
     addCommandCenterMapComponent();
-    buildRoverMonitors();
+    refreshMapBounds();
   }
 
   // The command center is not named like the numbered outpost parts, so it gets
@@ -2126,6 +2168,123 @@ export function createLunarEngine(canvas, callbacks = {}) {
     );
   }
 
+  // Highest ground under a rectangular footprint, so a long structure rests on
+  // the highest point it spans instead of sinking on one side. Null when the
+  // footprint falls outside the scanned terrain.
+  function groundHeightUnderFootprint(centerX, centerZ, sizeX, sizeZ) {
+    const halfX = Math.max(sizeX, 1) / 2;
+    const halfZ = Math.max(sizeZ, 1) / 2;
+    let highest = -Infinity;
+    for (let i = 0; i <= 3; i += 1) {
+      for (let j = 0; j <= 3; j += 1) {
+        const x = centerX - halfX + (sizeX * i) / 3;
+        const z = centerZ - halfZ + (sizeZ * j) / 3;
+        const height = sampleGroundHeight(x, z);
+        if (height !== null && Number.isFinite(height)) highest = Math.max(highest, height);
+      }
+    }
+    return Number.isFinite(highest) ? highest : null;
+  }
+
+  // The regolith plant: the oxygen side of the ISRU loop. It sits opposite the
+  // command center so the two wings frame the outpost, and it is registered as a
+  // component target so proximity prompts, daily tasks, events and the map all
+  // find it the same way they find a numbered outpost module.
+  function mountRegolithPlant(outpost, model) {
+    if (isDestroyed || !model) return;
+    // The kit is authored at true scale in metres; one game unit is ~0.53 m.
+    const scale = REGOLITH_PLANT_SCALE;
+    model.scale.multiplyScalar(scale);
+    model.updateMatrixWorld(true);
+    model.traverse(object => {
+      if (!object.isMesh) return;
+      object.castShadow = true;
+      object.receiveShadow = true;
+    });
+
+    const plant = new THREE.Group();
+    // The 0NN- name is what the map, the event targeting and the collision
+    // rasterizer key off, so the plant behaves like any other outpost part.
+    plant.name = '025-regolith-plant';
+    plant.add(model);
+    plant.updateMatrixWorld(true);
+
+    const plantBounds = new THREE.Box3().setFromObject(plant);
+    const plantSize = plantBounds.getSize(new THREE.Vector3());
+    const outpostBounds = new THREE.Box3().setFromObject(outpost);
+    const outpostCenter = outpostBounds.getCenter(new THREE.Vector3());
+    // Mirror the command center: stand off the far side of the outpost.
+    const targetX = outpostBounds.min.x - REGOLITH_PLANT_GAP - plantSize.x / 2;
+    const targetZ = outpostCenter.z + plantSize.z * 0.15;
+    // The installation is long and the mare is uneven, so a single centre sample
+    // lets the uphill half sink into the ground. Take the highest point under the
+    // whole footprint and stand the grade plane on that.
+    //
+    // The merged kit is built around a grade plane at y = 0, with the O2 tank's
+    // footing ring deliberately below it, so the model seats on grade rather than
+    // on its lowest vertex — otherwise that buried ring is lifted back out and
+    // the tank reads as hovering.
+    const groundY = (groundHeightUnderFootprint(targetX, targetZ, plantSize.x, plantSize.z)
+      ?? sampleGroundHeight(targetX, targetZ)
+      ?? PLAIN_LEVEL) + REGOLITH_PLANT_LIFT;
+    plant.position.set(
+      targetX - (plantBounds.min.x + plantBounds.max.x) / 2,
+      groundY,
+      targetZ - (plantBounds.min.z + plantBounds.max.z) / 2,
+    );
+
+    scene.add(plant);
+    plant.updateMatrixWorld(true);
+    outpost.attach(plant);
+    outpost.updateMatrixWorld(true);
+
+    // Remember the emissive materials (terminal screen, socket lights) so a
+    // maintenance cycle can pulse them.
+    regolithPlantLights.length = 0;
+    plant.traverse(object => {
+      if (!object.isMesh || !object.material) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!material.emissive) continue;
+        if (regolithPlantLights.some(entry => entry.material === material)) continue;
+        regolithPlantLights.push({ material, base: material.emissiveIntensity ?? 1 });
+      }
+    });
+
+    const placedBounds = new THREE.Box3().setFromObject(plant);
+    const placedSize = placedBounds.getSize(new THREE.Vector3());
+    regolithPlantTarget = {
+      id: '025',
+      name: 'Regolith Plant',
+      roomType: 'regolithPlant',
+      center: placedBounds.getCenter(new THREE.Vector3()),
+      bounds: {
+        minX: placedBounds.min.x,
+        maxX: placedBounds.max.x,
+        minZ: placedBounds.min.z,
+        maxZ: placedBounds.max.z,
+      },
+      // Generous reach: the installation is long, so the prompt should trigger
+      // from anywhere along its working face.
+      radius: Math.max(10, Math.max(placedSize.x, placedSize.z) * 0.75),
+    };
+
+    rebuildOutpostSpatial(outpost);
+    console.info('[Regolith plant] Installed.', {
+      scale,
+      size: [Math.round(placedSize.x * 10) / 10, Math.round(placedSize.z * 10) / 10],
+    });
+  }
+
+  function loadRegolithPlant(outpost) {
+    loadCachedGLTF(
+      '/lunar/regolith/regolith_plant.glb',
+      model => mountRegolithPlant(outpost, model),
+      undefined,
+      error => console.warn('Regolith plant model could not be loaded.', error),
+    );
+  }
+
   function onTerrainGeometryReady(entry, geometry) {
     if (isDestroyed) return;
     const box = geometry.boundingBox || new THREE.Box3().setFromBufferAttribute(geometry.attributes.position);
@@ -2267,6 +2426,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
           outpostRoot = outpost;
           mountRovers(outpostBounds);
           loadCommandCenter(outpost);
+          loadRegolithPlant(outpost);
           buildEventVisualization();
 
           addOutpostPartLabels(outpost);
@@ -2668,17 +2828,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
           isActive: target.isActive === true,
         }))
       : [];
-    const activeTaskIds = new Set(
-      activeTaskTargets
-        .filter(entry => entry.status === 'available' || entry.status === 'inProgress' || entry.status === 'overdue')
-        .map(entry => entry.taskId)
-        .filter(Boolean),
+    // A fresh in-progress (or overdue) plant task re-arms the maintenance prompt.
+    const plantTask = activeTaskTargets.find(
+      entry => entry.componentId === '025'
+        && (entry.status === 'inProgress' || entry.status === 'overdue'),
     );
-    // Remove a completed task's beacon as soon as React publishes the new
-    // status; don't wait for the next proximity poll to clear the old light.
-    if (taskGuideBeacon?.userData.taskId && !activeTaskIds.has(taskGuideBeacon.userData.taskId)) {
-      hideTaskGuide();
-    }
+    if (plantTask) regolithPlantMaintained = false;
     console.log(
       '[TaskConsole] active targets:',
       activeTaskTargets
@@ -4357,6 +4512,16 @@ export function createLunarEngine(canvas, callbacks = {}) {
       enterNearbyComponent();
       return;
     }
+    if (isConfirm && cameraMode === 'first-person' && currentPromptType === 'regolithPlant') {
+      event.preventDefault();
+      runRegolithMaintenance();
+      return;
+    }
+    if ((key === 'escape' || key === 'n') && currentPromptType === 'regolithPlant') {
+      event.preventDefault();
+      setPrompt(null);
+      return;
+    }
     if (cameraMode === 'interior' && currentPromptType === 'airlockEnd') {
       if (key === 'arrowleft' || key === 'a') {
         event.preventDefault();
@@ -4566,25 +4731,73 @@ export function createLunarEngine(canvas, callbacks = {}) {
     }
   }
 
-  function updateComponentPrompt() {
-    if (cameraMode !== 'first-person' || !componentTargets.length) {
-      if (currentPromptType === 'component') setPrompt(null);
+  // The plant has no interior to step into, so instead of an "enter" prompt it
+  // offers its maintenance cycle — the action the day's task is waiting on.
+  function updateRegolithPlantPrompt() {
+    if (cameraMode !== 'first-person' || !regolithPlantTarget) {
+      if (currentPromptType === 'regolithPlant') setPrompt(null);
       return;
     }
-    const nearest = getNearestComponentPromptTarget();
+    const target = regolithPlantTarget;
+    const distance = Math.hypot(
+      camera.position.x - target.center.x,
+      camera.position.z - target.center.z,
+    );
+    if (distance > target.radius || regolithPlantMaintained) {
+      if (currentPromptType === 'regolithPlant') setPrompt(null);
+      return;
+    }
+    setPrompt('regolithPlant', {
+      id: 'regolith-plant',
+      title: 'Run a regolith maintenance cycle?',
+      message: 'The digester is baking oxygen out of the regolith. A maintenance cycle keeps the yield up.',
+    });
+  }
+
+  // Called from the prompt (Enter) and from the HUD button. The React layer owns
+  // the task bookkeeping, so this just reports which component asked.
+  function runRegolithMaintenance() {
+    if (!regolithPlantTarget || cameraMode !== 'first-person') return false;
+    const distance = Math.hypot(
+      camera.position.x - regolithPlantTarget.center.x,
+      camera.position.z - regolithPlantTarget.center.z,
+    );
+    if (distance > regolithPlantTarget.radius * 1.25) return false;
+    // A completed cycle is acknowledged so the prompt stops nagging until the
+    // next task arrives.
+    regolithPlantMaintained = true;
+    regolithPlantFlash = 1.6;
+    setPrompt(null);
+    onTaskAction('025', null);
+    return true;
+  }
+
+  function updateComponentPrompt() {
+    if (cameraMode !== 'first-person' || !componentTargets.length || currentPromptType === 'airlock') {
+      if (currentPromptType === 'component' || currentPromptType === 'regolithPlant') setPrompt(null);
+      return;
+    }
+    let nearest = null;
+    let nearestDistance = Infinity;
+    for (let i = 0; i < componentTargets.length; i++) {
+      const target = componentTargets[i];
+      // The plant runs on its own prompt so it never offers to be "entered".
+      if (target.roomType === 'regolithPlant') continue;
+      const distance = Math.hypot(camera.position.x - target.center.x, camera.position.z - target.center.z);
+      if (distance <= target.radius && distance < nearestDistance) {
+        nearest = target;
+        nearestDistance = distance;
+      }
+    }
     if (!nearest) {
-      if (currentPromptType === 'component') setPrompt(null);
+      if (currentPromptType === 'component' || currentPromptType === 'regolithPlant') setPrompt(null);
       activeComponentTarget = null;
       dismissedComponentId = null;
       return;
     }
-    const airlockDistance = airlockTriggerCenter
-      ? Math.hypot(camera.position.x - airlockTriggerCenter.x, camera.position.z - airlockTriggerCenter.z)
-      : Infinity;
-    if (currentPromptType === 'airlock' && airlockDistance <= nearest.centerDistance + 1) return;
-    if (nearest.target.id === dismissedComponentId) {
-      if (currentPromptType === 'component') setPrompt(null);
-      activeComponentTarget = nearest.target;
+    if (nearest.id === dismissedComponentId) {
+      if (currentPromptType === 'component' || currentPromptType === 'regolithPlant') setPrompt(null);
+      activeComponentTarget = nearest;
       return;
     }
     activeComponentTarget = nearest.target;
@@ -5337,11 +5550,20 @@ export function createLunarEngine(canvas, callbacks = {}) {
     }
 
     promptCheckTimer += dt;
+    if (regolithPlantFlash > 0) {
+      // Short decaying pulse on the plant's lights after a maintenance cycle.
+      regolithPlantFlash = Math.max(0, regolithPlantFlash - dt);
+      const pulse = 1 + Math.sin(regolithPlantFlash * 14) * 0.7 * (regolithPlantFlash / 1.6);
+      for (const light of regolithPlantLights) {
+        light.material.emissiveIntensity = light.base * pulse;
+      }
+    }
     if (!eventCinematic && !dayStartCameraTransition && !roverCameraActive && promptCheckTimer >= 0.1) {
       promptCheckTimer = 0;
       if (cameraMode === 'first-person') {
         updateAirlockPrompt();
         updateComponentPrompt();
+        updateRegolithPlantPrompt();
       } else if (cameraMode === 'interior') {
         updateAirlockEndPrompt();
         updateGreenhouseDoorPrompt();
@@ -5723,6 +5945,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
       greenhouseDoorPromptDismissed = true;
     },
     enterNearbyComponent,
+    // Regolith plant: runs this day's maintenance cycle (the day-loop task).
+    runRegolithMaintenance,
+    dismissRegolithPlant: () => setPrompt(null),
     dismissComponent: () => {
       setPrompt(null);
       dismissedComponentId = activeComponentTarget?.id ?? null;
