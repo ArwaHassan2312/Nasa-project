@@ -151,13 +151,13 @@ export function getEventNarration(event: { id?: string; sourceEventId?: string; 
   };
 }
 
-export function getChapterReply(day: number, completedTasks: number, totalEvents: number, science: number) {
+export function getChapterReply(day: number, completedTasks: number, totalEvents: number, science: number, playerAddress = 'Commander') {
   if (day === 5) return STORY_CHAPTERS[0].ending;
   if (day === 10) return STORY_CHAPTERS[1].ending;
   if (day === 15) return STORY_CHAPTERS[2].ending;
-  if (completedTasks >= 3 && science >= 40) return 'Wonderful progress, Commander! Your careful work and science readings are helping us understand how to live on the Moon.';
-  if (totalEvents > completedTasks + 1) return 'That was a challenging day, Commander. Every problem gives us useful information. Tomorrow is another chance to try a new plan.';
-  return 'Good work today, Commander. I have added your results to the mission record. Keep observing and taking care of the outpost.';
+  if (completedTasks >= 3 && science >= 40) return `Wonderful progress, ${playerAddress}! Your careful work and science readings are helping us understand how to live on the Moon.`;
+  if (totalEvents > completedTasks + 1) return `That was a challenging day, ${playerAddress}. Every problem gives us useful information. Tomorrow is another chance to try a new plan.`;
+  return `Good work today, ${playerAddress}. I have added your results to the mission record. Keep observing and taking care of the outpost.`;
 }
 
 export function getStoryCallback(decisions: { eventName: string; decisionLabel: string }[], resources: Record<string, number>) {

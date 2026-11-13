@@ -3,10 +3,30 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { Bounds, Center, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { getDailyTaskExperience, getDailyTaskSolutions } from '../../data/dailyTaskExperiences';
+import { getPlayerAddress } from '../../utils/playerAddress';
 import './DailyTaskExperience.css';
 
 const STEPS = ['Task Idea', 'Discover Problem', 'Choose a Solution', 'Complete Task', 'Conclusion'];
 const STAGE_ORDER = ['idea', 'discover', 'solutions', 'perform', 'conclusion'];
+const RESOURCE_LABELS = {
+  power: 'Power',
+  battery: 'Battery',
+  oxygen: 'Oxygen',
+  water: 'Water',
+  food: 'Food',
+  habitat: 'Habitat',
+  equipment: 'Equipment',
+  health: 'Health',
+  radProtection: 'Radiation Protection',
+  comms: 'Communications',
+  science: 'Science',
+  emergencyReserve: 'Emergency Reserve',
+  potentialWater: 'Potential Water',
+};
+
+function getResourceLabel(resource) {
+  return RESOURCE_LABELS[resource] ?? resource;
+}
 
 function getSolutionIcon(solution, experience, task, used) {
   const action = solution.name.toLowerCase();
@@ -78,20 +98,22 @@ function SolutionIcon({ kind }) {
   return <svg viewBox="0 0 48 48" aria-hidden="true" {...common}>{drawing}</svg>;
 }
 
-export default function DailyTaskExperience({ task, initialStage = 'idea', progressState = {}, resourceChanges, componentChange, taskFact, startMessage, suspended = false, onClose, onFindLocation, onSelectSolution, onComplete }) {
+export default function DailyTaskExperience({ task, commanderName, initialStage = 'idea', progressState = {}, resourceChanges, componentChange, taskFact, startMessage, suspended = false, onClose, onFindLocation, onSelectSolution, onProgressChange, onComplete }) {
   const experience = getDailyTaskExperience(task);
+  const playerAddress = getPlayerAddress(commanderName);
   const [stage, setStage] = useState(initialStage);
   const [hint, setHint] = useState('');
   const selectedSolution = progressState.solution;
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState(progressState.workProgress ?? 0);
   const [holding, setHolding] = useState(false);
   const [selectedOptionId, setSelectedOptionId] = useState(null);
   const [problemFound, setProblemFound] = useState(false);
   const problemFoundRef = useRef(false);
-  const [whyOpen, setWhyOpen] = useState(false);
   const completionRef = useRef(false);
-  const progressRef = useRef(0);
+  const progressRef = useRef(progressState.workProgress ?? 0);
+  const onProgressChangeRef = useRef(onProgressChange);
   const selectionTimerRef = useRef(null);
+  onProgressChangeRef.current = onProgressChange;
 
   useEffect(() => () => window.clearTimeout(selectionTimerRef.current), []);
 
@@ -106,6 +128,7 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
       const next = Math.min(100, progressRef.current + 5);
       progressRef.current = next;
       setProgress(next);
+      onProgressChangeRef.current?.(next);
       if (next >= 100) {
         window.clearInterval(timer);
         setHolding(false);
@@ -156,7 +179,7 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
 
   const guideMessages = {
     idea: startMessage ?? 'Mission ready! Let’s find the equipment that needs help.',
-    discover: problemFound ? 'You found the trouble spot! Great eyes, Commander.' : 'Drag the magnifying glass over the picture to find the trouble spot.',
+    discover: problemFound ? `You found the trouble spot! Great eyes, ${playerAddress}.` : 'Drag the magnifying glass over the picture to find the trouble spot.',
     solutions: 'Pick the plan you like best. Every choice can help!',
     perform: 'You’re ready! Hold the button and keep going until it’s done.',
     'complete-pending': 'Almost there! Your work is being saved.',
@@ -169,7 +192,7 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
       <section className="daily-task-experience" role="dialog" aria-modal="true" aria-labelledby="daily-task-experience-title">
         <button className="daily-task-experience-close" type="button" aria-label="Close task activity" onClick={onClose}>×</button>
         <header className="daily-task-experience-header">
-          <span className="daily-task-experience-kicker">Commander activity · Day {task.scheduledDay}</span>
+          <span className="daily-task-experience-kicker">{playerAddress} · Day {task.scheduledDay}</span>
           <h2 id="daily-task-experience-title">{task.title}</h2>
           {stage !== 'conclusion' && stage !== 'complete-pending' && stage !== 'failed' && <div className="daily-task-step-list" aria-label={`Step ${Math.max(0, STAGE_ORDER.indexOf(stage)) + 1} of ${STEPS.length}`}>
             {STEPS.map((label, index) => (
@@ -187,12 +210,10 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
 
         {stage === 'idea' && (
           <div className="daily-task-stage daily-task-idea-stage">
-            <ObjectPicture picture={experience.picture} />
             <span className="daily-task-stage-label">Task idea</span>
             <p>{experience.scenario}</p>
-            <p className="daily-task-location-note">Your check is at <strong>{task.targetComponentName}</strong>.</p>
-            <button type="button" className="daily-task-why-button" aria-expanded={whyOpen} onClick={() => setWhyOpen((open) => !open)}>{whyOpen ? 'Hide why' : 'Why does this matter?'}</button>
-            {whyOpen && <p className="daily-task-why-note">{task.riskIfDelayed}</p>}
+            <p className="daily-task-location-note">Your maintenance job is at <strong>{task.targetComponentName}</strong>.</p>
+            <p className="daily-task-why-note"><strong>Why does this matter?</strong> {task.riskIfDelayed.split(/(?<=[.!?])\s/)[0]}</p>
             <button className="daily-task-primary" type="button" onClick={onFindLocation}>Let’s find it!</button>
           </div>
         )}
@@ -222,7 +243,6 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
             <span className="daily-task-stage-label">Choose a Solution</span>
             <p>{experience.scenario}</p>
             <p>Which plan sounds good to you? Pick one and let’s get to work!</p>
-            <ObjectPicture picture={experience.picture} brokenPart={experience.brokenPart} />
             <div className="daily-task-tool-grid daily-task-solution-options">
               {(() => {
                 const usedEmojis = new Set();
@@ -238,6 +258,14 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
                   <span className="daily-task-option-icon" aria-hidden="true"><SolutionIcon kind={getSolutionIcon(solution, experience, task, usedEmojis)} /></span>
                   <strong>{solution.name}</strong>
                   <small>{solution.playerDescription}</small>
+                  <small className="daily-task-resource-effects">
+                    {Object.entries(solution.resourceEffects ?? {}).filter(([, amount]) => amount !== 0).map(([resource, amount]) => (
+                      <span className={amount > 0 ? 'is-positive' : 'is-negative'} key={resource}>
+                        {getResourceLabel(resource)} {amount > 0 ? '+' : ''}{amount}%
+                      </span>
+                    ))}
+                    {!Object.values(solution.resourceEffects ?? {}).some((amount) => amount !== 0) && <span>No resource change</span>}
+                  </small>
                 </button>
                 ));
               })()}
@@ -283,11 +311,11 @@ export default function DailyTaskExperience({ task, initialStage = 'idea', progr
           <div className="daily-task-stage daily-task-success-stage">
             <span className="daily-task-success-check" aria-label="Task complete">✓</span>
             <span className="daily-task-stage-label">Conclusion</span>
-            <p>You chose <strong>{selectedSolution?.name}</strong>. Nice work, Commander!</p>
+            <p>You chose <strong>{selectedSolution?.name}</strong>. Nice work, {playerAddress}!</p>
             <p>{task.completionFeedback}</p>
             {componentChange !== null && componentChange !== undefined && <p>{componentChange > 0 ? `${task.affectedSystem} condition improved by ${componentChange} points.` : componentChange < 0 ? `${task.affectedSystem} condition changed by ${componentChange} points.` : 'The affected component condition stayed the same.'}</p>}
             <p>{resourceChanges && Object.keys(resourceChanges).length > 0
-              ? `Actual resource changes: ${Object.entries(resourceChanges).map(([key, amount]) => `${key === 'science' ? 'Science' : key === 'power' ? 'Power' : key === 'water' ? 'Water' : key === 'oxygen' ? 'Oxygen' : key === 'food' ? 'Food' : key === 'battery' ? 'Battery' : key} ${amount > 0 ? '+' : ''}${amount}%`).join(', ')}.`
+              ? `Actual resource changes: ${Object.entries(resourceChanges).map(([key, amount]) => `${getResourceLabel(key)} ${amount > 0 ? '+' : ''}${amount}%`).join(', ')}.`
               : 'No resource values changed during this task.'}</p>
             <article className="daily-task-fact-card">
               <strong>Space fact</strong>

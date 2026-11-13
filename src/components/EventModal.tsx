@@ -3,13 +3,13 @@ import type { Decision, GameEvent } from '../data/moonEvents';
 
 const RESOURCE_LABELS: Record<string, string> = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
-  habitat: 'Commander safety', equipment: 'Outpost tools', health: 'Commander safety',
-  radProtection: 'Commander safety', comms: 'Power', science: 'Science',
+  habitat: 'Crew safety', equipment: 'Outpost tools', health: 'Crew safety',
+  radProtection: 'Crew safety', comms: 'Power', science: 'Science',
   emergencyReserve: 'Water', potentialWater: 'Water',
 };
 const RESOURCE_GROUPS: Record<string, string> = {
   battery: 'Battery', comms: 'Power', equipment: 'Power',
-  habitat: 'Commander safety', radProtection: 'Commander safety',
+  habitat: 'Crew safety', radProtection: 'Crew safety',
   emergencyReserve: 'Water', potentialWater: 'Water',
   science: 'Science',
 };

@@ -1,9 +1,11 @@
 import { useEffect } from 'react';
 import { MissionStoryAvatar } from '../MissionStoryIntro';
 import { createNoorSpeech } from '../../utils/missionVoice';
+import { getPlayerAddress } from '../../utils/playerAddress';
 import './MissionEventCall.css';
 
-export default function MissionEventCall({ call, narration, location, onAnswer, onContinue }) {
+export default function MissionEventCall({ call, narration, location, commanderName, onAnswer, onContinue }) {
+  const playerAddress = getPlayerAddress(commanderName);
   const event = call?.event;
   const eventKey = event?.occurrenceId ?? `${event?.id ?? 'event'}-${event?.day ?? 0}`;
   const cause = event?.triggerSource === 'task'
@@ -49,7 +51,7 @@ export default function MissionEventCall({ call, narration, location, onAnswer, 
               <small>Location: {location?.name ?? 'Outpost'}</small>
             </div>
           </div>
-          <footer><span>NOOR: “You’ve got this, Commander. Let’s take care of it together.”</span><button type="button" className="mission-event-call-button" onClick={onContinue}>Thanks, Dr. Noor · Let’s go</button></footer>
+          <footer><span>NOOR: “You’ve got this, {playerAddress}. Let’s take care of it together.”</span><button type="button" className="mission-event-call-button" onClick={onContinue}>Thanks, Dr. Noor · Let’s go</button></footer>
         </section>
       )}
     </div>

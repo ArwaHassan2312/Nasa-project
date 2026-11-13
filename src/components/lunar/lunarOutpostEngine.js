@@ -96,6 +96,10 @@ const OUTPOST_COMPONENT_NAMES = {
   '023': 'SURVEY MARKERS',
   '025': 'REGOLITH PLANT'
 };
+const NON_ENTERABLE_COMPONENT_IDS = new Set([
+  '000', '005', '006', '007', '011', '012', '013', '014', '015', '016',
+  '017', '018', '019', '020', '021', '022', '023',
+]);
 
 function loadCachedGLTF(path, onLoad, onProgress, onError) {
   if (ASSET_CACHE.gltfs.has(path)) {
@@ -2658,7 +2662,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const targets = [];
     outpost.traverse(object => {
       const match = object.name.match(/^(\d{3})-[^/]+$/);
-      if (!match || !definitions[match[1]] || match[1] === '005') return;
+      if (!match || !definitions[match[1]]) return;
       const bounds = new THREE.Box3().setFromObject(object);
       if (bounds.isEmpty()) return;
       const size = bounds.getSize(new THREE.Vector3());
@@ -3261,6 +3265,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     const target = getNearbyEnterableComponentTarget();
     if (!target) return false;
     activeComponentTarget = target;
+    if (NON_ENTERABLE_COMPONENT_IDS.has(target.id)) return;
     moduleReturnMode = 'exterior';
     if (target.roomType === 'commandCenter') {
       enterCommandCenterInterior(target);
@@ -3433,7 +3438,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function enterAirlock() {
-    if (cameraMode !== 'first-person' || airlockLoading) return;
+    if (cameraMode !== 'first-person' || airlockLoading || NON_ENTERABLE_COMPONENT_IDS.has('005')) return;
     if (airlockInterior) {
       enterAirlockInterior();
       return;
@@ -3526,6 +3531,18 @@ export function createLunarEngine(canvas, callbacks = {}) {
     greenhouseTaskMarkerObject = tomatoes;
     greenhouseInterior.updateMatrixWorld(true);
     const floorLocalY = greenhouseInterior.worldToLocal(new THREE.Vector3(0, greenhouseInteriorBounds.min.y, 0)).y;
+    const columnGapIndex = Math.floor((columns - 1) / 2);
+    const rowGapIndex = Math.floor((rows - 1) / 2);
+    const taskMarkerWorldPosition = new THREE.Vector3(
+      columns > 1
+        ? minX + (columnGapIndex + 0.5) * (maxX - minX) / (columns - 1)
+        : greenhouseInteriorBounds.min.x + 0.9,
+      greenhouseInteriorBounds.min.y,
+      rows > 1
+        ? minZ + (rowGapIndex + 0.5) * (maxZ - minZ) / (rows - 1)
+        : greenhouseInteriorBounds.min.z + 0.9,
+    );
+    tomatoes.userData.taskMarkerLocalPosition = greenhouseInterior.worldToLocal(taskMarkerWorldPosition);
 
     for (let row = 0; row < rows; row++) {
       for (let column = 0; column < columns; column++) {
@@ -4660,6 +4677,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     let nearestCenterDistance = Infinity;
     for (let i = 0; i < componentTargets.length; i++) {
       const target = componentTargets[i];
+      if (NON_ENTERABLE_COMPONENT_IDS.has(target.id)) continue;
       const dx = camera.position.x - target.center.x;
       const dz = camera.position.z - target.center.z;
       const centerDistance = Math.hypot(dx, dz);
@@ -4680,7 +4698,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function updateAirlockPrompt() {
-    if (cameraMode !== 'first-person' || !airlockTriggerCenter) {
+    if (cameraMode !== 'first-person' || !airlockTriggerCenter || NON_ENTERABLE_COMPONENT_IDS.has('005')) {
       if (currentPromptType === 'airlock') setPrompt(null);
       return;
     }
@@ -5899,7 +5917,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     taskGuideBeacon = new THREE.Group();
     taskGuideBeacon.name = 'Daily Task Guide Beacon';
 
-    const beamGeometry = new THREE.CylinderGeometry(0.82, 0.82, 2.45, 32, 32, true);
+    const beamGeometry = new THREE.CylinderGeometry(1.18, 1.18, 2.45, 32, 32, true);
     const beamPositions = beamGeometry.attributes.position;
     const beamRed = new THREE.Color(0x984242);
     const beamColors = new Float32Array(beamPositions.count * 4);
@@ -5922,7 +5940,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         transparent: true,
         opacity: 0.94,
         side: THREE.DoubleSide,
-        depthTest: false,
+        depthTest: true,
         depthWrite: false,
       }),
     );
@@ -5930,13 +5948,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
     beam.renderOrder = 1000;
 
     const floorGlow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.88, 48),
+      new THREE.CircleGeometry(1.42, 48),
       new THREE.MeshBasicMaterial({
         color: 0x984242,
         transparent: true,
         opacity: 0.23,
         side: THREE.DoubleSide,
-        depthTest: false,
+        depthTest: true,
         depthWrite: false,
       }),
     );
@@ -5945,13 +5963,13 @@ export function createLunarEngine(canvas, callbacks = {}) {
     floorGlow.renderOrder = 1001;
 
     const floorRing = new THREE.Mesh(
-      new THREE.RingGeometry(0.74, 0.9, 48),
+      new THREE.RingGeometry(1.18, 1.46, 48),
       new THREE.MeshBasicMaterial({
         color: 0x984242,
         transparent: true,
         opacity: 0.84,
         side: THREE.DoubleSide,
-        depthTest: false,
+        depthTest: true,
         depthWrite: false,
       }),
     );
@@ -5972,20 +5990,36 @@ export function createLunarEngine(canvas, callbacks = {}) {
   // The guide is a world-space object, so it stays planted at the task spot
   // while the player turns and looks around.
   function getTaskMarkerTargets() {
-    if (cameraMode !== 'interior') {
+    if (!['interior', 'first-person'].includes(cameraMode)) {
       hideTaskGuide();
       return [];
     }
     const activeTargets = activeTaskTargets
       .filter((entry) => entry.status === 'available' || entry.status === 'inProgress' || entry.status === 'overdue')
-      .sort((first, second) => Number(second.isActive) - Number(first.isActive));
+      .sort((first, second) => Number(second.isActive) - Number(first.isActive)
+        || first.taskId.localeCompare(second.taskId));
     if (activeTargets.length === 0) {
       hideTaskGuide();
       return [];
     }
     const anchors = [];
 
-    if (taskConsoleInner && taskConsoleComponentId) {
+    if (cameraMode === 'first-person') {
+      for (const target of activeTargets) {
+        if (!NON_ENTERABLE_COMPONENT_IDS.has(target.componentId)) continue;
+        const component = componentTargets.find((entry) => entry.id === target.componentId);
+        if (!component) continue;
+        const point = {
+          x: component.bounds.minX - 2.2,
+          z: (component.bounds.minZ + component.bounds.maxZ) / 2,
+        };
+        const ground = sampleGroundHeight(point.x, point.z);
+        if (ground === null || !Number.isFinite(ground)) continue;
+        anchors.push({ target, worldPosition: new THREE.Vector3(point.x, ground + 0.04, point.z), isExterior: true });
+      }
+    }
+
+    if (cameraMode === 'interior' && taskConsoleInner && taskConsoleComponentId) {
       for (const unit of taskConsoleUnits) {
         if (unit.status !== 'inProgress' && unit.status !== 'overdue') continue;
         const target = activeTargets.find((entry) => entry.taskId === unit.taskId);
@@ -5993,7 +6027,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
         taskConsoleInner.updateWorldMatrix(true, false);
         const worldPosition = unit.button.getWorldPosition(new THREE.Vector3());
         if (activeModuleInteriorBounds) worldPosition.y = activeModuleInteriorBounds.min.y + 0.04;
-        anchors.push({ target, worldPosition });
+        anchors.push({ target, worldPosition, isExterior: false });
       }
     }
 
@@ -6005,11 +6039,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
       let worldPosition = null;
       if (specialComponentId === '008' && greenhouseTaskMarkerObject) {
         greenhouseInterior.updateMatrixWorld(true);
-        // Anchor the task light to the fixed crop area, rather than the
-        // greenhouse group origin beside the entrance.
-        const cropBounds = new THREE.Box3().setFromObject(greenhouseTaskMarkerObject);
-        worldPosition = cropBounds.getCenter(new THREE.Vector3());
-        worldPosition.y = cropBounds.min.y + 0.04;
+        worldPosition = greenhouseTaskMarkerObject.userData.taskMarkerLocalPosition
+          ? greenhouseInterior.localToWorld(greenhouseTaskMarkerObject.userData.taskMarkerLocalPosition.clone())
+          : new THREE.Box3().setFromObject(greenhouseTaskMarkerObject).getCenter(new THREE.Vector3());
+        worldPosition.y = greenhouseInteriorBounds.min.y + 0.04;
       } else if (specialComponentId === '005' && airlockInteriorBounds) {
         if (airlockTaskMarkerObject) {
           airlockInterior.updateMatrixWorld(true);
@@ -6021,14 +6054,14 @@ export function createLunarEngine(canvas, callbacks = {}) {
           worldPosition.y = airlockInteriorBounds.min.y + 0.04;
         }
       }
-      if (worldPosition) specialTargets.forEach((target) => anchors.push({ target, worldPosition: worldPosition.clone() }));
+      if (worldPosition) specialTargets.forEach((target) => anchors.push({ target, worldPosition: worldPosition.clone(), isExterior: false }));
     }
 
-    if (anchors.length === 0 && taskConsoleComponentId && activeModuleInteriorBounds) {
+    if (anchors.length === 0 && cameraMode === 'interior' && taskConsoleComponentId && activeModuleInteriorBounds) {
       const moduleTargets = activeTargets.filter((entry) => entry.componentId === taskConsoleComponentId);
       const worldPosition = activeModuleInteriorBounds.getCenter(new THREE.Vector3());
       worldPosition.y = activeModuleInteriorBounds.min.y + 0.04;
-      moduleTargets.forEach((target) => anchors.push({ target, worldPosition: worldPosition.clone() }));
+      moduleTargets.forEach((target) => anchors.push({ target, worldPosition: worldPosition.clone(), isExterior: false }));
     }
 
     if (anchors.length === 0) {
@@ -6036,26 +6069,24 @@ export function createLunarEngine(canvas, callbacks = {}) {
       return [];
     }
 
-    // Keep one deterministic task spot active; the beacon must not jump to a
-    // different task as the player walks around the room.
-    const groundDistance = (anchor) => Math.hypot(
-      camera.position.x - anchor.worldPosition.x,
-      camera.position.z - anchor.worldPosition.z,
-    );
     anchors.sort((first, second) => Number(second.target.isActive) - Number(first.target.isActive)
-      || groundDistance(first) - groundDistance(second));
-    const beaconAnchor = anchors[0];
+      || first.target.taskId.localeCompare(second.target.taskId));
+    const anchor = anchors[0];
+
     const beacon = ensureTaskGuideBeacon();
-    beacon.userData.taskId = beaconAnchor.target.taskId;
-    beacon.position.copy(beaconAnchor.worldPosition);
+    if (beacon.userData.taskId !== anchor.target.taskId) {
+      beacon.userData.taskId = anchor.target.taskId;
+      beacon.position.copy(anchor.worldPosition);
+    }
+    const markerScale = anchor.isExterior ? 1.32 : specialComponentId === '008' ? 0.58 : 0.82;
+    beacon.scale.set(markerScale, 1, markerScale);
     beacon.visible = true;
 
-    const distance = groundDistance(beaconAnchor);
     return [{
-      taskId: beaconAnchor.target.taskId,
-      label: beaconAnchor.target.label,
-      distance,
-      nearby: distance < 1.35,
+      taskId: anchor.target.taskId,
+      label: anchor.target.label,
+      distance: Math.hypot(camera.position.x - anchor.worldPosition.x, camera.position.z - anchor.worldPosition.z),
+      nearby: Math.hypot(camera.position.x - anchor.worldPosition.x, camera.position.z - anchor.worldPosition.z) < 1.35,
     }];
   }
 

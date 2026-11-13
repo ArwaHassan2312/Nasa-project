@@ -249,7 +249,7 @@ const CRITICAL_TASK_RECOVERY_DURATION_MS = 45_000;
 const CLOCK_UPDATE_INTERVAL_MS = 1000;
 const RESOURCE_DISPLAY_NAMES: Record<ResourceKey, string> = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
-  habitat: 'Commander safety', equipment: 'Commander safety', health: 'Commander safety',
+  habitat: 'Crew safety', equipment: 'Crew safety', health: 'Crew safety',
   radProtection: 'Commander safety', comms: 'Power', science: 'Science',
   emergencyReserve: 'Water', potentialWater: 'Water',
 };
@@ -270,6 +270,15 @@ function eventOccurrenceKey(event: GameEvent | null | undefined): string | null 
 
 function hasPendingCriticalTaskNotice(state: GameState): boolean {
   return state.taskFailureNotices.length > 0 || state.endOfDayNoticeHistory.length > 0;
+}
+
+function hasIndependentEventOccurredOnDay(state: GameState): boolean {
+  return state.independentEventHistory.some((event) => event.day === state.day)
+    || (state.currentEvent?.triggerSource === 'independent'
+      && (state.currentEvent.day ?? state.day) === state.day)
+    || state.queuedEvents.some(({ event }) => (
+      event.triggerSource === 'independent' && (event.day ?? state.day) === state.day
+    ));
 }
 
 function hasUnresolvedCriticalTaskEvent(tasks: DailyChallenge[]): boolean {
@@ -1390,7 +1399,7 @@ export function advanceClockState(
     const untilSchedulerCheck = nextState.dayPhase === 'active'
       && !criticalNoticeOpen
       && nextState.dayElapsedMs < independentWindowEndMs
-      && !hasEventOccurredOnDay(nextState)
+      && !hasIndependentEventOccurredOnDay(nextState)
       ? Math.max(0, EVENT_SCHEDULER_CONFIG.checkIntervalMs - nextState.schedulerElapsedMs)
       : Number.POSITIVE_INFINITY;
     const untilTaskTransition = nextState.dayPhase === 'active' && !criticalNoticeOpen
@@ -1557,7 +1566,7 @@ export function advanceClockState(
 
     if (nextState.dayPhase === 'active'
       && nextState.dayElapsedMs < independentWindowEndMs
-      && !hasEventOccurredOnDay(nextState)
+      && !hasIndependentEventOccurredOnDay(nextState)
       && nextState.schedulerElapsedMs >= EVENT_SCHEDULER_CONFIG.checkIntervalMs) {
       nextState = { ...nextState, schedulerElapsedMs: 0 };
       const selection = selectMajorEvent({

@@ -10,6 +10,7 @@ import { MISSION_FAILURE_RESOURCE_THRESHOLD } from '../hooks/useGameSimulation';
 import type { ResourceKey } from '../data/moonEvents';
 import type { EventOccurrence } from '../hooks/eventScheduler';
 import { buildMissionFailureNarrative } from './missionFailureNarrative';
+import { getPlayerAddress } from '../utils/playerAddress';
 import { SCIENCE_DISCOVERIES } from '../data/missionStory';
 
 interface EndGameReportProps {
@@ -35,10 +36,10 @@ const RESOURCE_LABELS: Record<ResourceKey, string> = {
   oxygen: 'Oxygen',
   water: 'Water',
   food: 'Food',
-  habitat: 'Commander safety',
+  habitat: 'Crew safety',
   equipment: 'Outpost tools',
-  health: 'Commander safety',
-  radProtection: 'Commander safety',
+  health: 'Crew safety',
+  radProtection: 'Crew safety',
   comms: 'Power',
   science: 'Science',
   emergencyReserve: 'Water',
@@ -51,7 +52,7 @@ const VITAL_RESOURCES: ResourceKey[] = [
 
 const REPORT_RESOURCE_LABELS: Partial<Record<ResourceKey, string>> = {
   oxygen: 'Oxygen', water: 'Water', power: 'Power',
-  battery: 'Battery', food: 'Food', health: 'Commander safety',
+  battery: 'Battery', food: 'Food', health: 'Crew safety',
 };
 
 export default function EndGameReport({
@@ -71,6 +72,7 @@ export default function EndGameReport({
   scienceNotebookIds = [],
 }: EndGameReportProps) {
   const isSuccess = status === 'success';
+  const playerAddress = getPlayerAddress(commanderName);
   const discoveryCount = scienceNotebookIds.length;
   const vitalResources = ['oxygen', 'water', 'power', 'battery', 'food', 'health'] as const;
   const maintainedOutpost = vitalResources.every((resource) => resources[resource] >= 50);
@@ -125,7 +127,7 @@ export default function EndGameReport({
           <h2 id="report-title" className={isSuccess ? 'report-success' : 'report-failed'}>{ending.title}</h2>
           <p className="report-intro">
             {isSuccess
-              ? `${baseName} made it to Day ${day} of ${maxDays}. Review what Commander ${commanderName} discovered and how the outpost changed.`
+              ? `${baseName} made it to Day ${day} of ${maxDays}. Review what ${playerAddress} discovered and how the outpost changed.`
               : analysis.explanation[0]}
           </p>
         </header>
@@ -133,14 +135,14 @@ export default function EndGameReport({
         <section className="report-section report-final-message">
           <h3>Final message from Dr. Noor</h3>
           <p>{ending.summary}</p>
-          <div className="report-final-discovery"><span>COMMANDER’S SCIENCE NOTEBOOK</span><strong>{discoveryCount} / {SCIENCE_DISCOVERIES.length} discoveries saved</strong><small>Final Science reading: {Math.round(resources.science)}%</small></div>
+          <div className="report-final-discovery"><span>{playerAddress.toUpperCase()}’S SCIENCE NOTEBOOK</span><strong>{discoveryCount} / {SCIENCE_DISCOVERIES.length} discoveries saved</strong><small>Final Science reading: {Math.round(resources.science)}%</small></div>
           <ol className="report-final-steps"><li>Mission summary</li><li>Scientific discoveries</li><li>Best decisions</li><li>What to try next</li></ol>
         </section>
 
         <section className="report-section">
           <h3>Mission summary</h3>
             <p>{isSuccess
-            ? `Commander ${commanderName} completed the 15-day mission at ${baseName}. See how your choices, jobs, problems, discoveries, and resources shaped the result.`
+            ? `${playerAddress} completed the 15-day mission at ${baseName}. See how your choices, jobs, problems, discoveries, and resources shaped the result.`
             : analysis.explanation[0]}</p>
           <div className="report-stat-grid report-summary-grid">
             <article className="report-stat-card"><span>How it went</span><strong>{isSuccess ? 'Mission complete' : 'Mission paused early'}</strong><small>{isSuccess ? 'The outpost made it through the mission' : `A resource got too low: ${failureReason ? REPORT_RESOURCE_LABELS[failureReason] ?? failureReason : 'check the bars'}`}</small></article>

@@ -146,7 +146,7 @@ export const MOON_EVENTS: GameEvent[] = [
         label: "Turn Off the Lab",
         effects: { health: 8, power: -5 },
         conditionEffects: { lifeSupport: 5, power: -3 },
-        benefit: "Commander safety +8; the fire is contained",
+        benefit: "Crew safety +8; the fire is contained",
         cost: "Power -5",
         risk: "Less time for other jobs",
         setFlags: ["experimentsReset"],
@@ -222,7 +222,7 @@ export const MOON_EVENTS: GameEvent[] = [
         effects: { food: 8, health: -8 },
         conditionEffects: { power: -15, equipment: -4 },
         benefit: "Food +8; the outpost keeps working",
-        cost: "Commander safety -8",
+        cost: "Crew safety -8",
         risk: "The power could run too low",
         setFlags: ["powerDebt"],
         futureConsequence: "The outpost will need to save more power"
@@ -273,7 +273,7 @@ export const MOON_EVENTS: GameEvent[] = [
         label: "Go to the Storm Shelter",
         effects: { health: 5, food: -5 },
         conditionEffects: { power: 3 },
-        benefit: "Commander safety +5",
+        benefit: "Crew safety +5",
         cost: "Food -5",
         risk: "Less time for other jobs",
         futureConsequence: "You stay protected"
@@ -294,7 +294,7 @@ export const MOON_EVENTS: GameEvent[] = [
         label: "Head to Shelter",
         effects: { health: 10, food: -5 },
         conditionEffects: { power: 2 },
-        benefit: "Commander safety +10; you stay sheltered",
+        benefit: "Crew safety +10; you stay sheltered",
         cost: "Food -5",
         risk: "Other jobs may have to wait",
         futureConsequence: "Outdoor jobs will have to wait"
@@ -337,7 +337,7 @@ export const MOON_EVENTS: GameEvent[] = [
         effects: { food: 10, health: -8 },
         conditionEffects: { power: -12, lifeSupport: -4 },
         benefit: "Food +10; regular work continues",
-        cost: "Commander safety -8",
+        cost: "Crew safety -8",
         risk: "Power could run low in the dark",
         setFlags: ["powerDebt"],
         futureConsequence: "Power may run low again"

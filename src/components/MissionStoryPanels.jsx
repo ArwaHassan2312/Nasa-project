@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { MOON_FACTS, SCIENCE_DISCOVERIES } from '../data/missionStory';
 import { MissionStoryAvatar } from './MissionStoryIntro';
 import { createNoorSpeech } from '../utils/missionVoice';
+import { getPlayerAddress } from '../utils/playerAddress';
 import './MissionStoryPanels.css';
 
 export function MissionStoryMoment({ moment, onClose, onContinue = onClose, voiceEnabled = true }) {
@@ -70,7 +71,7 @@ export function MissionArchive({ open, onClose, activeTab, setActiveTab, simulat
     <div className="mission-story-panel-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="mission-archive" role="dialog" aria-modal="true" aria-labelledby="mission-archive-title">
         <button type="button" className="story-panel-close" aria-label="Close mission archive" onClick={onClose}>×</button>
-        <header className="mission-archive-header"><span>COMMANDER {simulation.commanderName.toUpperCase()} · DAY {simulation.day}</span><h2 id="mission-archive-title">Mission Archive</h2><p>{simulation.baseName} · Science {Math.round(simulation.resources.science)}%</p><p className="mission-archive-help">Your notebook saves discoveries and rover samples. Photo Mode saves a picture of your current Moon view.</p></header>
+        <header className="mission-archive-header"><span>{getPlayerAddress(simulation.commanderName).toUpperCase()} · DAY {simulation.day}</span><h2 id="mission-archive-title">Mission Archive</h2><p>{simulation.baseName} · Science {Math.round(simulation.resources.science)}%</p><p className="mission-archive-help">Your notebook saves discoveries and rover samples. Photo Mode saves a picture of your current Moon view.</p></header>
         <nav className="mission-archive-tabs" aria-label="Mission archive sections">
           {tabs.map(([id, label]) => <button key={id} type="button" className={activeTab === id ? 'is-active' : ''} aria-pressed={activeTab === id} onClick={() => setActiveTab(id)}>{label}</button>)}
         </nav>
@@ -134,6 +135,7 @@ export function IceSampleActivity({ open, samples, onCollect, onClose }) {
 }
 
 export function RadioCall({ open, onClose, commanderName, baseName, day }) {
+  const playerAddress = getPlayerAddress(commanderName);
   const [reply, setReply] = useState(false);
   useEffect(() => {
     if (!open) { setReply(false); return undefined; }
@@ -146,9 +148,9 @@ export function RadioCall({ open, onClose, commanderName, baseName, day }) {
       <section className="mission-radio-panel" role="dialog" aria-modal="true" aria-labelledby="radio-call-title">
         <button type="button" className="story-panel-close" aria-label="Close radio call" onClick={onClose}>×</button>
         <span className="story-panel-kicker">COMMUNICATIONS MAST · SIGNAL DELAY 1.3 SECONDS</span><h2 id="radio-call-title">Call to Mission Control</h2>
-        <article className="radio-message radio-outgoing"><span>TO: MISSION CONTROL · FROM: {commanderName.toUpperCase()}</span><p>Day {day} check-in from {baseName}. The outpost is still sending science and system readings.</p></article>
+        <article className="radio-message radio-outgoing"><span>TO: MISSION CONTROL · FROM: {playerAddress.toUpperCase()}</span><p>Day {day} check-in from {baseName}. The outpost is still sending science and system readings.</p></article>
         <div className={`radio-signal-delay${reply ? ' is-arrived' : ''}`}><i /><span>{reply ? 'Signal received on Earth' : 'Radio signal travelling to Earth…'}</span></div>
-        {reply && <article className="radio-message radio-incoming"><span>DR. NOOR · MISSION CONTROL</span><p>Message received, Commander! The signal took about 1.3 seconds to reach us. Your observations are helping the whole team understand the Moon.</p></article>}
+        {reply && <article className="radio-message radio-incoming"><span>DR. NOOR · MISSION CONTROL</span><p>Message received, {playerAddress}! The signal took about 1.3 seconds to reach us. Your observations are helping the whole team understand the Moon.</p></article>}
         <button type="button" className="story-panel-continue" onClick={onClose}>{reply ? 'End call' : 'Close radio'}</button>
       </section>
     </div>
