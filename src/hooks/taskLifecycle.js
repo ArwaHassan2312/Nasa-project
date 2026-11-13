@@ -126,66 +126,32 @@ export function selectRandomDailyTaskDefinitions(
     return randomState / 0x1_0000_0000;
   };
 
-  const count = random() < 0.5 ? 3 : 4;
+  const count = 3;
   const usedIds = new Set(previousTaskIds);
   const candidates = definitions.filter((definition) => !usedIds.has(definition.id));
-  if (candidates.length <= count) return candidates;
-
-  const compositions = count === 3
-    ? [
-      { critical: 1, high: 1, normal: 1, weight: 3 },
-      { critical: 1, high: 0, normal: 2, weight: 2 },
-      { critical: 0, high: 2, normal: 1, weight: 2 },
-      { critical: 0, high: 1, normal: 2, weight: 4 },
-      { critical: 0, high: 0, normal: 3, weight: 1 },
-    ]
-    : [
-      { critical: 1, high: 2, normal: 1, weight: 3 },
-      { critical: 1, high: 1, normal: 2, weight: 4 },
-      { critical: 1, high: 0, normal: 3, weight: 2 },
-      { critical: 0, high: 3, normal: 1, weight: 1 },
-      { critical: 0, high: 2, normal: 2, weight: 4 },
-      { critical: 0, high: 1, normal: 3, weight: 3 },
-      { critical: 0, high: 0, normal: 4, weight: 1 },
-    ];
-  const availableByPriority = {
-    critical: candidates.filter(({ priority }) => priority === 'critical'),
-    high: candidates.filter(({ priority }) => priority === 'high'),
-    normal: candidates.filter(({ priority }) => priority === 'normal'),
-  };
-  const validCompositions = compositions.filter((composition) => (
-    Object.entries(availableByPriority).every(([priority, tasks]) => (
-      composition[priority] <= tasks.length
-    ))
+  const criticalPool = candidates.filter(({ priority }) => priority === 'critical');
+  const criticalFallback = definitions.filter(({ priority }) => priority === 'critical');
+  const pool = criticalPool.length ? criticalPool : criticalFallback;
+  if (!pool.length) return [];
+  const critical = pool[Math.floor(random() * pool.length)];
+  const remaining = candidates.filter(({ id, priority }) => (
+    id !== critical.id && priority !== 'critical' && !usedIds.has(id)
   ));
-  if (validCompositions.length === 0) {
-    const shuffled = [...candidates];
-    for (let index = shuffled.length - 1; index > 0; index -= 1) {
-      const swapIndex = Math.floor(random() * (index + 1));
-      [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
-    }
-    return shuffled.slice(0, count);
+  const otherPool = remaining.length >= 2
+    ? remaining
+    : definitions.filter(({ id, priority }) => id !== critical.id && priority !== 'critical');
+  const selected = [critical];
+  const locations = new Set([critical.targetComponentId]);
+  while (selected.length < count && otherPool.length) {
+    const distinctLocations = otherPool.filter((task) => !locations.has(task.targetComponentId));
+    const pickFrom = distinctLocations.length ? distinctLocations : otherPool;
+    const index = Math.floor(random() * pickFrom.length);
+    const chosen = pickFrom[index];
+    selected.push(chosen);
+    locations.add(chosen.targetComponentId);
+    otherPool.splice(otherPool.indexOf(chosen), 1);
   }
-
-  const totalWeight = validCompositions.reduce((total, composition) => total + composition.weight, 0);
-  let compositionRoll = random() * totalWeight;
-  let composition = validCompositions[0];
-  for (const option of validCompositions) {
-    compositionRoll -= option.weight;
-    if (compositionRoll < 0) {
-      composition = option;
-      break;
-    }
-  }
-
-  const selected = [];
-  for (const priority of ['critical', 'high', 'normal']) {
-    const pool = [...availableByPriority[priority]];
-    for (let index = 0; index < composition[priority]; index += 1) {
-      const selectedIndex = Math.floor(random() * pool.length);
-      selected.push(pool.splice(selectedIndex, 1)[0]);
-    }
-  }
+  if (selected.length < count) return selected;
   for (let index = selected.length - 1; index > 0; index -= 1) {
     const swapIndex = Math.floor(random() * (index + 1));
     [selected[index], selected[swapIndex]] = [selected[swapIndex], selected[index]];

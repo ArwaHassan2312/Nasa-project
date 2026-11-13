@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { createNoorSpeech } from '../utils/missionVoice';
+import { getPlayerAddress } from '../utils/playerAddress';
 import './MissionStoryReward.css';
 
 const STORY = { title: 'Apollo 11: first footsteps', year: '1969 · APOLLO 11', text: 'Neil Armstrong and Buzz Aldrin became the first people to walk on the Moon. They explored the surface while Michael Collins piloted the command module in lunar orbit.', fact: 'The three astronauts worked as one team, with Collins staying above the Moon while his crewmates explored below.', source: 'https://www.nasa.gov/history/apollo-11-mission-overview/', art: 'footprints' };
@@ -15,16 +16,17 @@ function StoryIllustration({ type }) {
   </svg>;
 }
 
-export default function MissionStoryReward({ day, onClose, voiceEnabled = true }) {
+export default function MissionStoryReward({ day, commanderName, onClose, voiceEnabled = true }) {
   const story = STORY;
+  const playerAddress = getPlayerAddress(commanderName);
   useEffect(() => {
     if (!voiceEnabled) { window.speechSynthesis?.cancel(); return undefined; }
-    const line = `You did it, Commander! You finished every job today. I’m so proud of you. Let’s celebrate with a real space story! ${story.title}. ${story.text}`;
+    const line = `You did it, ${playerAddress}! You finished every job today. I’m so proud of you. Let’s celebrate with a real space story! ${story.title}. ${story.text}`;
     if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return undefined;
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(createNoorSpeech(line));
     return () => window.speechSynthesis.cancel();
-  }, [story, voiceEnabled]);
+  }, [playerAddress, story, voiceEnabled]);
   return <div className="mission-reward-backdrop" role="dialog" aria-modal="true" aria-labelledby="mission-reward-title">
     <section className="mission-reward-card"><button className="mission-reward-close" type="button" aria-label="Close story reward" onClick={onClose}>×</button>
       <div className="mission-reward-heading"><span>DAY {day} COMPLETE · MISSION STORY TIME</span><h2 id="mission-reward-title">A real story from the Moon</h2><p>Every job is done. Here’s one true Apollo story to celebrate.</p></div>

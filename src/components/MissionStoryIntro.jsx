@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { createNoorSpeech } from '../utils/missionVoice';
+import { getPlayerAddress } from '../utils/playerAddress';
 import './MissionStoryIntro.css';
 
 const OPENING = [
@@ -8,7 +9,7 @@ const OPENING = [
     character: 'noor',
     eyebrow: 'MISSION CONTROL · EARTH',
     title: 'A question for the Moon',
-    text: (name) => `Welcome, Commander ${name || 'Explorer'}! You made it to the Moon. Here is our big question: can people live here for a long time?`,
+    text: (name) => `Welcome, ${getPlayerAddress(name)}! You made it to the Moon. Here is our big question: can people live here for a long time?`,
   },
   {
     character: 'noor',
@@ -68,7 +69,7 @@ export default function MissionStoryIntro({ onBegin }) {
           <p>{line}</p>
           {step === 0 && (
             <div className="mission-story-name-fields">
-              <label>Commander name<input value={commanderName} onChange={(event) => setCommanderName(event.target.value)} maxLength={24} placeholder="Your name" autoComplete="given-name" /></label>
+              <label>Your name<input value={commanderName} onChange={(event) => setCommanderName(event.target.value)} maxLength={24} placeholder="Your name" autoComplete="given-name" /></label>
               <label>Base name<input value={baseName} onChange={(event) => setBaseName(event.target.value)} maxLength={28} placeholder="Moonbase Alpha" /></label>
             </div>
           )}

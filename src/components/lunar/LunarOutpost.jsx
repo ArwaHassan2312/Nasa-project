@@ -4,6 +4,7 @@ import EventModal from '../EventModal';
 import EndGameReport from '../EndGameReport';
 import DailyTaskExperience from './DailyTaskExperience';
 import { getDailyTaskExperience } from '../../data/dailyTaskExperiences';
+import { getPlayerAddress } from '../../utils/playerAddress';
 import { getChapterReply, getEventNarration, getStoryCallback, LOCATION_STORY_CARDS, SCIENCE_DISCOVERIES, STORY_CHAPTERS, STORY_DAY_BEATS } from '../../data/missionStory';
 import { IceSampleActivity, MissionArchive, MissionStoryMoment, RadioCall } from '../MissionStoryPanels';
 import { createNoorSpeech } from '../../utils/missionVoice';
@@ -25,7 +26,7 @@ const RESOURCE_ITEMS = [
   ['oxygen', 'Oxygen', '🫧'],
   ['water', 'Water', '💧'],
   ['food', 'Food', '🥕'],
-  ['health', 'Commander safety', '💚'],
+  ['health', 'Crew safety', '💚'],
   ['science', 'Science', '🔬'],
 ];
 
@@ -36,8 +37,8 @@ function getCommanderSafety(resources) {
 
 const RESOURCE_LABELS = {
   power: 'Power', battery: 'Battery', oxygen: 'Oxygen', water: 'Water', food: 'Food',
-  habitat: 'Commander safety', equipment: 'Commander safety', health: 'Commander safety',
-  radProtection: 'Commander safety', comms: 'Power', science: 'Science',
+  habitat: 'Crew safety', equipment: 'Crew safety', health: 'Crew safety',
+  radProtection: 'Crew safety', comms: 'Power', science: 'Science',
   emergencyReserve: 'Water', potentialWater: 'Water',
 };
 const EVENT_LOCATIONS = {
@@ -386,9 +387,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     const reportIsReady = simulation.dayPhase === 'report';
     if ((!reportIsReady && simulation.dayPhase !== 'active') || simulation.currentEvent || simulation.queuedEvents.length || noorCall || storyMoment || (!reportIsReady && taskExperienceId) || eventOptionsOpen || simulation.warningTaskId || narrationSpeechInProgress || narrationSpeechActiveRef.current || narrationSpeechQueueRef.current.length > 0 || window.speechSynthesis?.speaking) return;
     rewardedStoryDayRef.current = simulation.day;
-    setNarrationMilestoneMessage('You are amazing, Commander! You finished every job today! I’m so proud of you. You kept the outpost safer, learned new things, and earned story time with me!');
+    setNarrationMilestoneMessage(`You are amazing, ${getPlayerAddress(simulation.commanderName)}! You finished every job today! I’m so proud of you. You kept the outpost safer, learned new things, and earned story time with me!`);
     setStoryRewardDay(simulation.day);
-  }, [simulation.dailyChallenges, simulation.day, simulation.dayPhase, simulation.currentEvent, simulation.queuedEvents, noorCall, storyMoment, taskExperienceId, eventOptionsOpen, simulation.warningTaskId, taskRecapSpeaking, narrationSpeechInProgress]);
+  }, [simulation.dailyChallenges, simulation.day, simulation.dayPhase, simulation.currentEvent, simulation.queuedEvents, noorCall, storyMoment, taskExperienceId, eventOptionsOpen, simulation.warningTaskId, taskRecapSpeaking, narrationSpeechInProgress, simulation.commanderName]);
   useEffect(() => {
     if (simulation.dayPhase !== 'transition' || shownStoryDayRef.current === simulation.day) return;
     shownStoryDayRef.current = simulation.day;
@@ -493,6 +494,12 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     setTaskExperienceId(challengeId);
     setTaskExperienceStage(journey?.solution ? 'perform' : 'discover');
   }, [taskJourneys]);
+  const persistTaskProgress = useCallback((challengeId, workProgress) => {
+    setTaskJourneys((items) => ({
+      ...items,
+      [challengeId]: { ...items[challengeId], workProgress },
+    }));
+  }, []);
   const chooseTaskSolution = (challengeId, solution) => setTaskJourneys((items) => ({ ...items, [challengeId]: { ...items[challengeId], solution } }));
   const openMissionArchive = (tab) => {
     setArchiveTab(tab);
@@ -536,7 +543,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const closestTaskMarker = [...taskMarkerTargets].sort((a, b) => a.distance - b.distance)[0] ?? null;
   const nearbyTaskMarker = closestTaskMarker?.nearby ? closestTaskMarker : null;
   const nearbyTask = nearbyTaskMarker
-    ? insideComponentTasks.find((task) => task.id === nearbyTaskMarker.taskId)
+    ? simulation.dailyChallenges.find((task) => task.id === nearbyTaskMarker.taskId)
     : null;
   const activateNearbyTask = useCallback((challenge) => {
     if (challenge.recoveryStatus === 'available') {
@@ -565,12 +572,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     .map((task) => `${task.id}:${task.status}:${task.recoveryStatus ?? ''}`)
     .join('|');
   useEffect(() => {
-    if (!insidePanel.visible || !insidePanel.componentId) {
+    if ((!insidePanel.visible || !insidePanel.componentId) && cameraMode !== 'first-person') {
       autoStartedTaskComponentRef.current = null;
       return;
-    }
-    if (autoStartedTaskComponentRef.current !== insidePanel.componentId) {
-      autoStartedTaskComponentRef.current = null;
     }
     if (!closestTaskMarker || taskExperienceId) return;
     if (!closestTaskMarker.nearby) {
@@ -578,17 +582,18 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       return;
     }
     if (
-      autoStartedTaskComponentRef.current === insidePanel.componentId
+      autoStartedTaskComponentRef.current === closestTaskMarker.taskId
       || !nearbyTask
       || simulation.gameStatus !== 'playing'
       || simulation.dayPhase !== 'active'
       || simulation.warningTaskId
     ) return;
-    autoStartedTaskComponentRef.current = insidePanel.componentId;
+    autoStartedTaskComponentRef.current = closestTaskMarker.taskId;
     activateNearbyTask(nearbyTask);
   }, [
     insidePanel.visible,
     insidePanel.componentId,
+    cameraMode,
     closestTaskMarker,
     taskExperienceId,
     nearbyTask,
@@ -732,9 +737,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
 
   useEffect(() => {
     if (
-      !insidePanel.visible
-      || !insideComponentTasks.length
-      || !taskMarkerSignature
+      (!insidePanel.visible && cameraMode !== 'first-person')
       || simulation.gameStatus !== 'playing'
       || simulation.dayPhase !== 'active'
       || simulation.warningTaskId
@@ -744,7 +747,10 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       engineRef.current?.hideTaskGuide?.();
       return undefined;
     }
-    const allowedTaskIds = new Set(insideComponentTasks.map((task) => task.id));
+    const allowedTaskIds = new Set(simulation.dailyChallenges
+      .filter((task) => task.status === 'inProgress' || task.status === 'overdue')
+      .map((task) => task.id));
+    if (insidePanel.componentId) insideComponentTasks.forEach((task) => allowedTaskIds.add(task.id));
     if (allowedTaskIds.size === 0) {
       setTaskMarkerTargets([]);
       return undefined;
@@ -767,6 +773,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   }, [
     insidePanel.visible,
     insidePanel.componentId,
+    cameraMode,
+    simulation.dailyChallenges,
     taskMarkerSignature,
     insideComponentTasks.length,
     simulation.gameStatus,
@@ -1099,7 +1107,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     if (!occurrenceId || handledNoorCallsRef.current.has(occurrenceId)) return;
     handledNoorCallsRef.current.add(occurrenceId);
     interruptNarrationForEvent();
-    const callMessage = `Commander, you have a call from Dr. Noor.`;
+    const callMessage = `${getPlayerAddress(simulation.commanderName)}, you have a call from Dr. Noor.`;
     speakNarration(
       callMessage,
       () => { pendingNoorCallRef.current = null; },
@@ -1111,7 +1119,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
         setNoorCall({ event: currentEvent, stage: 'incoming' });
       },
     );
-  }, [eventPhase, currentEvent, speakNarration, interruptNarrationForEvent]);
+  }, [eventPhase, currentEvent, speakNarration, interruptNarrationForEvent, simulation.commanderName]);
   useEffect(() => {
     simulation.eventFailureNotices.filter((notice) => (
       notice.expired && !announcedFailureNoticesRef.current.has(`event:${notice.id}`)
@@ -1262,8 +1270,8 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     dayOpeningCompleteRef.current = null;
     setNarrationMilestoneMessage('');
     const dayMessage = simulation.day === 1
-      ? `Welcome to ${simulation.baseName}, Commander ${simulation.commanderName}! Your outpost is ready to explore.`
-      : `We’re on Day ${simulation.day} at ${simulation.baseName}, Commander. Let’s get started!`;
+      ? `Welcome to ${simulation.baseName}, ${getPlayerAddress(simulation.commanderName)}! Your outpost is ready to explore.`
+      : `We’re on Day ${simulation.day} at ${simulation.baseName}, ${getPlayerAddress(simulation.commanderName)}. Let’s get started!`;
     const exploreMessage = `Come on, let’s explore the outpost and see what we can discover today!`;
     const jobs = simulation.dailyChallenges.filter((task) => task.status !== 'completed');
     const critical = jobs.find((task) => task.priority === 'critical' && task.status !== 'completed');
@@ -1522,7 +1530,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                 }
               >
                 {roverCameraActive
-                  ? (roverLink?.remote ? 'Back to base' : 'Back to commander')
+                  ? (roverLink?.remote ? 'Back to base' : `Back to ${getPlayerAddress(simulation.commanderName)}`)
                   : roverReady ? 'Drive rover' : 'Rover getting ready'}
               </button>
             </>
@@ -2113,7 +2121,9 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                     <button
                       type="button"
                       className="lunar-task-action"
-                      onClick={() => openTaskIdea(challenge)}
+                      onClick={() => simulation.activeChallengeId === challenge.id
+                        ? openTaskAtLocation(challenge.id)
+                        : openTaskIdea(challenge)}
                     >
                       {simulation.activeChallengeId === challenge.id ? 'Working on this' : 'Choose this job'}
                     </button>
@@ -2255,7 +2265,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
               );
             })}
           </div>
-          <h3 className="lunar-system-heading">Outpost and commander safety</h3>
+          <h3 className="lunar-system-heading">Outpost and crew safety</h3>
           <div className="lunar-resource-list">
             {RESOURCE_ITEMS.map(([key, label, icon]) => {
               const value = key === 'health'
@@ -2476,6 +2486,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
         call={taskExperienceId ? null : noorCall}
         narration={noorCall?.event ? getEventNarration(noorCall.event) : null}
         location={noorCall?.event ? getEventLocation(noorCall.event) : null}
+        commanderName={simulation.commanderName}
         onAnswer={() => setNoorCall((call) => call ? { ...call, stage: 'connected' } : null)}
         onContinue={() => {
           const event = noorCall?.event;
@@ -2502,10 +2513,12 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
           <DailyTaskExperience
             key={`${experienceTask.id}-${taskExperienceStage}`}
             task={experienceTask}
+            commanderName={simulation.commanderName}
             taskFact={getUniqueTaskFact(experienceTask, simulation.dailyChallenges)}
             startMessage={getTaskStartMessage(experienceTask)}
             initialStage={taskExperienceStage}
             progressState={taskJourneys[experienceTask.id] ?? {}}
+            onProgressChange={(workProgress) => persistTaskProgress(experienceTask.id, workProgress)}
             suspended={false}
             onClose={() => {
               setTaskExperienceId(null);
@@ -2554,7 +2567,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
         onClose={() => setStoryMoment(null)}
         onContinue={() => setStoryMoment((current) => current?.next ?? null)}
       />
-      {storyRewardDay !== null && <MissionStoryReward day={storyRewardDay} voiceEnabled={narrationVoiceEnabled} onClose={() => setStoryRewardDay(null)} />}
+      {storyRewardDay !== null && <MissionStoryReward day={storyRewardDay} commanderName={simulation.commanderName} voiceEnabled onClose={() => setStoryRewardDay(null)} />}
       <MissionArchive
         open={archiveOpen}
         onClose={() => setArchiveOpen(false)}
@@ -2663,10 +2676,10 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       {simulation.dayPhase === 'report' && simulation.dayReport && dayReportReadyDay === simulation.dayReport.day && storyRewardDay === null && !hasPendingCriticalTaskNotice && (
         <div className="lunar-day-transition" role="dialog" aria-modal="true" aria-labelledby="day-report-title">
           <section className="lunar-day-report">
-            <span className="lunar-day-report-kicker">Commander’s report · Day {simulation.dayReport.day}</span>
+            <span className="lunar-day-report-kicker">{getPlayerAddress(simulation.commanderName)}’s report · Day {simulation.dayReport.day}</span>
             <h2 id="day-report-title">Day {simulation.dayReport.day} is done!</h2>
             <article className="mission-day-dispatch">
-              <span>TO: MISSION CONTROL</span><span>FROM: COMMANDER {simulation.commanderName.toUpperCase()} · {simulation.baseName.toUpperCase()}</span><span>DAY {simulation.dayReport.day}</span>
+              <span>TO: MISSION CONTROL</span><span>FROM: {getPlayerAddress(simulation.commanderName).toUpperCase()} · {simulation.baseName.toUpperCase()}</span><span>DAY {simulation.dayReport.day}</span>
               <p>Today we finished {simulation.dayReport.completedTasks.length} job{simulation.dayReport.completedTasks.length === 1 ? '' : 's'} and handled {simulation.dayReport.totalEvents} problem{simulation.dayReport.totalEvents === 1 ? '' : 's'}. The outpost is {overallReadiness >= 45 ? 'still operational' : 'in need of care'}.</p>
               {simulation.scienceNotebookIds.length > 0 && <p>Science Notebook: {SCIENCE_DISCOVERIES.filter((entry) => simulation.scienceNotebookIds.includes(entry.id)).slice(-1).map((entry) => entry.title).at(-1)} · Science {Math.round(simulation.dayReport.resources.science)}%.</p>}
             </article>
@@ -2677,7 +2690,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
               <div><b>{chapterJobsFinished}</b><small>jobs finished</small><b>{chapterProblemsFixed}</b><small>problems fixed</small><b>{simulation.scienceNotebookIds.length}/{SCIENCE_DISCOVERIES.length}</b><small>discoveries saved</small></div>
               <p className="lunar-chapter-report-note">This report adds up your progress across the whole chapter.</p>
             </section>}
-            <article className="mission-noor-reply"><span>DR. NOOR · MISSION CONTROL REPLIES</span><p>{getChapterReply(simulation.dayReport.day, simulation.dayReport.completedTasks.length, simulation.dayReport.totalEvents, simulation.dayReport.resources.science)}</p></article>
+            <article className="mission-noor-reply"><span>DR. NOOR · MISSION CONTROL REPLIES</span><p>{getChapterReply(simulation.dayReport.day, simulation.dayReport.completedTasks.length, simulation.dayReport.totalEvents, simulation.dayReport.resources.science, getPlayerAddress(simulation.commanderName))}</p></article>
             {getStoryCallback(simulation.decisionHistory.filter((entry) => entry.day <= simulation.dayReport.day), simulation.dayReport.resources) && <p className="mission-story-callback">{getStoryCallback(simulation.decisionHistory.filter((entry) => entry.day <= simulation.dayReport.day), simulation.dayReport.resources)}</p>}
             <p className="lunar-day-report-summary">{simulation.dayReport.overdueTasks.length} job{simulation.dayReport.overdueTasks.length === 1 ? '' : 's'} still need attention · {simulation.dayReport.expiredEvents} problem{simulation.dayReport.expiredEvents === 1 ? '' : 's'} still need a response</p>
             {simulation.dayReport.eventOutcomes.length > 0 && (

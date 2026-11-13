@@ -3384,6 +3384,7 @@
 }
 .lunar-root.is-inside .lunar-inside-panel {
   position: relative;
+  top: -8px;
   isolation: isolate;
   width: max-content;
   max-width: calc(100vw - 24px);
@@ -3397,6 +3398,9 @@
   background: #161c24;
   backdrop-filter: none;
   box-shadow: none;
+}
+.lunar-root.is-inside .lunar-hud-clean {
+  top: 0;
 }
 .lunar-root.is-inside .lunar-inside-panel > .lunar-inside-panel-title {
   display: block;

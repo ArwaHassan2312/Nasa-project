@@ -162,6 +162,9 @@
 .daily-task-tool-grid button { min-height: 162px; padding: 12px 9px; background: linear-gradient(160deg, rgba(76, 130, 154, 0.2), rgba(41, 77, 102, 0.2)); }
 .daily-task-tool-grid button strong { font-size: 0.88rem; line-height: 1.25; }
 .daily-task-solution-options button small { color: #c5d9e4; font-size: 0.77rem; font-weight: 400; line-height: 1.4; }
+.daily-task-solution-options button small.daily-task-resource-effects { display: flex; flex-wrap: wrap; gap: 2px 7px; margin-top: auto; font-size: 0.65rem; line-height: 1.15; }
+.daily-task-resource-effects .is-positive { color: #9ce8c4; }
+.daily-task-resource-effects .is-negative { color: #ffaaa1; }
 .daily-task-option-icon { display: grid; width: 62px; height: 62px; place-items: center; border: 0; border-radius: 50%; color: #9ce8e2; background: rgba(67, 139, 152, 0.28); }
 .daily-task-option-icon svg { display: block; width: 42px; height: 42px; }
 .daily-task-solution-options button { transition: border-color 160ms ease, background 160ms ease, transform 160ms ease, box-shadow 160ms ease; animation: daily-task-option-in 280ms ease-out both; }
