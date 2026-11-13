@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MOON_EVENTS, TASK_CONSEQUENCE_EVENTS } from '../data/moonEvents';
 import type {
   Decision,
@@ -40,6 +40,29 @@ export type ResourceLevels = Record<ResourceKey, number>;
 export type EventPhase = 'idle' | 'pending' | 'presenting' | 'awaitingDecision' | 'resolving';
 export type DayPhase = 'active' | 'closing' | 'report' | 'transition';
 type DisplayResourceKey = 'power' | 'battery' | 'oxygen' | 'water' | 'food' | 'health' | 'science';
+
+const VISITED_LOCATIONS_STORAGE_KEY = 'lunar-outpost-visited-locations-v1';
+const GAME_PROGRESS_STORAGE_KEY = 'lunar-outpost-progress-v1';
+
+function readVisitedLocationIds(): string[] {
+  try {
+    if (typeof window === 'undefined') return [];
+    const saved = JSON.parse(window.localStorage.getItem(VISITED_LOCATIONS_STORAGE_KEY) ?? '[]');
+    return Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveVisitedLocationIds(locationIds: string[]) {
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(VISITED_LOCATIONS_STORAGE_KEY, JSON.stringify(locationIds));
+    }
+  } catch {
+    // The in-memory visit state still works if browser storage is unavailable.
+  }
+}
 
 export interface DayReport {
   day: number;
@@ -207,6 +230,14 @@ interface GameState {
   warningTaskId: string | null;
 }
 
+function clearSavedGameState() {
+  try {
+    if (typeof window !== 'undefined') window.localStorage.removeItem(GAME_PROGRESS_STORAGE_KEY);
+  } catch {
+    // The new mission can still start without storage access.
+  }
+}
+
 
 const MAX_RESOURCE_LEVEL = 100;
 export const MISSION_FAILURE_RESOURCE_THRESHOLD = 10;
@@ -316,7 +347,7 @@ export function createInitialState(seed: number): GameState {
     commanderName: 'Commander',
     baseName: 'Moonbase Alpha',
     storyPaused: false,
-    visitedLocationIds: [],
+    visitedLocationIds: readVisitedLocationIds(),
     scienceNotebookIds: [],
     missionLogEntries: [],
     collectedIceSamples: [],
@@ -1623,9 +1654,11 @@ export function useGameSimulation({
   dayDurationMs = LUNAR_DAY_DURATION_MS,
   seed,
 }: GameSimulationOptions = {}) {
-  const [state, setState] = useState<GameState>(
-    () => createInitialState(seed ?? createRandomSeed()),
-  );
+  const [state, setState] = useState<GameState>(() => createInitialState(seed ?? createRandomSeed()));
+
+  useEffect(() => {
+    clearSavedGameState();
+  }, []);
 
   const setSceneReady = useCallback((ready: boolean) => {
     setState((current) => current.sceneReady === ready ? current : { ...current, sceneReady: ready });
@@ -1644,6 +1677,10 @@ export function useGameSimulation({
   }, []);
 
   const markLocationVisited = useCallback((locationId: string, locationName: string) => {
+    const persistedLocationIds = readVisitedLocationIds();
+    if (!persistedLocationIds.includes(locationId)) {
+      saveVisitedLocationIds([...persistedLocationIds, locationId]);
+    }
     setState((current) => current.visitedLocationIds.includes(locationId) ? current : {
       ...current,
       visitedLocationIds: [...current.visitedLocationIds, locationId],
@@ -1887,7 +1924,11 @@ export function useGameSimulation({
         return occurrenceId ? failEventOccurrence(currentState, occurrenceId, true) : currentState;
       }
 
-      const resolvedLinkedTasks = getResolvedLinkedTasks(currentState.dailyChallenges, event);
+      // A task the commander is actively working on stays open through its
+      // linked event. Resolving the event handles the incident; the commander
+      // still needs to finish that task explicitly.
+      const resolvedLinkedTasks = getResolvedLinkedTasks(currentState.dailyChallenges, event)
+        .filter((task) => task.id !== currentState.activeChallengeId);
       const resolutionEffects: Partial<Record<ResourceKey, number>> = {
         ...getSuccessfulEventResourceEffects(event, decision),
       };
@@ -2381,6 +2422,7 @@ export function useGameSimulation({
   }, []);
 
   const restart = useCallback(() => {
+    clearSavedGameState();
     setState((current) => ({
       ...createInitialState(seed ?? createRandomSeed()),
       commanderName: current.commanderName,

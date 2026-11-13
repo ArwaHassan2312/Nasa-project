@@ -67,7 +67,11 @@ export default function IntroBackdrop({ visible, finished, onSequenceEnd }) {
     if (!activeRef.current) return;
     setSecondActive(true);
     secondRef.current?.play().catch((error) => {
-      if (activeRef.current) console.error('Second intro video playback failed.', error);
+      if (activeRef.current) {
+        console.error('Second intro video playback failed.', error);
+        secondDoneRef.current = true;
+        finishSequenceIfReady();
+      }
     });
   };
 
@@ -87,7 +91,7 @@ export default function IntroBackdrop({ visible, finished, onSequenceEnd }) {
   return (
     <div className={`intro-media ${visible ? '' : 'intro-media--gone'} ${finished ? 'intro-media--skipped' : ''}`}>
       <video ref={firstRef} className={`intro-backdrop ${secondActive ? 'intro-backdrop--inactive' : ''}`} src={ASSETS.introVideo} muted playsInline preload="auto" disablePictureInPicture onEnded={handleFirstEnded} onError={handleFirstEnded} />
-      <video ref={secondRef} className={`intro-backdrop ${secondActive ? '' : 'intro-backdrop--inactive'}`} src={ASSETS.introVideoSecond} muted playsInline preload="auto" disablePictureInPicture onEnded={handleSecondEnded} />
+      <video ref={secondRef} className={`intro-backdrop ${secondActive ? '' : 'intro-backdrop--inactive'}`} src={ASSETS.introVideoSecond} muted playsInline preload="auto" disablePictureInPicture onEnded={handleSecondEnded} onError={handleSecondEnded} />
       <audio ref={audioRef} src={ASSETS.introVoiceover} preload="auto" onEnded={finishAudio} onError={handleAudioError} />
     </div>
   );

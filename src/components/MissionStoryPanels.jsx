@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MOON_FACTS, SCIENCE_DISCOVERIES } from '../data/missionStory';
 import { MissionStoryAvatar } from './MissionStoryIntro';
-import { createLumiSpeech, createNoorSpeech } from '../utils/missionVoice';
+import { createNoorSpeech } from '../utils/missionVoice';
 import './MissionStoryPanels.css';
 
 export function MissionStoryMoment({ moment, onClose, onContinue = onClose, voiceEnabled = true }) {
@@ -13,9 +13,9 @@ export function MissionStoryMoment({ moment, onClose, onContinue = onClose, voic
 
   useEffect(() => () => window.speechSynthesis?.cancel(), []);
   useEffect(() => {
-    if (!voiceEnabled || (!voiceOn && moment?.character !== 'lumi') || !spokenText || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return undefined;
+    if (!voiceEnabled || !voiceOn || !spokenText || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return undefined;
     window.speechSynthesis?.cancel();
-    const speech = moment?.character === 'lumi' ? createLumiSpeech(spokenText) : createNoorSpeech(spokenText);
+    const speech = createNoorSpeech(spokenText);
     window.speechSynthesis?.speak(speech);
     return () => window.speechSynthesis?.cancel();
   }, [moment?.character, spokenText, voiceOn, voiceEnabled]);
@@ -23,22 +23,25 @@ export function MissionStoryMoment({ moment, onClose, onContinue = onClose, voic
   if (!moment) return null;
   return (
     <div className="mission-story-panel-backdrop" role="dialog" aria-modal="true" aria-labelledby="story-moment-title">
-      <section className="mission-story-moment">
+      <section className={`mission-story-moment${moment.location ? ' is-location-intro' : ''}`}>
         <button type="button" className="story-panel-close" aria-label="Close story card" onClick={onClose}>×</button>
-        <div className="story-moment-visual"><MissionStoryAvatar character={moment.character} /></div>
+        {!moment.location && <div className="story-moment-visual"><MissionStoryAvatar /></div>}
         <div className="story-moment-content">
-          <span className={`story-panel-kicker is-${moment.character}`}>{moment.eyebrow ?? (moment.character === 'lumi' ? 'LUMI · BASE HELPER' : 'DR. NOOR · MISSION CONTROL')}</span>
+          <span className="story-panel-kicker">{moment.location ? 'LOCATION GUIDE · YOUR MOON BASE' : moment.eyebrow ?? 'DR. NOOR · MISSION CONTROL'}</span>
           <h2 id="story-moment-title">{moment.title}</h2>
           {moment.location ? (
-            <div className="story-location-facts">
-              <article><span>WHAT IT IS</span><p>{moment.location.what}</p></article>
+            <>
+              <p className="story-location-intro">Welcome to {moment.location.name}! This is one of the places that helps your Moon base work.</p>
+              <div className="story-location-facts">
+              <article><span>WHAT HAPPENS HERE</span><p>{moment.location.what}</p></article>
               <article><span>WHY IT MATTERS</span><p>{moment.location.why}</p></article>
               <article className="story-fun-fact"><span>FUN FACT</span><p>{moment.location.fact}</p></article>
-            </div>
+              </div>
+            </>
           ) : <p className="story-moment-message">{moment.text}</p>}
           {moment.extra && <p className="story-moment-extra">{moment.extra}</p>}
           <div className="story-moment-actions">
-            {!moment.noReplay && <button type="button" className="story-panel-voice" onClick={() => setVoiceOn((value) => !value)}>{moment.character === 'lumi' ? 'Hear Lumi again' : voiceOn ? 'Voice on' : 'Hear message'}</button>}
+            {!moment.noReplay && <button type="button" className="story-panel-voice" onClick={() => setVoiceOn((value) => !value)}>{voiceOn ? 'Voice on' : 'Hear message'}</button>}
             <button type="button" className="story-panel-continue" onClick={onContinue}>Continue <span aria-hidden="true">→</span></button>
           </div>
         </div>
@@ -119,7 +122,7 @@ export function IceSampleActivity({ open, samples, onCollect, onClose }) {
     <div className="mission-story-panel-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="ice-sample-panel" role="dialog" aria-modal="true" aria-labelledby="ice-sample-title">
         <button type="button" className="story-panel-close" aria-label="Close sample collection" onClick={onClose}>×</button>
-        <span className="story-panel-kicker is-lumi">ROVER SCIENCE RUN · DAY 11–15</span><h2 id="ice-sample-title">Collect a crater sample</h2>
+        <span className="story-panel-kicker">ROVER SCIENCE RUN · DAY 11–15</span><h2 id="ice-sample-title">Collect a crater sample</h2>
         <p className="ice-sample-intro">Your rover is at the crater. Pick a marked spot, collect one sample, and record what you find. Each sample adds to the science record.</p>
         {result ? <div className="ice-sample-result"><div className="ice-sample-stone" aria-hidden="true">{selected.icon}</div><h3>Sample secured!</h3><p>{selected.title} is safely packed for study. <strong>Science +3</strong></p><button type="button" className="story-panel-continue" onClick={onClose}>Return to the rover</button></div>
           : available.length ? <div className="ice-sample-options">{available.map((item) => <button type="button" key={item.id} onClick={() => collect(item)}><span aria-hidden="true">{item.icon}</span><strong>{item.title}</strong><small>{item.description}</small></button>)}</div>
@@ -142,7 +145,7 @@ export function RadioCall({ open, onClose, commanderName, baseName, day }) {
     <div className="mission-story-panel-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="mission-radio-panel" role="dialog" aria-modal="true" aria-labelledby="radio-call-title">
         <button type="button" className="story-panel-close" aria-label="Close radio call" onClick={onClose}>×</button>
-        <span className="story-panel-kicker is-lumi">COMMUNICATIONS MAST · SIGNAL DELAY 1.3 SECONDS</span><h2 id="radio-call-title">Call to Mission Control</h2>
+        <span className="story-panel-kicker">COMMUNICATIONS MAST · SIGNAL DELAY 1.3 SECONDS</span><h2 id="radio-call-title">Call to Mission Control</h2>
         <article className="radio-message radio-outgoing"><span>TO: MISSION CONTROL · FROM: {commanderName.toUpperCase()}</span><p>Day {day} check-in from {baseName}. The outpost is still sending science and system readings.</p></article>
         <div className={`radio-signal-delay${reply ? ' is-arrived' : ''}`}><i /><span>{reply ? 'Signal received on Earth' : 'Radio signal travelling to Earth…'}</span></div>
         {reply && <article className="radio-message radio-incoming"><span>DR. NOOR · MISSION CONTROL</span><p>Message received, Commander! The signal took about 1.3 seconds to reach us. Your observations are helping the whole team understand the Moon.</p></article>}

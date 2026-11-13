@@ -17,14 +17,3 @@ export function createNoorSpeech(text) {
   speech.volume = 1;
   return speech;
 }
-
-export function createLumiSpeech(text) {
-  const speech = new SpeechSynthesisUtterance(text);
-  const voices = window.speechSynthesis?.getVoices?.() ?? [];
-  const friendlyVoice = findFriendlyEnglishVoice(voices);
-  if (friendlyVoice) speech.voice = friendlyVoice;
-  speech.rate = 0.96;
-  speech.pitch = 1.85;
-  speech.volume = 1;
-  return speech;
-}

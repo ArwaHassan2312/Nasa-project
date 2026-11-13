@@ -31,7 +31,7 @@ interface EventModalProps {
   remainingMs: number | null;
   locked?: boolean;
   canDecide?: boolean;
-  narration?: { lumi: string; noor: string };
+  narration?: { noor: string };
 }
 
 export default function EventModal({ event, events = [], onSelectEvent, taskTitles = {}, onSelectDecision, onClose, remainingMs, locked = false, canDecide = true }: EventModalProps) {
@@ -100,7 +100,7 @@ export default function EventModal({ event, events = [], onSelectEvent, taskTitl
         {!locked && canDecide && <div className="simulation-decision-list">
           {event.decisions.map((decision) => (
             <button
-              className={`simulation-decision simulation-decision-${decision.id.toLowerCase()}`}
+              className={`simulation-decision simulation-decision-${decision.id.toLowerCase()}${/^allow(?:\s|$)/i.test(decision.label.trim()) || decision.id.toLowerCase() === 'allow' ? ' is-allow' : ''}`}
               key={decision.id}
               type="button"
               onClick={() => onSelectDecision(decision, event.occurrenceId ?? `${event.id}-${event.day ?? 0}`)}

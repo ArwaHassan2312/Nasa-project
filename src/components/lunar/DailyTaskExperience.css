@@ -1,6 +1,6 @@
 .daily-task-experience-backdrop {
   position: fixed;
-  z-index: 2200;
+  z-index: 7000;
   inset: 0;
   display: grid;
   place-items: center;
@@ -11,7 +11,23 @@
   background: rgba(3, 9, 17, 0.56);
   backdrop-filter: blur(3px);
 }
-.daily-task-experience-backdrop.is-suspended { display: none; }
+.daily-task-experience-backdrop.is-suspended {
+  z-index: 18;
+  display: grid;
+  place-items: end;
+  padding: 18px;
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+.daily-task-experience-backdrop.is-suspended .daily-task-experience {
+  width: min(460px, calc(100vw - 36px));
+  max-height: min(58dvh, 560px);
+  padding: 18px;
+  opacity: .78;
+  transform: scale(.96);
+  transform-origin: bottom right;
+}
 
 .daily-task-experience {
   position: relative;
