@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
+import { useAnimations, useGLTF } from '@react-three/drei';
+import * as THREE from 'three';
 import { createNoorSpeech } from '../utils/missionVoice';
 import './MissionStoryIntro.css';
+
+const NOOR_ROBOT_MODEL = '/lunar/futuristic_flying_animated_robot_-_low_poly.glb';
 
 const OPENING = [
   {
@@ -58,7 +62,6 @@ export default function MissionStoryIntro({ onBegin }) {
         <div className="mission-story-sky" aria-hidden="true" />
         <header className="mission-story-topline"><span>MOONBASE ALPHA</span><span>THE QUESTION OF HOME</span></header>
         <div className="mission-story-scene">
-          <div className="mission-story-moon" aria-hidden="true" />
           <CharacterModel />
           <div className="mission-story-orbit-mark" aria-hidden="true">⌖</div>
         </div>
@@ -92,11 +95,15 @@ function CharacterModel() {
         <ambientLight intensity={1.6} />
         <directionalLight position={[3, 4, 5]} intensity={2.4} color="#d6faff" />
         <pointLight position={[-2, 0, 2]} intensity={1.2} color="#4cbace" />
-        <NoorModel />
+        <Suspense fallback={null}>
+          <NoorModel />
+        </Suspense>
       </Canvas>
     </div>
   );
 }
+
+useGLTF.preload(NOOR_ROBOT_MODEL);
 
 export function MissionStoryAvatar() {
   return <CharacterModel />;
@@ -104,23 +111,35 @@ export function MissionStoryAvatar() {
 
 function NoorModel() {
   const group = useRef(null);
+  const { scene, animations } = useGLTF(NOOR_ROBOT_MODEL);
+  const { actions } = useAnimations(animations, group);
+  const model = useMemo(() => {
+    const clone = scene.clone(true);
+    clone.updateMatrixWorld(true);
+    const bounds = new THREE.Box3().setFromObject(clone);
+    const size = bounds.getSize(new THREE.Vector3());
+    const center = bounds.getCenter(new THREE.Vector3());
+    const height = Math.max(size.x, size.y, size.z, 0.001);
+    return { scene: clone, center, scale: 2.35 / height };
+  }, [scene]);
+
+  useEffect(() => {
+    const action = Object.values(actions).find(Boolean);
+    if (!action) return undefined;
+    action.reset().fadeIn(0.3).play();
+    return () => { action.fadeOut(0.2); };
+  }, [actions]);
+
   useFrame(({ clock }) => {
     if (!group.current) return;
     group.current.rotation.y = Math.sin(clock.elapsedTime * 0.34) * 0.075;
-    group.current.position.y = -0.18 + Math.sin(clock.elapsedTime * 1.15) * 0.025;
+    group.current.position.y = Math.sin(clock.elapsedTime * 1.15) * 0.035;
   });
   return (
-    <group ref={group} position={[0, -0.18, 0]} scale={1.08}>
-      <mesh position={[0, -0.2, 0]} castShadow><capsuleGeometry args={[0.58, 0.92, 8, 24]} /><meshStandardMaterial color="#26708a" roughness={0.52} /></mesh>
-      <mesh position={[0, -0.2, 0.03]}><capsuleGeometry args={[0.42, 0.72, 8, 20]} /><meshStandardMaterial color="#39a3ad" roughness={0.62} /></mesh>
-      <mesh position={[0, 0.73, 0]} castShadow><sphereGeometry args={[0.46, 40, 32]} /><meshStandardMaterial color="#d59b7b" roughness={0.68} /></mesh>
-      <mesh position={[0, 1.03, -0.06]}><sphereGeometry args={[0.47, 32, 16, 0, Math.PI * 2, 0, Math.PI * 0.44]} /><meshStandardMaterial color="#273544" roughness={0.78} /></mesh>
-      <mesh position={[0, 0.76, 0.398]}><sphereGeometry args={[0.065, 16, 12]} /><meshStandardMaterial color="#122b3a" /></mesh>
-      <mesh position={[0.16, 0.76, 0.398]}><sphereGeometry args={[0.065, 16, 12]} /><meshStandardMaterial color="#122b3a" /></mesh>
-      <mesh position={[-0.015, 0.58, 0.405]} rotation={[0, 0, -0.08]}><torusGeometry args={[0.07, 0.018, 8, 24, Math.PI]} /><meshStandardMaterial color="#914f52" /></mesh>
-      <mesh position={[0, -0.14, 0.48]}><torusGeometry args={[0.1, 0.025, 8, 24]} /><meshStandardMaterial color="#b7f4df" emissive="#35a9a0" emissiveIntensity={0.7} /></mesh>
-      <mesh position={[-0.55, 0.4, 0.08]} rotation={[0.2, 0, -0.28]}><capsuleGeometry args={[0.07, 0.38, 6, 12]} /><meshStandardMaterial color="#e1b87d" roughness={0.62} /></mesh>
-      <mesh position={[-0.51, 0.46, 0]}><sphereGeometry args={[0.12, 16, 16]} /><meshStandardMaterial color="#70dbd1" metalness={0.45} roughness={0.35} /></mesh>
+    <group ref={group}>
+      <group scale={model.scale} position={[-model.center.x * model.scale, -model.center.y * model.scale, -model.center.z * model.scale]}>
+        <primitive object={model.scene} />
+      </group>
     </group>
   );
 }

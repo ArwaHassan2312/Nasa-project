@@ -27,6 +27,10 @@ export default function MissionEventCall({ call, narration, location, onAnswer, 
     <div className="mission-event-call-backdrop" role="dialog" aria-modal="true" aria-labelledby="mission-event-call-title">
       {call.stage === 'incoming' ? (
         <section className="mission-event-incoming-card">
+          <div className="mission-event-incoming-signal">
+            <MissionStoryAvatar />
+            <small>DR. NOOR · EARTH</small>
+          </div>
           <div className="mission-event-call-copy">
             <span className="mission-event-call-kicker">INCOMING OUTPOST CALL</span>
             <h2 id="mission-event-call-title">Dr. Noor is calling</h2>
