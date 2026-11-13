@@ -45,6 +45,7 @@ export function buildMissionFailureNarrative({
   tasks: {
     id: string;
     title?: string;
+    day: number;
     priority: string;
     status: string;
     affectedSystem?: string;
