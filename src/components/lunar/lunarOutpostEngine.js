@@ -164,6 +164,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   } = callbacks;
 
   let isDestroyed = false;
+  let isGameplaySuspended = false;
   let animId = null;
   let sceneReadyReported = false;
   let initialCameraSettledReported = false;
@@ -174,7 +175,15 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x080d14);
 
-  const camera = new THREE.PerspectiveCamera(56, window.innerWidth / window.innerHeight, 0.1, 14000);
+  const getViewportSize = () => {
+    const bounds = canvas.parentElement?.getBoundingClientRect();
+    return {
+      width: Math.max(1, Math.round(bounds?.width || window.innerWidth)),
+      height: Math.max(1, Math.round(bounds?.height || window.innerHeight)),
+    };
+  };
+  const initialSize = getViewportSize();
+  const camera = new THREE.PerspectiveCamera(56, initialSize.width / initialSize.height, 0.1, 14000);
   camera.position.set(170, 220, 360);
 
   const renderer = new THREE.WebGLRenderer({
@@ -183,7 +192,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     powerPreference: 'high-performance'
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(initialSize.width, initialSize.height);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.25;
@@ -213,6 +222,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
   const savedEarthViewTarget = new THREE.Vector3();
 
   const keys = new Set();
+  let touchMoveX = 0;
+  let touchMoveY = 0;
+  let controlsEnabledBeforeSuspend = controls.enabled;
   // Physical-key aliases: keyboard layout switches (including the Shift combos
   // that flip layouts) can make event.key differ between a press and its
   // release, which used to leave movement keys stuck "held" and the camera
@@ -223,7 +235,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
     ArrowUp: 'arrowup', ArrowDown: 'arrowdown', ArrowLeft: 'arrowleft', ArrowRight: 'arrowright',
     ShiftLeft: 'shift', ShiftRight: 'shift',
   };
-  const releaseAllKeys = () => keys.clear();
+  const releaseAllKeys = () => {
+    keys.clear();
+    touchMoveX = 0;
+    touchMoveY = 0;
+  };
   const firstPersonStart = new THREE.Vector3();
   // Ground level under firstPersonStart, kept apart from the eye height so the
   // spawn point follows PLAYER_CAMERA.height when it changes at runtime.
@@ -4264,7 +4280,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleCanvasClick() {
-    if (eventCinematic || roverCameraActive) return;
+    if (isGameplaySuspended || eventCinematic || roverCameraActive) return;
     if (consoleEditMode) return;
     if (['first-person', 'interior'].includes(cameraMode) && document.pointerLockElement !== canvas) {
       canvas.requestPointerLock?.();
@@ -4294,7 +4310,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleMouseMove(event) {
-    if (eventCinematic || !['first-person', 'interior'].includes(cameraMode) || document.pointerLockElement !== canvas) return;
+    if (isGameplaySuspended || eventCinematic || !['first-person', 'interior'].includes(cameraMode) || document.pointerLockElement !== canvas) return;
     firstPersonYaw -= event.movementX * 0.0022;
     firstPersonPitch = THREE.MathUtils.clamp(
       firstPersonPitch - event.movementY * 0.0018,
@@ -4489,10 +4505,12 @@ export function createLunarEngine(canvas, callbacks = {}) {
       && !dayStartCameraTransition
       && (roverRemoteControl || cameraMode === 'free' || cameraMode === 'first-person');
     const steerInput = canDrive
-      ? (keys.has('arrowleft') || keys.has('a') ? 1 : 0) - (keys.has('arrowright') || keys.has('d') ? 1 : 0)
+      ? THREE.MathUtils.clamp((keys.has('arrowleft') || keys.has('a') ? 1 : 0)
+        - (keys.has('arrowright') || keys.has('d') ? 1 : 0) - touchMoveX, -1, 1)
       : 0;
     const throttleInput = canDrive
-      ? (keys.has('arrowup') || keys.has('w') ? 1 : 0) - (keys.has('arrowdown') || keys.has('s') ? 1 : 0)
+      ? THREE.MathUtils.clamp((keys.has('arrowup') || keys.has('w') ? 1 : 0)
+        - (keys.has('arrowdown') || keys.has('s') ? 1 : 0) + touchMoveY, -1, 1)
       : 0;
 
     for (const rover of rovers) {
@@ -4508,6 +4526,10 @@ export function createLunarEngine(canvas, callbacks = {}) {
       || target.isContentEditable
     );
     if (typing) return;
+    if (isGameplaySuspended) {
+      event.preventDefault();
+      return;
+    }
     if (eventCinematic) {
       event.preventDefault();
       return;
@@ -4649,10 +4671,60 @@ export function createLunarEngine(canvas, callbacks = {}) {
   }
 
   function handleResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    const { width, height } = getViewportSize();
+    camera.aspect = width / height;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(width, height);
   }
+
+  function setTouchMove(x, y) {
+    if (isGameplaySuspended) return;
+    touchMoveX = THREE.MathUtils.clamp(Number(x) || 0, -1, 1);
+    touchMoveY = THREE.MathUtils.clamp(Number(y) || 0, -1, 1);
+  }
+
+  function lookTouch(deltaX, deltaY) {
+    if (isGameplaySuspended || eventCinematic || dayStartCameraTransition) return;
+    if (roverCameraActive) {
+      roverCameraOrbitYaw -= deltaX * 0.006;
+      roverCameraOrbitPitch = THREE.MathUtils.clamp(
+        roverCameraOrbitPitch - deltaY * 0.004,
+        -0.12,
+        1.05,
+      );
+      return;
+    }
+    if (!['first-person', 'interior'].includes(cameraMode)) return;
+    firstPersonYaw -= deltaX * 0.0022;
+    firstPersonPitch = THREE.MathUtils.clamp(
+      firstPersonPitch - deltaY * 0.0018,
+      -PLAYER_CAMERA.pitchLimit,
+      PLAYER_CAMERA.pitchLimit,
+    );
+  }
+
+  function setGameplaySuspended(suspended) {
+    const next = Boolean(suspended);
+    if (isDestroyed || isGameplaySuspended === next) return;
+    isGameplaySuspended = next;
+    if (next) {
+      controlsEnabledBeforeSuspend = controls.enabled;
+      controls.enabled = false;
+      releaseAllKeys();
+      firstPersonVelocity.set(0, 0, 0);
+      if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+      if (animId !== null) cancelAnimationFrame(animId);
+      animId = null;
+      return;
+    }
+    controls.enabled = controlsEnabledBeforeSuspend;
+    if (!animId) animId = requestAnimationFrame(animate);
+  }
+
+  const resizeObserver = typeof ResizeObserver === 'undefined'
+    ? null
+    : new ResizeObserver(handleResize);
+  if (canvas.parentElement) resizeObserver?.observe(canvas.parentElement);
 
   canvas.addEventListener('click', handleCanvasClick);
   canvas.addEventListener('pointerdown', handleConsolePointerDown);
@@ -4669,6 +4741,8 @@ export function createLunarEngine(canvas, callbacks = {}) {
   window.addEventListener('blur', releaseAllKeys);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   window.addEventListener('resize', handleResize);
+  window.addEventListener('orientationchange', handleResize);
+  window.visualViewport?.addEventListener('resize', handleResize);
 
   // Prompt checks (zero per-frame Vector3 allocations)
   function getNearestComponentPromptTarget() {
@@ -5365,10 +5439,20 @@ export function createLunarEngine(canvas, callbacks = {}) {
     camera.rotation.order = 'YXZ';
     camera.rotation.set(firstPersonPitch, firstPersonYaw, 0);
 
-    const forward = (keys.has('w') || keys.has('arrowup') ? 1 : 0)
-      - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
-    const side = (keys.has('d') || keys.has('arrowright') ? 1 : 0)
-      - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+    const forward = THREE.MathUtils.clamp(
+      (keys.has('w') || keys.has('arrowup') ? 1 : 0)
+        - (keys.has('s') || keys.has('arrowdown') ? 1 : 0)
+        + touchMoveY,
+      -1,
+      1,
+    );
+    const side = THREE.MathUtils.clamp(
+      (keys.has('d') || keys.has('arrowright') ? 1 : 0)
+        - (keys.has('a') || keys.has('arrowleft') ? 1 : 0)
+        + touchMoveX,
+      -1,
+      1,
+    );
     camera.getWorldDirection(firstPersonForward).normalize();
     firstPersonRight.set(Math.cos(firstPersonYaw), 0, Math.sin(firstPersonYaw));
     firstPersonDirection.copy(firstPersonForward).multiplyScalar(forward).addScaledVector(firstPersonRight, side);
@@ -5548,7 +5632,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
   let promptCheckTimer = 0;
 
   function animate() {
-    if (isDestroyed) return;
+    if (isDestroyed || isGameplaySuspended) return;
     animId = requestAnimationFrame(animate);
 
     const dt = Math.min(clock.getDelta(), 0.05);
@@ -6111,6 +6195,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
     returnFromEvent,
     clearEventPresentations,
     returnToOutpostOverview,
+    setTouchMove,
+    lookTouch,
+    setGameplaySuspended,
     toggleCameraMode,
     toggleRoverCamera,
     // The player camera is one camera everywhere. This is the knob for how high
@@ -6183,6 +6270,9 @@ export function createLunarEngine(canvas, callbacks = {}) {
       window.removeEventListener('blur', releaseAllKeys);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+      window.visualViewport?.removeEventListener('resize', handleResize);
+      resizeObserver?.disconnect();
       if (document.pointerLockElement === canvas) {
         document.exitPointerLock?.();
       }

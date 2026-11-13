@@ -3570,3 +3570,236 @@
   }
   .lunar-root .lunar-mission-status { font-size: 0.48rem; }
 }
+@media (max-width: 760px) {
+  .lunar-root .lunar-day-report {
+    display: flex;
+    flex-direction: column;
+    width: min(100%, calc(100vw - 16px));
+    height: calc(100dvh - var(--day-report-gap) - var(--day-report-gap));
+    max-height: calc(100dvh - var(--day-report-gap) - var(--day-report-gap));
+    overflow: hidden;
+    padding: clamp(14px, 4vw, 22px);
+  }
+  .lunar-root .lunar-day-report-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding-right: 4px;
+  }
+  .lunar-root .lunar-day-report > .lunar-day-advance { flex: 0 0 auto; min-height: 48px; margin-top: 8px; }
+}
+
+@media (orientation: landscape) and (max-width: 1024px) and (max-height: 600px) {
+  .lunar-root .lunar-day-report {
+    width: min(760px, calc(100vw - 16px));
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
+    padding: 12px 16px 10px;
+    border-radius: 16px;
+  }
+  .lunar-root .lunar-day-report-body > h2 { margin: 5px 0 8px; font-size: 1.25rem; }
+  .lunar-root .lunar-day-report .mission-day-dispatch { gap: 3px; margin: 8px 0; padding: 8px 10px; }
+  .lunar-root .lunar-day-report .mission-day-dispatch p { margin: 4px 0 0; font-size: .75rem; line-height: 1.35; }
+  .lunar-root .lunar-day-report .lunar-chapter-report { margin: 8px 0; padding: 8px 10px; }
+  .lunar-root .lunar-day-report .mission-noor-reply { margin: 8px 0; padding: 8px 10px; }
+  .lunar-root .lunar-day-report .mission-noor-reply p,
+  .lunar-root .lunar-day-report .mission-story-callback { font-size: .76rem; line-height: 1.38; }
+  .lunar-root .lunar-day-report-summary { margin: 8px 0; font-size: .75rem; }
+  .lunar-root .lunar-day-report-grid { gap: 8px; margin: 10px 0; }
+  .lunar-root .lunar-day-report-grid > div { min-height: 0; padding: 9px; }
+  .lunar-root .lunar-day-report-impact-title { margin: 9px 0 6px; font-size: .88rem; }
+  .lunar-root .lunar-day-report-resources { gap: 5px; margin: 8px 0 4px; }
+  .lunar-root .lunar-day-report-resources > span { min-height: 36px; padding: 6px 8px; font-size: .76rem; }
+  .lunar-root .lunar-day-report > .lunar-day-advance { min-height: 48px; padding: 10px 14px; border-radius: 12px; font-size: .9rem; letter-spacing: .08em; }
+}
+
+.lunar-root > .lunar-canvas { touch-action: none; }
+.lunar-touch-controls {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  touch-action: none;
+}
+.lunar-touch-zone {
+  position: absolute;
+  top: 18%;
+  right: 0;
+  bottom: 0;
+  width: 54%;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+}
+.lunar-touch-zone:active { cursor: grabbing; }
+.lunar-joystick {
+  --stick-x: 0px;
+  --stick-y: 0px;
+  position: absolute;
+  z-index: 2;
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: grid;
+  width: clamp(104px, 14vw, 118px);
+  height: clamp(104px, 14vw, 118px);
+  place-items: center;
+  border: 1px solid rgba(126, 228, 224, .38);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(28, 83, 91, .35), rgba(7, 19, 30, .28) 70%);
+  box-shadow: 0 0 0 7px rgba(89, 199, 196, .06), inset 0 0 24px rgba(79, 211, 201, .08), 0 8px 24px rgba(0, 0, 0, .28);
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+}
+.lunar-joystick:active { cursor: grabbing; }
+.lunar-joystick-ring { position: absolute; inset: 15%; border: 1px solid rgba(126, 228, 224, .22); border-radius: 50%; pointer-events: none; }
+.lunar-joystick-knob {
+  position: absolute;
+  width: 46%;
+  height: 46%;
+  border: 1px solid rgba(200, 237, 139, .75);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(200, 237, 139, .44), rgba(92, 139, 88, .28));
+  box-shadow: inset 0 0 18px rgba(200, 237, 139, .18), 0 0 20px rgba(200, 237, 139, .17);
+  transform: translate(var(--stick-x), var(--stick-y));
+  pointer-events: none;
+}
+.lunar-touch-hint {
+  position: absolute;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  z-index: 2;
+  color: rgba(224, 241, 236, .72);
+  font: 700 .56rem/1.2 var(--lunar-font-mono);
+  letter-spacing: .1em;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .8);
+  pointer-events: none;
+}
+.lunar-root.is-map-open .lunar-touch-controls { z-index: 21; }
+.lunar-root.is-map-open .lunar-touch-zone { pointer-events: none; }
+
+.lunar-root.is-gameplay-portrait > :not(.lunar-orientation-screen) {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+.lunar-orientation-screen {
+  position: absolute;
+  z-index: 10000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: max(24px, env(safe-area-inset-top)) max(22px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(22px, env(safe-area-inset-left));
+  overflow: auto;
+  color: #f1f7f7;
+  text-align: center;
+  background: radial-gradient(ellipse at 50% 34%, rgba(19, 64, 83, .9), transparent 48%), linear-gradient(155deg, #07101a, #081923 58%, #07111a);
+  pointer-events: auto;
+}
+.lunar-orientation-content { display: flex; width: min(100%, 440px); flex-direction: column; align-items: center; }
+.lunar-rotation-illustration { width: clamp(76px, 18vh, 108px); height: clamp(76px, 18vh, 108px); margin-bottom: clamp(8px, 2vh, 18px); color: var(--lunar-cyan); }
+.lunar-rotation-illustration svg { width: 100%; height: 100%; overflow: visible; }
+.lunar-rotation-orbit { fill: none; stroke: rgba(127, 240, 255, .7); stroke-width: 2; stroke-dasharray: 4 4; }
+.lunar-rotation-arrow { fill: none; stroke: var(--lunar-lime); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.lunar-rotation-phone { transform-origin: 56px 55px; animation: lunarRotatePhone 2.8s ease-in-out infinite; }
+.lunar-rotation-phone rect { fill: rgba(9, 22, 31, .95); stroke: var(--lunar-cyan); stroke-width: 2.5; }
+.lunar-rotation-phone line { stroke: rgba(127, 240, 255, .55); stroke-width: 2; stroke-linecap: round; }
+.lunar-rotation-phone circle { fill: var(--lunar-lime); }
+.lunar-orientation-kicker { color: var(--lunar-cyan); font: 600 .64rem/1.4 var(--lunar-font-tech); letter-spacing: .16em; }
+.lunar-orientation-screen h1 { margin: 10px 0 8px; color: #f5faf9; font: 600 clamp(1.28rem, 5vw, 1.8rem)/1.2 var(--lunar-font-tech); letter-spacing: .01em; }
+.lunar-orientation-screen p { max-width: 340px; margin: 0; color: rgba(235, 245, 244, .82); font: 500 clamp(.9rem, 2.3vh, 1rem)/1.55 var(--lunar-font-mono); }
+.lunar-orientation-footnote { margin-top: 16px; color: rgba(200, 237, 139, .82); font: 500 .74rem/1.5 var(--lunar-font-mono); }
+@keyframes lunarRotatePhone { 0%, 14%, 100% { transform: rotate(0deg); } 46%, 76% { transform: rotate(90deg); } }
+@media (prefers-reduced-motion: reduce) { .lunar-rotation-phone { animation: none; transform: rotate(90deg); } }
+
+@media (max-width: 1024px) {
+  .lunar-minimap {
+    top: auto;
+    right: auto;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    left: max(10px, env(safe-area-inset-left));
+    box-sizing: border-box;
+    width: min(132px, calc(44vw - 12px));
+    min-height: 44px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    opacity: .95;
+    background: rgba(5, 12, 20, .86);
+    z-index: 5;
+  }
+  .lunar-minimap-header { margin: 0; font-size: .56rem; letter-spacing: .1em; }
+  .lunar-minimap-svg,
+  .lunar-minimap-note { display: none; }
+  .lunar-proximity-enter,
+  .lunar-proximity-resolve-event { box-sizing: border-box; min-width: 44px; min-height: 44px; padding: 8px 10px; font-size: .74rem; }
+  .lunar-proximity-split { gap: 6px; }
+}
+
+@media (orientation: landscape) and (max-width: 1024px) and (max-height: 600px) {
+  .lunar-root .lunar-hud-clean {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "back status" "actions actions";
+    align-items: start;
+    column-gap: 8px;
+    row-gap: 4px;
+    top: max(6px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+  }
+  .lunar-root .lunar-hud-clean > .lunar-orbit-btn { grid-area: back; min-height: 44px; padding: 5px 9px; }
+  .lunar-root .lunar-mission-status {
+    grid-area: status;
+    order: initial;
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    gap: 4px;
+    padding: 5px 8px;
+    font-size: .62rem;
+    letter-spacing: 0;
+  }
+  .lunar-root .lunar-actions-group { grid-area: actions; width: 100%; gap: 4px; margin: 0; }
+  .lunar-root .lunar-actions-group > button,
+  .lunar-root .lunar-actions-group .lunar-event-alert-menu-anchor > button {
+    box-sizing: border-box;
+    min-height: 44px;
+    padding: 5px 9px;
+    font-size: .76rem;
+  }
+  .lunar-root .lunar-actions-group .lunar-story-archive-button,
+  .lunar-root .lunar-actions-group .lunar-story-photo-button,
+  .lunar-root .lunar-actions-group .lunar-story-sample-button { min-height: 44px; padding: 5px 9px; }
+  .lunar-minimap { left: calc(46vw - 124px); width: 116px; }
+  .lunar-root .lunar-map-backdrop {
+    box-sizing: border-box;
+    padding: max(8px, env(safe-area-inset-top)) 136px max(8px, env(safe-area-inset-bottom));
+  }
+  .lunar-root .lunar-map-panel {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    min-width: 0;
+  }
+  .lunar-root .lunar-map-header { gap: 8px; padding: 8px 10px; }
+  .lunar-root .lunar-map-close { width: 44px; height: 44px; }
+  .lunar-root .lunar-map-content { grid-template-columns: minmax(0, 1fr) minmax(120px, .9fr); }
+  .lunar-root .lunar-map-canvas { min-height: 0; padding: 6px; }
+  .lunar-root .lunar-map-details { min-height: 0; overflow-y: auto; padding: 8px; }
+}
+
+@media (max-width: 600px), (max-width: 1024px) and (max-height: 480px) {
+  .lunar-touch-hint { font-size: .52rem; }
+  .lunar-root .lunar-mission-status { gap: 4px 8px; font-size: .68rem; }
+}
+
+@media (min-width: 1025px) and (pointer: fine) {
+  .lunar-root .lunar-touch-controls { display: none; }
+}
