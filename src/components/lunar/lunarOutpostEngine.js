@@ -3250,7 +3250,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
     let nearest = null;
     let nearestDistance = Infinity;
     for (const target of componentTargets) {
-      if (target.roomType === 'regolithPlant') continue;
+      if (NON_ENTERABLE_COMPONENT_IDS.has(target.id) || target.roomType === 'regolithPlant') continue;
       const distance = Math.hypot(camera.position.x - target.center.x, camera.position.z - target.center.z);
       if (distance <= target.radius && distance < nearestDistance) {
         nearest = target;
