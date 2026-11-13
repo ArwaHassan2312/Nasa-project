@@ -3505,5 +3505,64 @@
   box-shadow: 0 0 14px rgba(59, 202, 219, .3);
   transform: translateX(-2px);
 }
-.lunar-crew-task-notification{position:fixed;z-index:1200;top:calc(env(safe-area-inset-top,0px) + 18px);left:50%;width:max-content;max-width:min(90vw,620px);padding:13px 22px;transform:translate(-50%,-150%);border:1px solid #6fe2ff75;border-radius:999px;background:linear-gradient(135deg,#0b2938f5,#102337f5);box-shadow:0 12px 36px #0008,0 0 28px #42ccf52b;color:#e9faff;font:600 14px/1.35 Inter,system-ui,sans-serif;text-align:center;pointer-events:none;animation:lunar-crew-toast-cycle 2s cubic-bezier(.2,.8,.2,1) both}@keyframes lunar-crew-toast-cycle{0%{opacity:0;transform:translate(-50%,-150%)}14%{opacity:1;transform:translate(-50%,0)}78%{opacity:1;transform:translate(-50%,0)}100%{opacity:0;transform:translate(-50%,-150%)}}
-.lunar-crew-tracker{position:fixed;z-index:1180;top:calc(env(safe-area-inset-top,0px) + 76px);left:50%;display:flex;justify-content:center;gap:8px;width:min(94vw,820px);transform:translateX(-50%);pointer-events:none}.lunar-crew-tracker__player{display:flex;align-items:center;gap:8px;min-width:0;padding:7px 12px;border:1px solid #68d9f466;border-radius:999px;background:#071724d9;box-shadow:0 5px 18px #0007;color:#e8f8ff;font:600 12px/1 Inter,system-ui,sans-serif;backdrop-filter:blur(10px)}.lunar-crew-tracker__arrow{display:inline-grid;place-items:center;width:21px;height:21px;flex:none;border-radius:50%;background:#183e50;color:#72e6ff;font-size:19px;line-height:1;transition:transform .32s ease}.lunar-crew-tracker__name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.lunar-crew-tracker__player small{color:#9eb8c8;font-size:10px;white-space:nowrap}@media(max-width:640px){.lunar-crew-tracker{top:calc(env(safe-area-inset-top,0px) + 66px);gap:5px}.lunar-crew-tracker__player{gap:5px;padding:6px 9px;font-size:10px}.lunar-crew-tracker__arrow{width:18px;height:18px;font-size:16px}.lunar-crew-tracker__player small{font-size:9px}}
+
+/* Keep the mission HUD and its navigation controls on one horizontal line. */
+.lunar-root .lunar-hud-clean {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  column-gap: clamp(4px, 0.65vw, 10px);
+  row-gap: 0;
+  min-width: 0;
+}
+.lunar-root .lunar-mission-status {
+  order: 0;
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+  margin: 0;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 8px clamp(6px, 0.8vw, 15px);
+  gap: clamp(3px, 0.55vw, 10px);
+  font-size: clamp(0.46rem, 0.78vw, 0.84rem);
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+}
+.lunar-root .lunar-actions-group {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+  gap: clamp(3px, 0.42vw, 8px);
+  margin-left: 0;
+}
+.lunar-root .lunar-actions-group > button,
+.lunar-root .lunar-actions-group .lunar-event-alert-menu-anchor > button {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  height: auto;
+  padding: 0 clamp(4px, 0.5vw, 10px);
+  font-size: clamp(0.52rem, 0.72vw, 0.82rem);
+  line-height: 1.1;
+}
+.lunar-root .lunar-orbit-btn {
+  padding: 7px clamp(5px, 0.65vw, 12px);
+  font-size: clamp(0.5rem, 0.68vw, 0.74rem);
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 900px) {
+  .lunar-root .lunar-hud-clean {
+    left: 8px;
+    right: 8px;
+  }
+  .lunar-root .lunar-actions-group > button,
+  .lunar-root .lunar-actions-group .lunar-event-alert-menu-anchor > button {
+    min-height: 32px;
+    padding-inline: 4px;
+    font-size: 0.5rem;
+  }
+  .lunar-root .lunar-mission-status { font-size: 0.48rem; }
+}
