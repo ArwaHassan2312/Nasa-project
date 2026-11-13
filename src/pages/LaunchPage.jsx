@@ -2,7 +2,6 @@ import { Suspense, lazy, useCallback, useRef, useState } from 'react';
 import SpaceBackground from '../components/space/SpaceBackground';
 import IntroBackdrop from '../components/space/IntroBackdrop';
 import IntroOverlay from '../components/space/Introoverlay';
-import MissionSelect from '../components/space/Missionselect';
 import MissionStoryIntro from '../components/MissionStoryIntro';
 import MultiplayerLobby from '../components/MultiplayerLobby';
 import OutpostTutorial from '../components/OutpostTutorial';
@@ -14,7 +13,6 @@ const LunarOutpost = lazy(preloadLunarOutpost);
 // Single player phases include the outpost tutorial; multiplayer launches directly from the crew lobby.
 export default function LaunchPage({ simulation, onMissionStart, onMissionPause }) {
   const [phase, setPhase] = useState('intro');
-  const [selected, setSelected] = useState(null);
   const [introFinished, setIntroFinished] = useState(false);
   const [commanderProfile, setCommanderProfile] = useState({ commanderName: 'Commander', baseName: 'Moonbase Alpha' });
   const [resumeMissionId, setResumeMissionId] = useState(null);
@@ -22,7 +20,6 @@ export default function LaunchPage({ simulation, onMissionStart, onMissionPause 
   const tutorialDecisionRef = useRef(null);
   tutorialDecisionRef.current = { phase };
 
-  const handleStart = useCallback(() => setPhase('select'), []);
   const finishIntro = useCallback(() => setIntroFinished(true), []);
 
   const handleLaunchMission = useCallback(async (id) => {
@@ -38,6 +35,10 @@ export default function LaunchPage({ simulation, onMissionStart, onMissionPause 
     }
     setResumeMissionId(null);
   }, [resumeMissionId, simulation.baseName, simulation.commanderName]);
+
+  const handleStart = useCallback(() => {
+    void handleLaunchMission('moon');
+  }, [handleLaunchMission]);
 
   const beginMission = useCallback(async (profile) => {
     await preloadLunarOutpost();
@@ -72,7 +73,7 @@ export default function LaunchPage({ simulation, onMissionStart, onMissionPause 
   const handleExitToOrbit = useCallback(() => {
     setResumeMissionId('moon');
     onMissionPause?.();
-    setPhase('select');
+    setPhase('intro');
   }, [onMissionPause]);
 
   return (
@@ -97,19 +98,13 @@ export default function LaunchPage({ simulation, onMissionStart, onMissionPause 
             finished={introFinished}
             onSequenceEnd={finishIntro}
           />
-          {phase !== 'select' && (
+          {phase === 'intro' && (
             <IntroOverlay
-              visible={phase === 'intro'}
+              visible
               finished={introFinished}
               onSkip={handleSkip}
               onStart={handleStart}
-            />
-          )}
-          {phase === 'select' && (
-            <MissionSelect
-              selected={selected}
-              onSelect={setSelected}
-              onLaunchMission={handleLaunchMission}
+              startLabel={resumeMissionId === 'moon' ? 'Resume Moon mission' : 'Start Moon mission'}
             />
           )}
           {phase === 'briefing' && <MissionStoryIntro onBegin={beginMission} />}
@@ -125,7 +120,7 @@ export default function LaunchPage({ simulation, onMissionStart, onMissionPause 
                 <button onClick={() => { setPlayMode('multi'); setPhase('lobby'); }}>
                   Multiplayer <small>Create a room or join your crew</small>
                 </button>
-                <button className="play-mode-back" onClick={() => setPhase('select')}>Back to destinations</button>
+                <button className="play-mode-back" onClick={() => setPhase('intro')}>Back</button>
               </div>
             </section>
           )}

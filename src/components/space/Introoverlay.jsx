@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import NeonTypewriter from './NeonTypewriter';
 
-const FINAL_LINES = ['A new world to explore. Your space adventure starts here.'];
+const FINAL_LINES = ['Your Moon expedition starts here.'];
 
-export default function IntroOverlay({ visible, finished = false, onStart, onSkip }) {
+export default function IntroOverlay({ visible, finished = false, onStart, onSkip, startLabel = 'Start Moon mission' }) {
   const [textVisible, setTextVisible] = useState(false);
   const [buttonVisible, setButtonVisible] = useState(false);
 
@@ -36,7 +36,7 @@ export default function IntroOverlay({ visible, finished = false, onStart, onSki
         <div className="mission-btn-wrap">
           <span className="mission-btn-ring" />
           <button type="button" className="mission-btn" onClick={onStart} disabled={!showButton}>
-            Start your mission
+            {startLabel}
           </button>
         </div>
       </div>
