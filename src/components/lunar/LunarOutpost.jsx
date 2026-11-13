@@ -12,6 +12,12 @@ import MissionStoryReward from '../MissionStoryReward';
 import './LunarOutpost.css';
 import '../../simulation.css';
 
+function isPortraitGameplayViewport() {
+  return typeof window !== 'undefined'
+    && window.innerWidth <= 1024
+    && window.innerHeight > window.innerWidth;
+}
+
 function clearOutpostLocalProgress() {
   try {
     window.localStorage.removeItem('lunar-outpost-task-journeys-v1');
@@ -192,9 +198,69 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   const [isLoading, setIsLoading] = useState(true);
   const outpostControlsDisabled = isLoading || tutorialActive;
   const [cameraMode, setCameraMode] = useState('free');
+  const [isGameplayPortrait, setIsGameplayPortrait] = useState(isPortraitGameplayViewport);
+  const joystickPointerRef = useRef(null);
+  const lookPointerRef = useRef(null);
   const [roverReady, setRoverReady] = useState(false);
   const [roverCameraActive, setRoverCameraActive] = useState(false);
   const [roverLink, setRoverLink] = useState(null);
+  const showOrientationGuidance = isGameplayPortrait
+    && simulation.gameStatus === 'playing'
+    && simulation.dayPhase === 'active';
+  const showTouchControls = !showOrientationGuidance
+    && simulation.gameStatus === 'playing'
+    && simulation.dayPhase === 'active'
+    && (['first-person', 'interior'].includes(cameraMode) || roverCameraActive);
+  const updateJoystick = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const radius = rect.width * 0.34;
+    const dx = event.clientX - (rect.left + rect.width / 2);
+    const dy = event.clientY - (rect.top + rect.height / 2);
+    const magnitude = Math.hypot(dx, dy);
+    const scale = magnitude > radius ? radius / magnitude : 1;
+    const x = Math.max(-1, Math.min(1, dx * scale / radius));
+    const y = Math.max(-1, Math.min(1, dy * scale / radius));
+    event.currentTarget.style.setProperty('--stick-x', `${x * radius}px`);
+    event.currentTarget.style.setProperty('--stick-y', `${y * radius}px`);
+    engineRef.current?.setTouchMove(x, -y);
+  };
+  const startJoystick = (event) => {
+    if (joystickPointerRef.current !== null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    joystickPointerRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    updateJoystick(event);
+  };
+  const moveJoystick = (event) => {
+    if (joystickPointerRef.current !== event.pointerId) return;
+    event.preventDefault();
+    updateJoystick(event);
+  };
+  const stopJoystick = (event) => {
+    if (joystickPointerRef.current !== event.pointerId) return;
+    joystickPointerRef.current = null;
+    event.currentTarget.style.setProperty('--stick-x', '0px');
+    event.currentTarget.style.setProperty('--stick-y', '0px');
+    engineRef.current?.setTouchMove(0, 0);
+  };
+  const startTouchLook = (event) => {
+    if (lookPointerRef.current !== null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    lookPointerRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+  const moveTouchLook = (event) => {
+    const pointer = lookPointerRef.current;
+    if (!pointer || pointer.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    engineRef.current?.lookTouch(event.clientX - pointer.x, event.clientY - pointer.y);
+    lookPointerRef.current = { ...pointer, x: event.clientX, y: event.clientY };
+  };
+  const stopTouchLook = (event) => {
+    if (lookPointerRef.current?.pointerId === event.pointerId) lookPointerRef.current = null;
+  };
   const [prompt, setPrompt] = useState({ type: null, data: null });
   const [insidePanel, setInsidePanel] = useState({
     visible: false,
@@ -342,13 +408,32 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
     clearOutpostLocalProgress();
   }, []);
   useEffect(() => {
+    let frame = 0;
+    const updateOrientation = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        setIsGameplayPortrait(isPortraitGameplayViewport());
+      });
+    };
+    window.addEventListener('resize', updateOrientation);
+    window.addEventListener('orientationchange', updateOrientation);
+    window.visualViewport?.addEventListener('resize', updateOrientation);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', updateOrientation);
+      window.removeEventListener('orientationchange', updateOrientation);
+      window.visualViewport?.removeEventListener('resize', updateOrientation);
+    };
+  }, []);
+  useEffect(() => {
     if (commanderProfile) simulation.setMissionProfile(commanderProfile);
   }, [commanderProfile, simulation.setMissionProfile]);
   useEffect(() => {
-    if (!storyMoment && storyRewardDay === null && !archiveOpen && !iceSampleOpen && !radioOpen && !noorCall) return undefined;
+    if (!isGameplayPortrait && !storyMoment && storyRewardDay === null && !archiveOpen && !iceSampleOpen && !radioOpen && !noorCall) return undefined;
     simulation.setStoryPaused(true);
     return () => simulation.setStoryPaused(false);
-  }, [simulation.setStoryPaused, storyMoment, storyRewardDay, archiveOpen, iceSampleOpen, radioOpen, noorCall]);
+  }, [simulation.setStoryPaused, isGameplayPortrait, storyMoment, storyRewardDay, archiveOpen, iceSampleOpen, radioOpen, noorCall]);
 
   useEffect(() => {
     const reportDay = simulation.dayPhase === 'report' ? simulation.dayReport?.day : null;
@@ -681,6 +766,15 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       if (canvas.parentNode) canvas.remove();
     };
   }, [setSceneReady, onInitialCameraSettled]);
+
+  useEffect(() => {
+    engineRef.current?.setGameplaySuspended?.(isGameplayPortrait);
+    if (isGameplayPortrait) {
+      joystickPointerRef.current = null;
+      lookPointerRef.current = null;
+      engineRef.current?.setTouchMove?.(0, 0);
+    }
+  }, [isGameplayPortrait]);
 
   useEffect(() => {
     if (alertPanelDayRef.current === simulation.day) return;
@@ -1343,9 +1437,58 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   };
   return (
     <div
-      className={`lunar-root${insidePanel.visible ? ' is-inside' : ''}`}
+      className={`lunar-root${insidePanel.visible ? ' is-inside' : ''}${showOrientationGuidance ? ' is-gameplay-portrait' : ''}${mapIsOpen ? ' is-map-open' : ''}`}
       ref={containerRef}
     >
+      {showOrientationGuidance && (
+        <section className="lunar-orientation-screen" role="status" aria-live="polite" aria-label="Rotate your device to play">
+          <div className="lunar-orientation-content">
+            <div className="lunar-rotation-illustration" aria-hidden="true">
+              <svg viewBox="0 0 112 112" focusable="false">
+                <path className="lunar-rotation-orbit" d="M82 28a39 39 0 0 1 9 51" />
+                <path className="lunar-rotation-arrow" d="m89 69 3 11 10-5" />
+                <g className="lunar-rotation-phone">
+                  <rect x="37" y="19" width="38" height="72" rx="8" />
+                  <line x1="48" y1="27" x2="64" y2="27" />
+                  <circle cx="56" cy="82" r="2" />
+                </g>
+              </svg>
+            </div>
+            <span className="lunar-orientation-kicker">GALACTIC CODERS · FIELD MISSION</span>
+            <h1>Rotate Your Device to Play</h1>
+            <p>Turn your phone sideways to explore and work at the outpost.</p>
+            <span className="lunar-orientation-footnote">Your mission will be right here when you return.</span>
+          </div>
+        </section>
+      )}
+      {showTouchControls && (
+        <div className={`lunar-touch-controls${mapIsOpen ? ' is-map-open' : ''}`} aria-label="Touch gameplay controls">
+          <div
+            className="lunar-touch-zone"
+            aria-label="Drag to look around"
+            onPointerDown={startTouchLook}
+            onPointerMove={moveTouchLook}
+            onPointerUp={stopTouchLook}
+            onPointerCancel={stopTouchLook}
+            onLostPointerCapture={stopTouchLook}
+          />
+          <div
+            className="lunar-joystick"
+            role="group"
+            aria-label="Movement joystick"
+            onPointerDown={startJoystick}
+            onPointerMove={moveJoystick}
+            onPointerUp={stopJoystick}
+            onPointerCancel={stopJoystick}
+            onLostPointerCapture={stopJoystick}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <span className="lunar-joystick-ring" aria-hidden="true" />
+            <span className="lunar-joystick-knob" aria-hidden="true" />
+          </div>
+          <span className="lunar-touch-hint" aria-hidden="true">DRAG TO LOOK</span>
+        </div>
+      )}
       <div className="lunar-grain" />
       <div className="lunar-shade" />
       {simulation.day >= 8 && simulation.day < 10 && simulation.dayPhase === 'active' && <div className="lunar-story-night-overlay" aria-hidden="true" />}
@@ -2693,6 +2836,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
       {simulation.dayPhase === 'report' && simulation.dayReport && dayReportReadyDay === simulation.dayReport.day && storyRewardDay === null && !hasPendingCriticalTaskNotice && (
         <div className="lunar-day-transition" role="dialog" aria-modal="true" aria-labelledby="day-report-title">
           <section className="lunar-day-report">
+            <div className="lunar-day-report-body">
             <span className="lunar-day-report-kicker">Commander’s report · Day {simulation.dayReport.day}</span>
             <h2 id="day-report-title">Day {simulation.dayReport.day} is done!</h2>
             <article className="mission-day-dispatch">
@@ -2747,6 +2891,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
                 </span>
                 );
               })}
+            </div>
             </div>
             <button type="button" className="lunar-day-advance" onClick={simulation.advanceDay}>
               {simulation.dayReport.day >= simulation.maxDays ? 'Finish mission' : 'Next day'}

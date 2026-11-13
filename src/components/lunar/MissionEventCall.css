@@ -141,3 +141,43 @@
   min-height: 0;
   padding: 30px clamp(22px, 5vw, 42px);
 }
+
+@media (orientation: landscape) and (max-width: 1024px) and (max-height: 600px) {
+  .mission-event-call-backdrop {
+    box-sizing: border-box;
+    align-items: center;
+    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .mission-event-call-screen {
+    display: flex;
+    flex-direction: column;
+    width: min(1020px, 100%);
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
+    overflow: hidden;
+    border-radius: 13px;
+  }
+  .mission-event-call-screen > header,
+  .mission-event-call-screen > footer { flex: 0 0 auto; gap: 6px; padding: 6px 10px; font-size: .55rem; }
+  .mission-event-tv-body {
+    flex: 1 1 auto;
+    grid-template-columns: minmax(110px, .42fr) minmax(0, 1.58fr);
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .mission-event-tv-portrait { min-height: 0; max-height: none; }
+  .mission-event-tv-portrait .mission-character { height: min(30vh, 150px); }
+  .mission-event-tv-message { align-self: stretch; padding: 10px 14px; }
+  .mission-event-tv-message h2 { margin: 5px 0; font-size: 1.15rem; }
+  .mission-event-tv-message > p,
+  .mission-event-tv-message article p { margin: 4px 0 0; font-size: .75rem; line-height: 1.38; }
+  .mission-event-tv-message article { margin-top: 6px; padding: 7px 9px; }
+  .mission-event-tv-message article strong { font-size: .72rem; }
+  .mission-event-tv-message > small { margin-top: 5px; font-size: .68rem; }
+  .mission-event-call-screen > footer { align-items: center; flex-direction: row; }
+  .mission-event-call-screen .mission-event-call-button { flex: 0 0 auto; min-height: 44px; padding: 8px 12px; font-size: .74rem; }
+}
