@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { MissionStoryAvatar } from './MissionStoryIntro';
 import { createNoorSpeech } from '../utils/missionVoice';
 import './OutpostTutorial.css';
 
@@ -119,7 +120,10 @@ export default function OutpostTutorial({ onComplete }) {
           <div className="tour-card-kicker"><span>{current.place} · OUTPOST GUIDE</span><small>{step + 1} / {TOUR.length}</small></div>
           <h1 id="outpost-tour-title">{current.title}</h1>
           <div className="tour-dialogue tour-player"><span>YOU</span><p>{current.player}</p></div>
-          <div className="tour-dialogue tour-guide"><span>✦ OUTPOST GUIDE</span><p>{current.guide}</p></div>
+          <div className="tour-guide-message">
+            <MissionStoryAvatar />
+            <div className="tour-dialogue tour-guide"><span>DR. NOOR · MISSION CONTROL</span><p>{current.guide}</p></div>
+          </div>
           <div className="tour-actions">
             <button type="button" className="tour-back" onClick={() => setStep((value) => Math.max(0, value - 1))} disabled={step === 0}>← Back</button>
             <div className="tour-progress" aria-label={`Tour step ${step + 1} of ${TOUR.length}`}>{TOUR.map((item, index) => <i key={item.target} className={index === step ? 'is-current' : index < step ? 'is-done' : ''} />)}</div>
