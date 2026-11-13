@@ -3242,23 +3242,40 @@ export function createLunarEngine(canvas, callbacks = {}) {
     controls.enabled = false;
   }
 
+  function getNearbyEnterableComponentTarget() {
+    let nearest = null;
+    let nearestDistance = Infinity;
+    for (const target of componentTargets) {
+      if (target.roomType === 'regolithPlant') continue;
+      const distance = Math.hypot(camera.position.x - target.center.x, camera.position.z - target.center.z);
+      if (distance <= target.radius && distance < nearestDistance) {
+        nearest = target;
+        nearestDistance = distance;
+      }
+    }
+    return nearest;
+  }
+
   function enterNearbyComponent() {
-    if (cameraMode !== 'first-person' || !activeComponentTarget) return;
-    const target = activeComponentTarget;
+    if (cameraMode !== 'first-person') return false;
+    const target = getNearbyEnterableComponentTarget();
+    if (!target) return false;
+    activeComponentTarget = target;
     moduleReturnMode = 'exterior';
     if (target.roomType === 'commandCenter') {
       enterCommandCenterInterior(target);
-      return;
+      return true;
     }
     if (target.roomType === 'greenhouse') {
       enterGreenhouseFromExterior();
-      return;
+      return true;
     }
     if (target.roomType === 'engineering') {
       ensureWorkshopInterior(model => enterModuleInterior(target, model));
     } else {
       ensureComponentInteriorKit(() => enterModuleInterior(target));
     }
+    return true;
   }
 
   function enterCommandCenterInterior(target) {
@@ -4788,18 +4805,7 @@ export function createLunarEngine(canvas, callbacks = {}) {
       if (currentPromptType === 'component' || currentPromptType === 'regolithPlant') setPrompt(null);
       return;
     }
-    let nearest = null;
-    let nearestDistance = Infinity;
-    for (let i = 0; i < componentTargets.length; i++) {
-      const target = componentTargets[i];
-      // The plant runs on its own prompt so it never offers to be "entered".
-      if (target.roomType === 'regolithPlant') continue;
-      const distance = Math.hypot(camera.position.x - target.center.x, camera.position.z - target.center.z);
-      if (distance <= target.radius && distance < nearestDistance) {
-        nearest = target;
-        nearestDistance = distance;
-      }
-    }
+    const nearest = getNearbyEnterableComponentTarget();
     if (!nearest) {
       if (currentPromptType === 'component' || currentPromptType === 'regolithPlant') setPrompt(null);
       activeComponentTarget = null;
@@ -4811,11 +4817,11 @@ export function createLunarEngine(canvas, callbacks = {}) {
       activeComponentTarget = nearest;
       return;
     }
-    activeComponentTarget = nearest.target;
+    activeComponentTarget = nearest;
     setPrompt('component', {
-      id: nearest.target.id,
-      title: `Enter the ${nearest.target.name}?`,
-      message: `You are near the ${nearest.target.name.toLowerCase()}. Enter to explore its interior.`
+      id: nearest.id,
+      title: `Enter the ${nearest.name}?`,
+      message: `You are near the ${nearest.name.toLowerCase()}. Enter to explore its interior.`
     });
   }
 

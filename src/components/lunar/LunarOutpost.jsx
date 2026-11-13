@@ -914,6 +914,7 @@ export default function LunarOutpost({ onExitToOrbit, simulation, commanderProfi
   useEffect(() => {
     if (!prompt.type || !['idle', 'awaitingDecision'].includes(simulation.eventPhase) || simulation.warningTaskId) return undefined;
     const onKey = (event) => {
+      if (event.defaultPrevented) return;
       const target = event.target;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
       const key = (event.key || '').toLowerCase();

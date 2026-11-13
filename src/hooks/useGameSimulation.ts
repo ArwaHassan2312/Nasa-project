@@ -2429,6 +2429,10 @@ export function useGameSimulation({
     clearSavedGameState();
     setState((current) => ({
       ...createInitialState(nextSeed ?? seed ?? createRandomSeed()),
+      // The outpost engine stays mounted when the tutorial ends. Preserve its
+      // readiness flag so restarting the mission clock does not wait for an
+      // onSceneReady callback that will not fire again.
+      sceneReady: current.sceneReady,
       commanderName: current.commanderName,
       baseName: current.baseName,
     }));
