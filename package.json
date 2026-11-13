@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:lan": "vite --host 0.0.0.0",
+    "multiplayer": "node server/multiplayer.js",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
